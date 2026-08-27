@@ -35,6 +35,11 @@ services:
       BACKEND_CORS_ORIGINS: '["http://localhost:3000","http://127.0.0.1:3000"]'
       # Override secrets via .env at the repo root or your shell.
       CSRF_SECRET_KEY: ${CSRF_SECRET_KEY:-change-me-in-production}
+      SSO_PROVIDER: ${SSO_PROVIDER:-google}
+      SSO_CLIENT_ID: ${SSO_CLIENT_ID}
+      SSO_CLIENT_SECRET: ${SSO_CLIENT_SECRET}
+      SSO_DISCOVERY_URL: ${SSO_DISCOVERY_URL:-https://accounts.google.com/.well-known/openid-configuration}
+      SSO_REDIRECT_URI: ${SSO_REDIRECT_URI:-http://localhost:3000/auth/callback}
     volumes:
       - ./data:/data                      # SQLite database file (host-accessible)
       - ./data/.keys:/app/apps/auth/.keys  # RSA keypair (keep across restarts)

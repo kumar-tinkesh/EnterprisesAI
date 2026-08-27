@@ -18,9 +18,9 @@ settings = get_settings()
 async def sso_initiate(
     session: httpx.AsyncClient = Depends(lambda: httpx.AsyncClient(timeout=20)),
 ):
-    url, state, _ = await sso_service.initiate(session)
+    url, state, verifier = await sso_service.initiate(session)
     await session.aclose()
-    return sc.SsoInitiateResponse(authorization_url=url, state=state)
+    return sc.SsoInitiateResponse(authorization_url=url, state=state, code_verifier=verifier)
 
 
 @router.get("/callback", response_model=sc.SsoCallbackResponse)

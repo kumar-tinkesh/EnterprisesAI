@@ -6,7 +6,7 @@
  * token along on protected calls.
  */
 
-import type { AuthPayload } from "@/lib/validations";
+import type { AuthPayload, Role } from "@/lib/validations";
 
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8001/api/v1";
@@ -54,11 +54,11 @@ interface SignupBody {
   tenant_name: string;
 }
 
-interface MeResponse {
+export interface MeResponse {
   id: string;
   email: string;
   full_name: string;
-  role: string;
+  role: Role;
   tenant_id: string | null;
   is_active: boolean;
 }
@@ -125,6 +125,19 @@ export interface UpdateVendorTenantBody {
   status?: string;
 }
 
+export interface SsoInitiateResponse {
+  authorization_url: string;
+  state: string;
+  code_verifier?: string;
+}
+
+export interface SsoCallbackResponse {
+  access_token: string;
+  refresh_token: string;
+  token_type: string;
+  user_id: string;
+}
+
 export const api = {
   login: (body: { email: string; password: string; role?: string }) =>
     request<AuthPayload>("/auth/login", {
@@ -137,6 +150,15 @@ export const api = {
       body: JSON.stringify(body),
     }),
   me: (token: string) => request<MeResponse>("/auth/me", { method: "GET" }, token),
+
+  // SSO / Google Auth endpoints
+  ssoInitiate: () =>
+    request<SsoInitiateResponse>("/sso/initiate", { method: "GET" }),
+  ssoCallback: (code: string, state: string, codeVerifier: string) =>
+    request<SsoCallbackResponse>(
+      `/sso/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}&code_verifier=${encodeURIComponent(codeVerifier)}`,
+      { method: "GET" },
+    ),
 
   // Tenant Admin endpoints
   getTenantStats: (token: string) =>

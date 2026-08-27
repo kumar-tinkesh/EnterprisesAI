@@ -14,6 +14,8 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Field, FieldError } from "@/components/auth-fields";
 
+import { GoogleButton } from "@/components/google-button";
+
 export function LoginForm() {
   const router = useRouter();
   const loginStore = useAuthStore((s) => s.login);
@@ -36,27 +38,38 @@ export function LoginForm() {
   });
 
   return (
-    <form onSubmit={onSubmit} className="space-y-4">
-      <Field label="Email">
-        <Input type="email" placeholder="you@company.com" {...register("email")} />
-        <FieldError msg={formState.errors.email?.message} />
-      </Field>
-      <Field label="Password">
-        <Input type="password" placeholder="••••••••" {...register("password")} />
-        <FieldError msg={formState.errors.password?.message} />
-      </Field>
+    <div className="space-y-4">
+      <GoogleButton />
+      <div className="relative flex items-center justify-center">
+        <div className="absolute inset-0 flex items-center">
+          <div className="w-full border-t border-zinc-200" />
+        </div>
+        <span className="relative bg-white px-2 text-xs uppercase text-zinc-400">
+          Or continue with
+        </span>
+      </div>
+      <form onSubmit={onSubmit} className="space-y-4">
+        <Field label="Email">
+          <Input type="email" placeholder="you@company.com" {...register("email")} />
+          <FieldError msg={formState.errors.email?.message} />
+        </Field>
+        <Field label="Password">
+          <Input type="password" placeholder="••••••••" {...register("password")} />
+          <FieldError msg={formState.errors.password?.message} />
+        </Field>
 
-      {mutation.isError && (
-        <p className="text-xs text-red-600">
-          {mutation.error instanceof ApiError
-            ? mutation.error.message
-            : "Failed to log in"}
-        </p>
-      )}
+        {mutation.isError && (
+          <p className="text-xs text-red-600">
+            {mutation.error instanceof ApiError
+              ? mutation.error.message
+              : "Failed to log in"}
+          </p>
+        )}
 
-      <Button type="submit" disabled={mutation.isPending} className="w-full" size="lg">
-        {mutation.isPending ? <Spinner /> : <LogIn />} Login
-      </Button>
-    </form>
+        <Button type="submit" disabled={mutation.isPending} className="w-full" size="lg">
+          {mutation.isPending ? <Spinner /> : <LogIn />} Login
+        </Button>
+      </form>
+    </div>
   );
 }

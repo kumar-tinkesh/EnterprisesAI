@@ -7,6 +7,7 @@ from pydantic import BaseModel
 class SsoInitiateResponse(BaseModel):
     authorization_url: str
     state: str
+    code_verifier: str | None = None
 
 
 class SsoCallbackRequest(BaseModel):

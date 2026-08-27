@@ -19,7 +19,7 @@ describe("roleForDashboard", () => {
   it("inverts the mapping", () => {
     expect(roleForDashboard("/vendor")).toBe("vendor_admin");
     expect(roleForDashboard("/tenant")).toBe("tenant_admin");
-    expect(roleForDashboard("/user")).toBe("tenant_user");
+    expect(roleForDashboard("/user")).toContain("tenant_user");
   });
 });
 

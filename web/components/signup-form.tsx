@@ -19,6 +19,8 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Field, FieldError } from "@/components/auth-fields";
 
+import { GoogleButton } from "@/components/google-button";
+
 export function SignupForm() {
   const router = useRouter();
   const loginStore = useAuthStore((s) => s.login);
@@ -55,38 +57,49 @@ export function SignupForm() {
   });
 
   return (
-    <form onSubmit={onSubmit} className="space-y-4">
-      <Field label="Full name">
-        <Input placeholder="Jane Doe" {...register("fullName")} />
-        <FieldError msg={formState.errors.fullName?.message} />
-      </Field>
+    <div className="space-y-4">
+      <GoogleButton />
+      <div className="relative flex items-center justify-center">
+        <div className="absolute inset-0 flex items-center">
+          <div className="w-full border-t border-zinc-200" />
+        </div>
+        <span className="relative bg-white px-2 text-xs uppercase text-zinc-400">
+          Or continue with
+        </span>
+      </div>
+      <form onSubmit={onSubmit} className="space-y-4">
+        <Field label="Full name">
+          <Input placeholder="Jane Doe" {...register("fullName")} />
+          <FieldError msg={formState.errors.fullName?.message} />
+        </Field>
 
-      <Field label="Email">
-        <Input type="email" placeholder="you@company.com" {...register("email")} />
-        <FieldError msg={formState.errors.email?.message} />
-      </Field>
+        <Field label="Email">
+          <Input type="email" placeholder="you@company.com" {...register("email")} />
+          <FieldError msg={formState.errors.email?.message} />
+        </Field>
 
-      <Field label="Password">
-        <Input type="password" placeholder="At least 8 characters" {...register("password")} />
-        <FieldError msg={formState.errors.password?.message} />
-      </Field>
+        <Field label="Password">
+          <Input type="password" placeholder="At least 8 characters" {...register("password")} />
+          <FieldError msg={formState.errors.password?.message} />
+        </Field>
 
-      <Field label="Confirm password">
-        <Input type="password" placeholder="Repeat password" {...register("confirmPassword")} />
-        <FieldError msg={formState.errors.confirmPassword?.message} />
-      </Field>
+        <Field label="Confirm password">
+          <Input type="password" placeholder="Repeat password" {...register("confirmPassword")} />
+          <FieldError msg={formState.errors.confirmPassword?.message} />
+        </Field>
 
-      {mutation.isError && (
-        <p className="text-xs text-red-600">
-          {mutation.error instanceof ApiError
-            ? mutation.error.message
-            : "Failed to create account"}
-        </p>
-      )}
+        {mutation.isError && (
+          <p className="text-xs text-red-600">
+            {mutation.error instanceof ApiError
+              ? mutation.error.message
+              : "Failed to create account"}
+          </p>
+        )}
 
-      <Button type="submit" disabled={mutation.isPending} className="w-full" size="lg">
-        {mutation.isPending ? <Spinner /> : <UserPlus />} Create account
-      </Button>
-    </form>
+        <Button type="submit" disabled={mutation.isPending} className="w-full" size="lg">
+          {mutation.isPending ? <Spinner /> : <UserPlus />} Create account
+        </Button>
+      </form>
+    </div>
   );
 }
