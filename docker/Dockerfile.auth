@@ -1,0 +1,39 @@
+# ---------------------------------------------------------------------------
+# EnterpriseAI Auth Service (FastAPI) — built from the repo root context
+#   docker build -f docker/Dockerfile.auth -t enterpriseai-auth .
+# ---------------------------------------------------------------------------
+FROM python:3.12-slim AS base
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+WORKDIR /app
+
+# --- Dependencies (cached layer) -------------------------------------------
+FROM base AS deps
+COPY pyproject.toml uv.lock .python-version ./
+# Install only runtime deps; the app itself is imported via --app-dir.
+RUN uv sync --frozen --no-dev --no-install-project
+
+# --- Runtime -----------------------------------------------------------------
+FROM base AS runtime
+
+COPY --from=deps /app/.venv /app/.venv
+ENV PATH="/app/.venv/bin:$PATH"
+
+COPY alembic.ini ./
+COPY apps ./apps
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh && mkdir -p /data /app/apps/auth/.keys
+
+# SQLite lives on a volume so data survives container restarts.
+ENV DATABASE_URL="sqlite+aiosqlite:////data/auth.db"
+VOLUME ["/data"]
+
+EXPOSE 8001
+
+ENTRYPOINT ["entrypoint.sh"]

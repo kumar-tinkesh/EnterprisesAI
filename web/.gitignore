@@ -1,0 +1,34 @@
+# compiled output
+.next/
+out/
+
+# dependencies
+node_modules/
+
+# environment
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# misc
+.DS_Store
+*.pem
+
+# testing
+coverage/
+.nyc_output/
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# caches
+.eslintcache
+.vite/

@@ -1,0 +1,45 @@
+# ============================================================================
+# EnterpriseAI root .gitignore (uv project root)
+# ============================================================================
+
+# --- Environment / secrets (never commit) ----------------------------------
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# --- Databases / generated keys ---------------------------------------------
+data/
+*.db
+*.sqlite
+*.sqlite3
+.keys/
+
+# --- Python / uv ------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+.venvs/
+build/
+dist/
+*.so
+
+# --- Node (if apps/web returns) ---------------------------------------------
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+
+# --- OS / editor -------------------------------------------------------------
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+*.local

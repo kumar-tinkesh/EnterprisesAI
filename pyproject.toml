@@ -1,0 +1,39 @@
+[project]
+name = "enterprise-ai-auth"
+version = "0.1.0"
+description = "Universal standalone authentication service (FastAPI, SQLAlchemy 2.0, Argon2id, RS256 JWKS, OIDC SSO)"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.19.1",
+    "asyncpg>=0.31.0",
+    "aiosqlite>=0.21.0",
+    "fastapi>=0.141.1",
+    "httpx>=0.28.1",
+    "itsdangerous>=2.2.0",
+    "pwdlib[argon2]>=0.3.1",
+    "pydantic-settings>=2.15.0",
+    "pyjwt[crypto]>=2.13.0",
+    "python-multipart>=0.0.32",
+    "email-validator>=2.2.0",
+    "cryptography>=45.0.0",
+    "sqlalchemy[asyncio]>=2.0.52",
+    "uvicorn[standard]>=0.52.4",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]
+
+[tool.uv]
+package = true
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["apps/auth/tests"]
+python_files = ["test_*.py"]
+pythonpath = ["apps/auth"]
+asyncio_mode = "auto"
+filterwarnings = ["ignore::DeprecationWarning"]

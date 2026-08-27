@@ -1,0 +1,21 @@
+# Keep the auth-service image small and cache-friendly.
+.git
+.gitignore
+.venv
+venv
+__pycache__
+**/__pycache__
+*.py[cod]
+*.db
+*.sqlite*
+auth.db
+.pytest_cache
+.mypy_cache
+.ruff_cache
+enterprise_ai_auth.egg-info
+**/*.egg-info
+docs
+web/node_modules
+web/.next
+web/.git
+docker/.dockerignore

@@ -1,0 +1,11 @@
+packages:
+  - "."
+
+# Allow these dependencies to run their postinstall build scripts
+# (esbuild binary download, sharp native bindings).
+onlyBuiltDependencies:
+  - esbuild
+  - sharp
+allowBuilds:
+  esbuild: set this to true or false
+  sharp: set this to true or false

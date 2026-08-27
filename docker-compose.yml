@@ -1,0 +1,90 @@
+# ---------------------------------------------------------------------------
+# EnterpriseAI — full local stack
+#
+#   docker compose up --build
+#     web  -> http://localhost:3000/auth
+#     auth -> http://localhost:8001/docs
+#
+# With PostgreSQL instead of SQLite:
+#   docker compose --profile postgres up --build
+#   (then set DATABASE_URL under `auth.environment` to the postgres URL below)
+# ---------------------------------------------------------------------------
+name: enterpriseai
+
+services:
+  # --- Auth service (FastAPI) ---------------------------------------------
+  auth:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.auth
+    image: enterpriseai-auth
+    container_name: enterpriseai-auth
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      ENV: production
+      DEBUG: "false"
+      APP_NAME: EnterpriseAI Auth Service
+      API_V1_PREFIX: /api/v1
+      JWT_ISSUER: enterprise-ai-auth
+      JWT_AUDIENCE: enterprise-ai
+      # SQLite on a named volume by default; for Postgres use e.g.:
+      # DATABASE_URL: postgresql+asyncpg://auth:auth@db:5432/auth
+      DATABASE_URL: ${AUTH_DATABASE_URL:-sqlite+aiosqlite:////data/auth.db}
+      BACKEND_CORS_ORIGINS: '["http://localhost:3000","http://127.0.0.1:3000"]'
+      # Override secrets via .env at the repo root or your shell.
+      CSRF_SECRET_KEY: ${CSRF_SECRET_KEY:-change-me-in-production}
+    volumes:
+      - ./data:/data                      # SQLite database file (host-accessible)
+      - ./data/.keys:/app/apps/auth/.keys  # RSA keypair (keep across restarts)
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8001/health', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  # --- Web frontend (Next.js) ----------------------------------------------
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      args:
+        # Must be reachable from the BROWSER, not from inside the network.
+        NEXT_PUBLIC_API_URL: http://localhost:8001/api/v1
+    image: enterpriseai-web
+    container_name: enterpriseai-web
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      auth:
+        condition: service_healthy
+
+  # --- Optional: PostgreSQL (profile "postgres") ---------------------------
+  db:
+    image: postgres:16-alpine
+    profiles: ["postgres"]
+    container_name: enterpriseai-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: auth
+      POSTGRES_PASSWORD: auth
+      POSTGRES_DB: auth
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U auth -d auth"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+volumes:
+  pgdata:
