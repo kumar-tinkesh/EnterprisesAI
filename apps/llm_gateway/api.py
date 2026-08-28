@@ -241,6 +241,15 @@ def _format_completion_response(resp) -> dict:
             for tc in resp.tool_calls
         ]
 
+    message_dict: dict[str, Any] = {
+        "role": "assistant",
+        "content": resp.content,
+    }
+    if resp.reasoning:
+        message_dict["reasoning"] = resp.reasoning
+    if tool_calls:
+        message_dict["tool_calls"] = tool_calls
+
     return {
         "id": "chatcmpl-gateway",
         "object": "chat.completion",
@@ -248,11 +257,7 @@ def _format_completion_response(resp) -> dict:
         "choices": [
             {
                 "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": resp.content,
-                    **({"tool_calls": tool_calls} if tool_calls else {}),
-                },
+                "message": message_dict,
                 "finish_reason": resp.finish_reason,
             }
         ],

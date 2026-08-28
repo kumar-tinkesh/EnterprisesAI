@@ -74,8 +74,13 @@ class GroqClient(BaseLLMClient):
         tool_calls = self._extract_tool_calls(choice)
         usage = self._extract_usage(resp)
 
+        reasoning = getattr(choice.message, "reasoning_content", None) or getattr(
+            choice.message, "reasoning", None
+        )
+
         return CompletionResponse(
             content=choice.message.content,
+            reasoning=reasoning,
             tool_calls=tool_calls,
             usage=usage,
             model=resp.model,

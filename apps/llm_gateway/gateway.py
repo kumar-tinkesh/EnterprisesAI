@@ -26,6 +26,8 @@ from apps.llm_gateway.types import (
     EmbeddingResponse,
     Provider,
     StreamChunk,
+    ReasoningStreamParser,
+    extract_think_block,
 )
 from apps.llm_gateway.providers.base import BaseLLMClient
 from apps.llm_gateway.providers.openai_client import OpenAIClient
@@ -47,32 +49,6 @@ _FALLBACK_ORDER: dict[str, list[str]] = {
 class LLMGateway:
     """
     Unified entry-point for all LLM operations across the platform.
-
-    Usage
-    ─────
-    ```python
-    from apps.llm_gateway.gateway import LLMGateway
-    from apps.llm_gateway.types import CompletionRequest, Message, Role
-
-    gw = LLMGateway.from_env()
-
-    resp = await gw.complete(CompletionRequest(
-        messages=[Message(role=Role.USER, content="Hello!")],
-    ))
-    print(resp.content)
-
-    # Force a specific provider:
-    resp = await gw.complete(request, provider="groq")
-
-    # Stream:
-    async for chunk in gw.stream(request):
-        print(chunk.content, end="", flush=True)
-
-    # Embed:
-    emb = await gw.embed(["some text"], provider="gemini")
-
-    await gw.close()
-    ```
     """
 
     def __init__(self, settings: GatewaySettings) -> None:
@@ -95,14 +71,8 @@ class LLMGateway:
         fallback: bool = True,
     ) -> CompletionResponse:
         """
-        Run a chat completion.
-
-        Args:
-            request:  The completion request.
-            provider: Force a specific provider (``openai``, ``groq``, ``gemini``).
-                      Defaults to ``settings.default_provider``.
-            fallback: If True and the primary fails with a retryable error,
-                      automatically try the next configured provider.
+        Run a chat completion. Automatically separates reasoning <think> blocks
+        into resp.reasoning while keeping resp.content clean.
         """
         primary = provider or self._settings.default_provider
         providers_to_try = self._build_try_order(primary, fallback)
@@ -114,7 +84,17 @@ class LLMGateway:
                 continue
             try:
                 logger.info("complete → %s (%s)", name, request.model or "default")
-                return await client.complete(request)
+                resp = await client.complete(request)
+                if resp.content:
+                    clean, think_reasoning = extract_think_block(resp.content)
+                    resp.content = clean
+                    if think_reasoning:
+                        resp.reasoning = (
+                            f"{resp.reasoning}\n\n{think_reasoning}".strip()
+                            if resp.reasoning
+                            else think_reasoning
+                        )
+                return resp
             except LLMGatewayError as exc:
                 last_error = exc
                 if exc.retryable and fallback:
@@ -138,8 +118,8 @@ class LLMGateway:
         fallback: bool = True,
     ) -> AsyncIterator[StreamChunk]:
         """
-        Stream a chat completion.  Fallback works at connection time only
-        (once streaming starts, no mid-stream failover).
+        Stream a chat completion. Intercepts <think>...</think> tags so chunk.content
+        contains only clean response text while chunk.reasoning carries thinking deltas.
         """
         primary = provider or self._settings.default_provider
         providers_to_try = self._build_try_order(primary, fallback)
@@ -151,9 +131,11 @@ class LLMGateway:
                 continue
             try:
                 logger.info("stream → %s (%s)", name, request.model or "default")
+                parser = ReasoningStreamParser()
                 async for chunk in client.stream(request):
-                    yield chunk
-                return  # stream completed successfully
+                    processed = parser.process(chunk)
+                    yield processed
+                return
             except LLMGatewayError as exc:
                 last_error = exc
                 if exc.retryable and fallback:

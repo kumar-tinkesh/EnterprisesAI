@@ -110,6 +110,8 @@ services:
       OPENAI_DEFAULT_MODEL: ${OPENAI_DEFAULT_MODEL:-}
       GROQ_DEFAULT_MODEL: ${GROQ_DEFAULT_MODEL:-}
       GEMINI_DEFAULT_MODEL: ${GEMINI_DEFAULT_MODEL:-}
+    volumes:
+      - ./apps/llm_gateway:/app/apps/llm_gateway
     depends_on:
       redis:
         condition: service_healthy
