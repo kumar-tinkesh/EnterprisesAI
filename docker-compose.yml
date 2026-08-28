@@ -73,6 +73,59 @@ services:
       auth:
         condition: service_healthy
 
+  # --- Redis (cache, rate-limits, pub/sub) ----------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: enterpriseai-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  # --- LLM Gateway (unified LLM proxy) -------------------------------------
+  llm-gateway:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.llm_gateway
+    image: enterpriseai-llm-gateway
+    container_name: enterpriseai-llm-gateway
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    environment:
+      # Provider API keys — set in .env at repo root
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      # Defaults
+      LLM_GATEWAY_DEFAULT_PROVIDER: ${LLM_GATEWAY_DEFAULT_PROVIDER:-openai}
+      LLM_GATEWAY_TIMEOUT: ${LLM_GATEWAY_TIMEOUT:-60}
+      LLM_GATEWAY_MAX_RETRIES: ${LLM_GATEWAY_MAX_RETRIES:-3}
+      OPENAI_DEFAULT_MODEL: ${OPENAI_DEFAULT_MODEL:-}
+      GROQ_DEFAULT_MODEL: ${GROQ_DEFAULT_MODEL:-}
+      GEMINI_DEFAULT_MODEL: ${GEMINI_DEFAULT_MODEL:-}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:4000/health', timeout=3)",
+        ]
+      interval: 60s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
   # --- Optional: PostgreSQL (profile "postgres") ---------------------------
   db:
     image: postgres:16-alpine
@@ -93,3 +146,4 @@ services:
 
 volumes:
   pgdata:
+  redisdata:
