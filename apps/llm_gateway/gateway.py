@@ -164,7 +164,7 @@ class LLMGateway:
         Defaults to OpenAI (text-embedding-3-small) or Gemini (text-embedding-004).
         Groq does not support embeddings and is skipped.
         """
-        primary = provider or self._settings.default_provider
+        primary = provider or self._settings.embedding_provider
         # For embeddings, prefer providers that actually support them
         embed_order = [
             p for p in self._build_try_order(primary, fallback=True) if p != "groq"
@@ -180,9 +180,8 @@ class LLMGateway:
                 return await client.embed(texts, model=model)
             except LLMGatewayError as exc:
                 last_error = exc
-                if exc.retryable:
-                    continue
-                raise
+                logger.warning("Provider %s embedding failed, trying next: %s", name, exc)
+                continue
 
         raise last_error or ProviderNotConfiguredError(
             "No provider configured that supports embeddings."

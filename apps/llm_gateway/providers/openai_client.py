@@ -11,12 +11,13 @@ import logging
 from typing import AsyncIterator, Optional
 
 import openai
-from openai import AsyncOpenAI
+from openai import AsyncAzureOpenAI, AsyncOpenAI
 
 from apps.llm_gateway.config import ProviderConfig
 from apps.llm_gateway.exceptions import (
     AuthenticationError,
     ContentFilterError,
+    LLMGatewayError,
     ModelNotFoundError,
     ProviderAPIError,
     ProviderNotConfiguredError,
@@ -37,7 +38,7 @@ logger = logging.getLogger("llm_gateway.openai")
 
 
 class OpenAIClient(BaseLLMClient):
-    """Async client for OpenAI (and any OpenAI-compatible endpoint)."""
+    """Async client for OpenAI and Azure OpenAI endpoints."""
 
     PROVIDER_NAME = "openai"
 
@@ -47,13 +48,24 @@ class OpenAIClient(BaseLLMClient):
             raise ProviderNotConfiguredError(
                 "OPENAI_API_KEY is not set.", provider=self.PROVIDER_NAME
             )
-        self._client = AsyncOpenAI(
-            api_key=config.api_key,
-            organization=config.organization,
-            base_url=config.base_url,
-            max_retries=config.max_retries,
-            timeout=float(config.timeout_seconds),
-        )
+
+        if config.base_url and "azure" in config.base_url.lower():
+            azure_endpoint = config.base_url.split("/openai/")[0]
+            self._client = AsyncAzureOpenAI(
+                azure_endpoint=azure_endpoint,
+                api_key=config.api_key,
+                api_version=config.api_version or "2025-04-14",
+                max_retries=config.max_retries,
+                timeout=float(config.timeout_seconds),
+            )
+        else:
+            self._client = AsyncOpenAI(
+                api_key=config.api_key,
+                organization=config.organization,
+                base_url=config.base_url,
+                max_retries=config.max_retries,
+                timeout=float(config.timeout_seconds),
+            )
 
     # ── chat completion ──────────────────────────────────────────────────
 
@@ -124,7 +136,7 @@ class OpenAIClient(BaseLLMClient):
         *,
         model: Optional[str] = None,
     ) -> EmbeddingResponse:
-        model = model or "text-embedding-3-small"
+        model = model or self._config.default_embedding_model or "text-embedding-3-small"
         try:
             resp = await self._client.embeddings.create(input=texts, model=model)
         except openai.APIError as exc:

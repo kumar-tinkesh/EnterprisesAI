@@ -32,6 +32,7 @@ def mock_env_settings():
         groq=ProviderConfig(api_key="gsk-groq-mock", default_model="llama-3.3-70b-versatile"),
         gemini=ProviderConfig(api_key="AIza-gemini-mock", default_model="gemini-2.5-flash"),
         default_provider="openai",
+        embedding_provider="openai",
     )
 
 
@@ -40,6 +41,7 @@ def mock_env_settings():
 def test_gateway_settings_from_env(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
     monkeypatch.setenv("GROQ_API_KEY", "test-groq-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "")
     monkeypatch.setenv("LLM_GATEWAY_DEFAULT_PROVIDER", "groq")
 
     settings = GatewaySettings.from_env()

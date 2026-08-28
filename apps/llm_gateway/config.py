@@ -20,6 +20,8 @@ class ProviderConfig:
     max_retries: int = 3
     timeout_seconds: int = 60
     organization: Optional[str] = None
+    api_version: Optional[str] = None
+    default_embedding_model: str = ""
 
     @property
     def is_configured(self) -> bool:
@@ -47,6 +49,7 @@ class GatewaySettings:
     groq: ProviderConfig = field(default_factory=ProviderConfig)
     gemini: ProviderConfig = field(default_factory=ProviderConfig)
     default_provider: str = "openai"
+    embedding_provider: str = "gemini"
     enable_cache: bool = False
     cache_ttl_seconds: int = 3600
 
@@ -72,7 +75,9 @@ class GatewaySettings:
             api_key=os.getenv("OPENAI_API_KEY", ""),
             base_url=os.getenv("OPENAI_BASE_URL"),
             default_model=os.getenv("OPENAI_DEFAULT_MODEL", ""),
+            default_embedding_model=os.getenv("OPENAI_EMBEDDING_MODEL", ""),
             organization=os.getenv("OPENAI_ORG_ID"),
+            api_version=os.getenv("OPENAI_API_VERSION"),
             max_retries=retries,
             timeout_seconds=timeout,
         )
@@ -101,6 +106,7 @@ class GatewaySettings:
             groq=groq_cfg,
             gemini=gemini_cfg,
             default_provider=os.getenv("LLM_GATEWAY_DEFAULT_PROVIDER", "openai"),
+            embedding_provider=os.getenv("LLM_GATEWAY_EMBEDDING_PROVIDER", "gemini"),
             enable_cache=enable_cache,
             cache_ttl_seconds=cache_ttl,
         )

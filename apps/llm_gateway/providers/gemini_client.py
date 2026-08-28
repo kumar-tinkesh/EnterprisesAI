@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 from typing import AsyncIterator, Optional
 
+import httpx
 import openai
 from openai import AsyncOpenAI
 
@@ -134,24 +135,41 @@ class GeminiClient(BaseLLMClient):
         *,
         model: Optional[str] = None,
     ) -> EmbeddingResponse:
-        model = model or "text-embedding-004"
-        try:
-            resp = await self._client.embeddings.create(input=texts, model=model)
-        except openai.APIError as exc:
-            raise self._map_error(exc, model) from exc
+        target_model = model or self._config.default_embedding_model or "gemini-embedding-001"
+        clean_model_name = target_model.replace("models/", "")
 
-        vectors = [item.embedding for item in resp.data]
-        usage = TokenUsage()
-        if resp.usage:
-            usage = TokenUsage(
-                prompt_tokens=resp.usage.prompt_tokens,
-                total_tokens=resp.usage.total_tokens,
-            )
+        vectors: list[list[float]] = []
+        try:
+            async with httpx.AsyncClient(timeout=float(self._config.timeout_seconds)) as client:
+                for text in texts:
+                    url = (
+                        f"https://generativelanguage.googleapis.com/v1beta/models/"
+                        f"{clean_model_name}:embedContent?key={self._config.api_key}"
+                    )
+                    res = await client.post(
+                        url,
+                        json={"content": {"parts": [{"text": text}]}},
+                    )
+                    if res.status_code != 200:
+                        raise ProviderAPIError(
+                            f"Gemini embedding error ({res.status_code}): {res.text}",
+                            provider=self.PROVIDER_NAME,
+                        )
+                    data = res.json()
+                    embedding_vals = data.get("embedding", {}).get("values", [])
+                    vectors.append(embedding_vals)
+        except LLMGatewayError:
+            raise
+        except Exception as exc:
+            raise ProviderAPIError(
+                f"Gemini embedding request failed: {exc}", provider=self.PROVIDER_NAME
+            ) from exc
+
         return EmbeddingResponse(
             embeddings=vectors,
-            model=resp.model,
+            model=clean_model_name,
             provider=self.PROVIDER_NAME,
-            usage=usage,
+            usage=TokenUsage(),
         )
 
     # ── model listing ────────────────────────────────────────────────────
