@@ -9,36 +9,15 @@ from src.core.roles import Roles
 from src.db.session import get_db
 from src.api.v1.tenant import schemas as sc
 from src.api.v1.tenant.service import (
-    create_tenant,
     create_tenant_member,
     delete_tenant_member,
     get_tenant_stats,
     list_tenant_members,
-    list_tenants,
     update_tenant_member,
 )
 
 router = APIRouter(prefix="/tenant", tags=["tenant"])
 
-
-@router.post("", response_model=sc.TenantOut, status_code=201)
-async def post_tenant(
-    payload: sc.TenantCreate,
-    db: AsyncSession = Depends(get_db),
-    current: CurrentUser = Depends(require_roles(Roles.VENDOR_ADMIN)),
-):
-    return await create_tenant(db, name=payload.name, slug=payload.slug)
-
-
-@router.get("", response_model=list[sc.TenantOut])
-async def get_tenants(
-    db: AsyncSession = Depends(get_db),
-    current: CurrentUser = Depends(require_roles(Roles.VENDOR_ADMIN)),
-):
-    return await list_tenants(db)
-
-
-# ── Tenant Admin Member & Stats endpoints ──────────────────────────────────
 
 @router.get("/stats", response_model=sc.TenantStats)
 async def get_stats(

@@ -14,33 +14,6 @@ from src.models.workspace import Workspace, WorkspaceMember
 from src.api.v1.tenant.schemas import MemberCreate, MemberUpdate
 
 
-def _slugify(value: str) -> str:
-    value = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
-    return value or "default"
-
-
-async def create_tenant(db: AsyncSession, *, name: str, slug: str | None) -> Tenant:
-    chosen = slug or _slugify(name)
-    existing = (
-        await db.execute(select(Tenant).where(Tenant.slug == chosen))
-    ).scalars().first()
-    if existing:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail="Tenant slug already exists"
-        )
-    tenant = Tenant(name=name, slug=chosen)
-    db.add(tenant)
-    await db.commit()
-    await db.refresh(tenant)
-    return tenant
-
-
-async def list_tenants(db: AsyncSession) -> list[Tenant]:
-    return list(
-        (await db.execute(select(Tenant).order_by(Tenant.created_at))).scalars()
-    )
-
-
 async def get_tenant_stats(db: AsyncSession, tenant_id: str) -> dict[str, int]:
     ws_count = (
         await db.execute(

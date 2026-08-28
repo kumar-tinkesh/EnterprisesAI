@@ -5,21 +5,6 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 
 
-class TenantCreate(BaseModel):
-    name: str
-    slug: str | None = None
-
-
-class TenantOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: str
-    name: str
-    slug: str
-    status: str
-    created_at: datetime
-
-
 class TenantStats(BaseModel):
     workspace_count: int
     member_count: int

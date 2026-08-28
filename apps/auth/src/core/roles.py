@@ -23,15 +23,3 @@ class Roles:
     @classmethod
     def is_valid(cls, role: str) -> bool:
         return role in cls.ALL
-
-    @classmethod
-    def is_vendor(cls, role: str) -> bool:
-        return role == cls.VENDOR_ADMIN
-
-    @classmethod
-    def is_tenant(cls, role: str) -> bool:
-        return role in cls.TENANT_ROLES
-
-    @classmethod
-    def is_solo(cls, role: str) -> bool:
-        return role == cls.SOLO_USER

@@ -10,11 +10,6 @@ class SsoInitiateResponse(BaseModel):
     code_verifier: str | None = None
 
 
-class SsoCallbackRequest(BaseModel):
-    code: str
-    state: str = ""
-
-
 class SsoCallbackResponse(BaseModel):
     access_token: str
     refresh_token: str

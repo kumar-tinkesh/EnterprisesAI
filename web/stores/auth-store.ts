@@ -9,7 +9,6 @@ interface AuthState {
   accessToken: string | null;
   refreshToken: string | null;
   user: Account | null;
-  isAuthenticated: () => boolean;
   login: (payload: AuthPayload) => void;
   logout: () => void;
   role: () => Role | null;
@@ -21,8 +20,6 @@ export const useAuthStore = create<AuthState>()(
       accessToken: null,
       refreshToken: null,
       user: null,
-
-      isAuthenticated: () => Boolean(get().accessToken),
 
       login: (payload) =>
         set({

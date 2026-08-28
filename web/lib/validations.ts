@@ -12,13 +12,6 @@ export const ROLES = {
 
 export type Role = (typeof ROLES)[keyof typeof ROLES];
 
-export const ROLE_LABELS: Record<Role, string> = {
-  vendor_admin: "Vendor Admin",
-  tenant_admin: "Tenant Admin",
-  tenant_user: "Tenant User",
-  solo_user: "(Individual)",
-};
-
 /** Zod schema shared by the login form. */
 export const loginSchema = z.object({
   email: z.string().email("Enter a valid email"),
