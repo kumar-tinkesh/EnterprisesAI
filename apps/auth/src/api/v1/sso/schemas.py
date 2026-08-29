@@ -15,3 +15,22 @@ class SsoCallbackResponse(BaseModel):
     refresh_token: str
     token_type: str = "bearer"
     user_id: str
+
+
+class SsoConfigCreate(BaseModel):
+    provider: str = "google"
+    client_id: str
+    client_secret: str
+    discovery_url: str
+    redirect_uri: str = ""
+    enabled: bool = True
+
+
+class SsoConfigResponse(BaseModel):
+    id: str
+    tenant_id: str
+    provider: str
+    client_id: str
+    discovery_url: str
+    redirect_uri: str
+    enabled: bool

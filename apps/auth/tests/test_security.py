@@ -1,4 +1,4 @@
-"""Tests for Argon2id hashing, RS256 JWT, JWKS, and CSRF."""
+"""Tests for Argon2id hashing, RS256 JWT, and JWKS."""
 from __future__ import annotations
 
 import jwt
@@ -60,15 +60,15 @@ def test_tampered_token_rejected():
         security.decode_token(f"{header}.{payload}._fake", expected_type="access")
 
 
-def test_csrf_sign_and_verify():
-    token = security.sign_csrf()
-    assert security.verify_csrf(token) is True
-    assert security.verify_csrf("forged") is False
-
-
-def test_refresh_token_hash_and_gen():
-    raw = security.generate_refresh_token()
-    assert len(raw) >= 43
+def test_refresh_token_hash():
+    raw = "sample_raw_refresh_token_string"
     digest = security.hash_refresh_token(raw)
     assert digest == security.hash_refresh_token(raw)
     assert digest != raw
+
+
+def test_roles_helpers():
+    from src.core.roles import Roles
+
+    assert Roles.is_valid(Roles.VENDOR_ADMIN) is True
+    assert Roles.is_valid("unknown_role") is False

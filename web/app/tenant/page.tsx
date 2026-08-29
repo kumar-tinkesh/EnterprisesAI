@@ -16,6 +16,8 @@ import {
 } from "lucide-react";
 
 import ProtectedDashboard from "@/components/protected-dashboard";
+import { AuditLogsPanel } from "@/components/audit-logs-panel";
+import { SsoConfigPanel } from "@/components/sso-config-panel";
 import { useAuthStore } from "@/stores/auth-store";
 import { api, ApiError, type TenantMember } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -238,6 +240,9 @@ export default function TenantDashboard() {
           }
         />
       )}
+
+      <SsoConfigPanel />
+      <AuditLogsPanel limit={25} />
     </ProtectedDashboard>
   );
 }

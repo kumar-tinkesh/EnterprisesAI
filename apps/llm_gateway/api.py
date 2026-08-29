@@ -6,6 +6,8 @@ Endpoints
   GET  /health              → readiness check
   GET  /providers            → list configured providers
   GET  /models               → list models per provider
+  GET  /prompts              → list registered prompt templates
+  POST /v1/prompts/render    → render a system-prompt template
   POST /v1/chat/completions  → OpenAI-compatible completions (+ streaming SSE)
   POST /v1/embeddings        → OpenAI-compatible embeddings
 """
@@ -17,12 +19,13 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Any, Optional
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from apps.llm_gateway.gateway import LLMGateway
 from apps.llm_gateway.exceptions import LLMGatewayError, ProviderNotConfiguredError
+from apps.llm_gateway.prompts import PromptRegistry, PromptType
 from apps.llm_gateway.types import (
     CompletionRequest,
     Message,
@@ -104,6 +107,12 @@ class EmbeddingBody(BaseModel):
     model: Optional[str] = None
 
 
+class PromptRenderBody(BaseModel):
+    prompt_type: str
+    provider: Optional[str] = None
+    variables: dict[str, Any] = Field(default_factory=dict)
+
+
 # ── routes ───────────────────────────────────────────────────────────────────
 
 @app.get("/health")
@@ -120,6 +129,38 @@ async def health():
 async def providers():
     gw = get_gateway()
     return {"providers": gw.configured_providers, "default": gw.default_provider}
+
+
+@app.get("/prompts")
+async def prompt_types():
+    """List all registered system-prompt templates."""
+    return {"prompt_types": PromptRegistry.list_prompts()}
+
+
+@app.post("/v1/prompts/render")
+async def render_prompt(body: PromptRenderBody):
+    """Render a registered system-prompt template with the given variables."""
+    try:
+        prompt_type = PromptType(body.prompt_type)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown prompt_type '{body.prompt_type}'. "
+                   f"Available: {PromptRegistry.list_prompts()}",
+        ) from exc
+
+    try:
+        rendered = PromptRegistry.format(
+            prompt_type, provider=body.provider, **body.variables
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {
+        "prompt_type": prompt_type.value,
+        "provider": body.provider,
+        "prompt": rendered,
+    }
 
 
 @app.get("/models")
@@ -274,13 +315,18 @@ async def _stream_sse(gw: LLMGateway, request, provider):
     """Yield Server-Sent Events for streaming responses."""
     try:
         async for chunk in gw.stream(request, provider=provider):
+            delta: dict[str, Any] = {}
+            if chunk.content:
+                delta["content"] = chunk.content
+            if chunk.reasoning:
+                delta["reasoning"] = chunk.reasoning
             data = {
                 "id": "chatcmpl-gateway",
                 "object": "chat.completion.chunk",
                 "choices": [
                     {
                         "index": 0,
-                        "delta": {"content": chunk.content} if chunk.content else {},
+                        "delta": delta,
                         "finish_reason": chunk.finish_reason,
                     }
                 ],

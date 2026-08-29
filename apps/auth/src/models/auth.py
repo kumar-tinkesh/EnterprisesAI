@@ -26,7 +26,6 @@ class RefreshToken(Base, TimestampMixin):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))  # noqa: F821
     revoked: Mapped[bool] = mapped_column(Boolean, default=False)
     replaced_by: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
-    created_ip: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     user_agent: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
 

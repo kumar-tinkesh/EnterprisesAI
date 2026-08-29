@@ -170,3 +170,64 @@ def test_api_chat_completions_mocked():
             json_body = res.json()
             assert json_body["object"] == "chat.completion"
             assert json_body["choices"][0]["message"]["content"] == "API test response"
+
+
+def test_api_prompt_render_endpoint():
+    with TestClient(app) as client:
+        res = client.post(
+            "/v1/prompts/render",
+            json={
+                "prompt_type": "react_agent",
+                "variables": {
+                    "agent_goal": "Onboard new hire",
+                    "bound_tools": ["hris.createEmployee"],
+                    "knowledge_context": "HR policy",
+                    "memory_context": "No previous runs",
+                },
+            },
+        )
+        assert res.status_code == 200
+        body = res.json()
+        assert body["prompt_type"] == "react_agent"
+        assert "Onboard new hire" in body["prompt"]
+
+
+def test_api_prompt_render_unknown_type():
+    with TestClient(app) as client:
+        res = client.post(
+            "/v1/prompts/render",
+            json={"prompt_type": "does_not_exist", "variables": {}},
+        )
+        assert res.status_code == 400
+        assert "Unknown prompt_type" in res.json()["detail"]
+
+
+def test_api_prompts_list_endpoint():
+    with TestClient(app) as client:
+        res = client.get("/prompts")
+        assert res.status_code == 200
+        assert "react_agent" in res.json()["prompt_types"]
+
+
+@pytest.mark.asyncio
+async def test_llm_gateway_cache_hits(mock_env_settings):
+    """Same request should only hit the provider once when caching is enabled."""
+    from dataclasses import replace
+
+    settings = replace(mock_env_settings, enable_cache=True, cache_ttl_seconds=60)
+    gw = LLMGateway(settings)
+    mock_openai = AsyncMock()
+    gw._clients["openai"] = mock_openai
+
+    from apps.llm_gateway.types import CompletionRequest
+    req = CompletionRequest(messages=[Message(role=Role.USER, content="cached question")])
+    mock_openai.complete.return_value = CompletionResponse(
+        content="cached answer", model="gpt-4.1", provider="openai"
+    )
+
+    first = await gw.complete(req)
+    second = await gw.complete(req)
+    assert mock_openai.complete.call_count == 1
+    assert first.content == "cached answer"
+    assert second.content == "cached answer"
+

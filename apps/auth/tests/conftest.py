@@ -15,7 +15,6 @@ _TMPDIR = Path(tempfile.mkdtemp(prefix="auth-test-"))
 os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMPDIR / 'test.db'}"
 os.environ["JWT_ISSUER"] = "testing-issuer"
 os.environ["SSO_REDIRECT_URI"] = "http://testserver/api/v1/sso/callback"
-os.environ["CSRF_SECRET_KEY"] = "test-secret-key"
 
 from src.config import get_settings  # noqa: E402
 from src.db.base import Base  # noqa: E402

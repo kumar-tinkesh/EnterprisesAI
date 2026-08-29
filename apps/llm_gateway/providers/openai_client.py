@@ -17,7 +17,6 @@ from apps.llm_gateway.config import ProviderConfig
 from apps.llm_gateway.exceptions import (
     AuthenticationError,
     ContentFilterError,
-    LLMGatewayError,
     ModelNotFoundError,
     ProviderAPIError,
     ProviderNotConfiguredError,

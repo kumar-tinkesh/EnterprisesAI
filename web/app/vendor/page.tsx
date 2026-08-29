@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 
 import ProtectedDashboard from "@/components/protected-dashboard";
+import { AuditLogsPanel } from "@/components/audit-logs-panel";
 import { useAuthStore } from "@/stores/auth-store";
 import { api, ApiError, type VendorTenant } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -288,6 +289,8 @@ export default function VendorDashboard() {
           }
         />
       )}
+
+      <AuditLogsPanel limit={25} />
     </ProtectedDashboard>
   );
 }

@@ -9,6 +9,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.audit import log_audit_event
 from src.core.roles import Roles
 from src.core.security import (
     create_token_pair,
@@ -39,12 +40,6 @@ async def _unique_tenant_slug(db: AsyncSession, base: str) -> str:
             return candidate
         candidate = f"{base}-{n}"
         n += 1
-
-
-def _role_of(row: User | VendorUser) -> str:
-    return row.role if getattr(row, "role", None) else (
-        Roles.VENDOR_ADMIN if isinstance(row, VendorUser) else Roles.TENANT_USER
-    )
 
 
 async def _issue_pair(
@@ -104,6 +99,7 @@ async def signup(
         db.add(vendor)
         await db.flush()
         tokens = await _issue_pair(db, vendor.id, Roles.VENDOR_ADMIN, None, None)
+        await log_audit_event(db, action="signup", user_id=vendor.id, tenant_id=None, resource="vendor_user")
         await db.commit()
         await db.refresh(vendor)
         return vendor, tokens
@@ -145,6 +141,7 @@ async def signup(
         db.add(WorkspaceMember(workspace_id=workspace.id, user_id=user.id, role="admin"))
 
         tokens = await _issue_pair(db, user.id, Roles.SOLO_USER, tenant.id, workspace.id)
+        await log_audit_event(db, action="signup", user_id=user.id, tenant_id=tenant.id, resource="user")
         await db.commit()
         await db.refresh(user)
         return user, tokens
@@ -161,38 +158,11 @@ async def signup(
             "Tenant admin self-signup is disabled. Please contact the platform vendor admin to provision your organization.",
         )
 
-    tenant = Tenant(name=tenant_name, slug=await _unique_tenant_slug(db, tenant_name))
-    db.add(tenant)
-    await db.flush()
-
-    user = User(
-        tenant_id=tenant.id,
-        email=email,
-        hashed_password=hash_password(password),
-        full_name=full_name,
-        role=role,
-        auth_provider="local",
-        is_active=True,
+    raise HTTPException(
+        status.HTTP_400_BAD_REQUEST,
+        f"Invalid role '{role}'. Must be one of {Roles.ALL}",
     )
-    db.add(user)
-    await db.flush()
 
-    workspace_id = await _first_workspace_id(db, tenant.id)
-    if not workspace_id:
-        workspace = Workspace(
-            tenant_id=tenant.id, name=tenant.name, slug=_slugify(f"{tenant.name}-ws")
-        )
-        db.add(workspace)
-        await db.flush()
-        workspace_id = workspace.id
-
-    ws_role = "admin" if role == Roles.TENANT_ADMIN else "member"
-    db.add(WorkspaceMember(workspace_id=workspace_id, user_id=user.id, role=ws_role))
-
-    tokens = await _issue_pair(db, user.id, role, user.tenant_id, workspace_id)
-    await db.commit()
-    await db.refresh(user)
-    return user, tokens
 
 
 async def login(
@@ -263,6 +233,7 @@ async def login(
 
     wid = workspace_id or await _first_workspace_id(db, user.tenant_id)
     tokens = await _issue_pair(db, user.id, role, user.tenant_id, wid)
+    await log_audit_event(db, action="login", user_id=user.id, tenant_id=user.tenant_id, resource="auth")
     await db.commit()
     return user, tokens
 
@@ -310,6 +281,7 @@ async def refresh_tokens(db: AsyncSession, *, refresh_token: str) -> dict[str, s
     new = await _issue_pair(db, account.id, role, tenant_id, wid)
     stored.revoked = True
     stored.replaced_by = hash_refresh_token(new["refresh_token"])
+    await log_audit_event(db, action="refresh_token", user_id=account.id, tenant_id=tenant_id, resource="auth")
     await db.commit()
     return new
 
@@ -325,4 +297,5 @@ async def logout(db: AsyncSession, *, refresh_token: str) -> None:
     ).scalars().first()
     if stored:
         stored.revoked = True
+        await log_audit_event(db, action="logout", user_id=stored.user_id, resource="auth")
         await db.commit()

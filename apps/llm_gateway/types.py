@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, AsyncIterator, Optional
+from typing import Any, Optional
 
 
 # ── Enums ────────────────────────────────────────────────────────────────────
@@ -14,14 +14,6 @@ from typing import Any, AsyncIterator, Optional
 class Role(str, Enum):
     SYSTEM = "system"
     USER = "user"
-    ASSISTANT = "assistant"
-    TOOL = "tool"
-
-
-class Provider(str, Enum):
-    OPENAI = "openai"
-    GROQ = "groq"
-    GEMINI = "gemini"
 
 
 # ── Message ──────────────────────────────────────────────────────────────────

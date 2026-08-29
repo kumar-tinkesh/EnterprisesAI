@@ -1,17 +1,15 @@
 """Security primitives: Argon2id password hashing, RSA keypair management,
-RS256 token sign/verify, public JWKS publishing, and CSRF signing."""
+RS256 token sign/verify, and public JWKS publishing."""
 from __future__ import annotations
 
 import base64
 import hashlib
-import secrets
 import uuid
 from datetime import datetime, timezone
 
 import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from itsdangerous import URLSafeTimedSerializer, BadSignature
 from pwdlib import PasswordHash
 
 from src.config import Settings, get_settings
@@ -201,33 +199,3 @@ def decode_token(token: str, *, expected_type: str | None = None) -> dict:
 def hash_refresh_token(token: str) -> str:
     """Return a one-way digest used to persist a refresh token securely."""
     return hashlib.sha256(token.encode()).hexdigest()
-
-
-def generate_refresh_token() -> str:
-    """Return a cryptographically random opaque refresh token string."""
-    return secrets.token_urlsafe(64)
-
-
-# ---------------------------------------------------------------------------
-# CSRF (double-submit cookie validation) via itsdangerous
-# ---------------------------------------------------------------------------
-
-
-def _serializer(settings: Settings) -> URLSafeTimedSerializer:
-    return URLSafeTimedSerializer(settings.CSRF_SECRET_KEY)
-
-
-def sign_csrf(data: str = "csrf") -> str:
-    """Sign a CSRF value to store in the cookie / double-submit form field."""
-    return _serializer(get_settings()).dumps(data)
-
-
-def verify_csrf(token: str, max_age: int | None = None) -> bool:
-    """Validate a signed CSRF token (time-limited)."""
-    settings = get_settings()
-    max_age = max_age or settings.CSRF_COOKIE_AGE
-    try:
-        _serializer(settings).loads(token, max_age=max_age)
-        return True
-    except BadSignature:
-        return False

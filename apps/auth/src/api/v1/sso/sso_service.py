@@ -5,7 +5,6 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.config import get_settings
 from src.core import oidc
 from src.core.roles import Roles
 from src.core.security import (
@@ -13,8 +12,62 @@ from src.core.security import (
     hash_refresh_token,
     decode_token,
 )
-from src.models import RefreshToken, Tenant, User
+from src.core.audit import log_audit_event
+from src.models import RefreshToken, SsoConfig, Tenant, User
 from src.models.workspace import Workspace
+
+
+async def get_sso_config(db: AsyncSession, tenant_id: str) -> SsoConfig | None:
+    """Retrieve the SSO configuration for a tenant."""
+    res = await db.execute(
+        select(SsoConfig).where(SsoConfig.tenant_id == tenant_id, SsoConfig.enabled.is_(True))
+    )
+    return res.scalars().first()
+
+
+async def save_sso_config(
+    db: AsyncSession,
+    *,
+    tenant_id: str,
+    provider: str = "google",
+    client_id: str,
+    client_secret: str,
+    discovery_url: str,
+    redirect_uri: str = "",
+    enabled: bool = True,
+) -> SsoConfig:
+    """Create or update a tenant's SSO configuration."""
+    existing = await get_sso_config(db, tenant_id)
+    if existing:
+        existing.provider = provider
+        existing.client_id = client_id
+        existing.client_secret = client_secret
+        existing.discovery_url = discovery_url
+        existing.redirect_uri = redirect_uri
+        existing.enabled = enabled
+        config = existing
+    else:
+        config = SsoConfig(
+            tenant_id=tenant_id,
+            provider=provider,
+            client_id=client_id,
+            client_secret=client_secret,
+            discovery_url=discovery_url,
+            redirect_uri=redirect_uri,
+            enabled=enabled,
+        )
+        db.add(config)
+
+    await log_audit_event(
+        db,
+        action="update_sso_config",
+        tenant_id=tenant_id,
+        resource="sso_config",
+        detail=f"Provider: {provider}",
+    )
+    await db.commit()
+    await db.refresh(config)
+    return config
 
 
 def _slugify(value: str) -> str:
@@ -26,12 +79,19 @@ def _slugify(value: str) -> str:
 
 async def initiate(
     session: httpx.AsyncClient,
+    db: AsyncSession | None = None,
+    tenant_id: str | None = None,
 ) -> tuple[str, str, str]:
-    """Return (authorization_url, csrf_state, code_verifier)."""
-    settings = get_settings()
+    """Return (authorization_url, csrf_state, code_verifier). Supports dynamic per-tenant OIDC."""
+    discovery_url = None
+    if db and tenant_id:
+        cfg = await get_sso_config(db, tenant_id)
+        if cfg and cfg.discovery_url:
+            discovery_url = cfg.discovery_url
+
     state = oidc.generate_state()
     verifier, challenge = oidc.pkce_pair()
-    discovery = await oidc.get_discovery(session)
+    discovery = await oidc.get_discovery(session, discovery_url=discovery_url)
     url = await oidc.build_authorization_url(
         session,
         state=state,
@@ -47,9 +107,16 @@ async def handle_callback(
     code: str,
     code_verifier: str,
     session: httpx.AsyncClient,
+    tenant_id: str | None = None,
 ) -> tuple[User, dict[str, str]]:
     """Exchange code, verify id_token, provision user, issue our JWTs."""
-    discovery = await oidc.get_discovery(session)
+    discovery_url = None
+    if tenant_id:
+        cfg = await get_sso_config(db, tenant_id)
+        if cfg and cfg.discovery_url:
+            discovery_url = cfg.discovery_url
+
+    discovery = await oidc.get_discovery(session, discovery_url=discovery_url)
     tokens = await oidc.exchange_code(
         session,
         code=code,
@@ -123,6 +190,9 @@ async def handle_callback(
             token_hash=hash_refresh_token(pair["refresh_token"]),
             expires_at=datetime.fromtimestamp(claims["exp"], tz=timezone.utc),
         )
+    )
+    await log_audit_event(
+        db, action="sso_login", user_id=user.id, tenant_id=user.tenant_id, resource="sso"
     )
     await db.commit()
     await db.refresh(user)

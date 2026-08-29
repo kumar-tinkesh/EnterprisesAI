@@ -34,7 +34,6 @@ services:
       DATABASE_URL: ${AUTH_DATABASE_URL:-sqlite+aiosqlite:////data/auth.db}
       BACKEND_CORS_ORIGINS: '["http://localhost:3000","http://127.0.0.1:3000"]'
       # Override secrets via .env at the repo root or your shell.
-      CSRF_SECRET_KEY: ${CSRF_SECRET_KEY:-change-me-in-production}
       SSO_PROVIDER: ${SSO_PROVIDER:-google}
       SSO_CLIENT_ID: ${SSO_CLIENT_ID}
       SSO_CLIENT_SECRET: ${SSO_CLIENT_SECRET}

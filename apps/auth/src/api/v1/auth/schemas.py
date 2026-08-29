@@ -1,6 +1,8 @@
 """Local auth schemas (unified register/login with role)."""
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from src.core.roles import Roles
@@ -56,3 +58,18 @@ class MeResponse(BaseModel):
     role: str
     tenant_id: str | None = None
     is_active: bool = True
+
+
+class AuditEventOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    user_id: str | None = None
+    tenant_id: str | None = None
+    action: str
+    resource: str
+    detail: str | None = None
+    ip_address: str | None = None
+    user_agent: str | None = None
+    created_at: datetime | None = None
+

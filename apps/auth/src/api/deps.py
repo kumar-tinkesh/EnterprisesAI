@@ -29,14 +29,6 @@ class CurrentUser(BaseModel):
     tenant_id: str | None = None
     is_active: bool = True
 
-    @property
-    def is_vendor(self) -> bool:
-        return self.role == Roles.VENDOR_ADMIN
-
-    @property
-    def is_tenant_admin(self) -> bool:
-        return self.role == Roles.TENANT_ADMIN
-
 
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
@@ -83,6 +75,14 @@ async def get_current_user(
     ).scalars().first()
     if row is None:
         raise HTTPException(status_code=401, detail="Account not found or deactivated")
+
+    if row.tenant_id:
+        from src.db.rls import set_tenant_context
+
+        await set_tenant_context(db, row.tenant_id)
+
+
+
     return CurrentUser(
         id=row.id,
         email=row.email,
@@ -91,6 +91,7 @@ async def get_current_user(
         tenant_id=row.tenant_id,
         is_active=row.is_active,
     )
+
 
 
 def require_roles(*allowed_roles: str) -> Callable:

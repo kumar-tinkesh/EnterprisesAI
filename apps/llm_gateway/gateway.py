@@ -12,7 +12,11 @@ It:
 
 from __future__ import annotations
 
+import copy
+import hashlib
+import json
 import logging
+import time
 from typing import AsyncIterator, Optional
 
 from apps.llm_gateway.config import GatewaySettings
@@ -24,7 +28,6 @@ from apps.llm_gateway.types import (
     CompletionRequest,
     CompletionResponse,
     EmbeddingResponse,
-    Provider,
     StreamChunk,
     ReasoningStreamParser,
     extract_think_block,
@@ -54,6 +57,8 @@ class LLMGateway:
     def __init__(self, settings: GatewaySettings) -> None:
         self._settings = settings
         self._clients: dict[str, BaseLLMClient] = {}
+        # In-memory TTL response cache: key -> (last_stored_ts, response).
+        self._cache: dict[str, tuple[float, CompletionResponse]] = {}
         self._init_clients()
 
     @classmethod
@@ -77,6 +82,13 @@ class LLMGateway:
         primary = provider or self._settings.default_provider
         providers_to_try = self._build_try_order(primary, fallback)
 
+        # Response cache (opt-in via GatewaySettings.enable_cache).
+        cache_key = self._cache_key(primary, request)
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            logger.info("complete → cache HIT (%s)", primary)
+            return cached
+
         last_error: Optional[LLMGatewayError] = None
         for name in providers_to_try:
             client = self._clients.get(name)
@@ -94,6 +106,7 @@ class LLMGateway:
                             if resp.reasoning
                             else think_reasoning
                         )
+                self._cache_set(cache_key, resp)
                 return resp
             except LLMGatewayError as exc:
                 last_error = exc
@@ -216,16 +229,6 @@ class LLMGateway:
     def default_provider(self) -> str:
         return self._settings.default_provider
 
-    def get_client(self, provider: str) -> BaseLLMClient:
-        """Get the raw client for a provider (for advanced usage)."""
-        client = self._clients.get(provider)
-        if client is None:
-            raise ProviderNotConfiguredError(
-                f"Provider '{provider}' is not configured.",
-                provider=provider,
-            )
-        return client
-
     # ── lifecycle ────────────────────────────────────────────────────────
 
     async def close(self) -> None:
@@ -238,6 +241,44 @@ class LLMGateway:
         self._clients.clear()
 
     # ── private ──────────────────────────────────────────────────────────
+
+    def _cache_key(self, provider: str, request: CompletionRequest) -> str:
+        """Build a deterministic cache key from the provider + request params."""
+        payload: dict[str, object] = {
+            "provider": provider,
+            "model": request.model,
+            "temperature": request.temperature,
+            "max_tokens": request.max_tokens,
+            "top_p": request.top_p,
+            "stop": request.stop,
+            "messages": [m.to_dict() for m in request.messages],
+            "tools": [t.to_dict() for t in (request.tools or [])],
+            "tool_choice": request.tool_choice,
+            "response_format": request.response_format,
+        }
+        digest = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, default=str).encode()
+        ).hexdigest()
+        return f"{provider}:{digest}"
+
+    def _cache_get(self, key: str) -> Optional[CompletionResponse]:
+        """Return a fresh cached copy, or None on miss / expiry (cache off-safe)."""
+        if not self._settings.enable_cache:
+            return None
+        entry = self._cache.get(key)
+        if entry is None:
+            return None
+        stored_at, resp = entry
+        if time.monotonic() - stored_at > self._settings.cache_ttl_seconds:
+            self._cache.pop(key, None)
+            return None
+        # Return a deep copy so callers can never mutate the cached object.
+        return copy.deepcopy(resp)
+
+    def _cache_set(self, key: str, resp: CompletionResponse) -> None:
+        if not self._settings.enable_cache:
+            return
+        self._cache[key] = (time.monotonic(), copy.deepcopy(resp))
 
     def _init_clients(self) -> None:
         """Lazily create only the clients whose API keys are present."""

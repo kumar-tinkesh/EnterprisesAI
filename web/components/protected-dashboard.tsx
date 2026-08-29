@@ -8,6 +8,13 @@ import { roleForDashboard } from "@/lib/validations";
 import { api } from "@/lib/api";
 import { Spinner } from "@/components/ui/spinner";
 
+/** Map a dashboard route segment to backend /dashboard/{segment}. */
+const DASHBOARD_SEGMENT: Record<string, "vendor" | "tenant" | "user" | "workspace"> = {
+  "/vendor": "vendor",
+  "/tenant": "tenant",
+  "/user": "user",
+};
+
 /**
  * Client-side route guard. Renders children only when the stored access
  * token's role matches the role required by the dashboard at ``path``.
@@ -29,6 +36,7 @@ export default function ProtectedDashboard({
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
   const [checked, setChecked] = useState(false);
+  const [serverDenied, setServerDenied] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -39,8 +47,21 @@ export default function ProtectedDashboard({
       }
       try {
         await api.me(accessToken);
+        // Confirm server-side that the token's role may access this dashboard.
+        const segment = DASHBOARD_SEGMENT[path];
+        if (segment) {
+          try {
+            await api.getDashboard(accessToken, segment);
+          } catch (err) {
+            if (err instanceof Error && "status" in err && (err as { status: number }).status === 403) {
+              if (isMounted) setServerDenied(true);
+              return;
+            }
+          }
+        }
       } catch {
-        // Token expired or invalid -> logout and redirect
+        // Token expired/invalid -> refresh already attempted by api.me/request;
+        // if still failing, logout and redirect.
         logout();
         router.replace("/auth");
         return;
@@ -51,12 +72,30 @@ export default function ProtectedDashboard({
     return () => {
       isMounted = false;
     };
-  }, [accessToken, user, logout, router]);
+  }, [accessToken, user, logout, router, path]);
 
-  if (!checked) {
+  if (!checked || serverDenied) {
     return (
       <Centered>
-        <Spinner className="h-8 w-8 text-zinc-500" />
+        {serverDenied ? (
+          <>
+            <h1 className="text-2xl font-semibold">Access denied</h1>
+            <p className="text-zinc-500">
+              Your role does not grant access to this dashboard.
+            </p>
+            <button
+              onClick={() => {
+                logout();
+                router.replace("/auth");
+              }}
+              className="mt-4 text-sm underline cursor-pointer"
+            >
+              Sign out
+            </button>
+          </>
+        ) : (
+          <Spinner className="h-8 w-8 text-zinc-500" />
+        )}
       </Centered>
     );
   }

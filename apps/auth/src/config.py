@@ -33,7 +33,6 @@ class Settings(BaseSettings):
     # --- Application -----------------------------------------------------
     APP_NAME: str = "EnterpriseAI Auth Service"
     ENV: str = "development"
-    DEBUG: bool = False
     SHOW_LOADED_ENV: bool = False
 
     # --- HTTP / CORS ------------------------------------------------------
@@ -64,11 +63,6 @@ class Settings(BaseSettings):
     )
     SSO_REDIRECT_URI: str = "http://localhost:8001/api/v1/sso/callback"
 
-    # --- Security / CSRF --------------------------------------------------
-    CSRF_SECRET_KEY: str = "change-me-in-production"
-    CSRF_COOKIE_NAME: str = "csrf_token"
-    CSRF_COOKIE_AGE: int = 60 * 60 * 3  # 3 hours
-
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
     @classmethod
     def _decode_cors(cls, v: Any) -> Any:
@@ -81,10 +75,6 @@ class Settings(BaseSettings):
         return v
 
     @property
-    def is_sqlite(self) -> bool:
-        return self.DATABASE_URL.startswith("sqlite")
-
-    @property
     def key_dir(self) -> Path:
         return BASE_DIR / ".keys"
 
@@ -92,7 +82,6 @@ class Settings(BaseSettings):
         return {
             "APP_NAME": self.APP_NAME,
             "ENV": self.ENV,
-            "DEBUG": self.DEBUG,
             "DATABASE_URL": self.DATABASE_URL,
             "API_V1_PREFIX": self.API_V1_PREFIX,
             "JWT_ALGORITHM": self.JWT_ALGORITHM,
