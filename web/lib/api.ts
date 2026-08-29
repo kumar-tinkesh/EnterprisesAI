@@ -192,25 +192,6 @@ export interface DashboardResponse {
   message: string;
 }
 
-export interface SsoConfig {
-  id: string;
-  tenant_id: string;
-  provider: string;
-  client_id: string;
-  discovery_url: string;
-  redirect_uri: string;
-  enabled: boolean;
-}
-
-export interface SsoConfigInput {
-  provider: string;
-  client_id: string;
-  client_secret: string;
-  discovery_url: string;
-  redirect_uri?: string;
-  enabled?: boolean;
-}
-
 export const api = {
   login: (body: { email: string; password: string; role?: string }) =>
     request<AuthPayload>("/auth/login", {
@@ -224,7 +205,7 @@ export const api = {
     }),
   me: (token: string) => request<MeResponse>("/auth/me", { method: "GET" }, token),
 
-  // SSO / Google Auth endpoints
+  // SSO / Google Auth endpoints for solo_user
   ssoInitiate: () =>
     request<SsoInitiateResponse>("/sso/initiate", { method: "GET" }),
   ssoCallback: (code: string, state: string, codeVerifier: string) =>
@@ -283,13 +264,4 @@ export const api = {
   // Role-scoped dashboard endpoint (server-side access validation)
   getDashboard: (token: string, dashboard: "vendor" | "tenant" | "user" | "workspace") =>
     request<DashboardResponse>(`/dashboard/${dashboard}`, { method: "GET" }, token),
-
-  // Tenant SSO configuration
-  getSsoConfig: (token: string) =>
-    request<SsoConfig | null>("/sso/config", { method: "GET" }, token),
-  updateSsoConfig: (token: string, body: SsoConfigInput) =>
-    request<SsoConfig>("/sso/config", {
-      method: "POST",
-      body: JSON.stringify(body),
-    }, token),
 };

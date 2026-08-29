@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from sqlalchemy import Boolean, ForeignKey, String, Text
+from sqlalchemy import Boolean, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.db.base import Base, TimestampMixin
@@ -53,25 +53,3 @@ class Tenant(Base, TimestampMixin):
     workspaces: Mapped[list["Workspace"]] = relationship(
         back_populates="tenant", cascade="all, delete-orphan"
     )
-    sso_configs: Mapped[list["SsoConfig"]] = relationship(
-        back_populates="tenant", cascade="all, delete-orphan"
-    )
-
-
-class SsoConfig(Base, TimestampMixin):
-    """Per-tenant OIDC / SSO provider configuration."""
-
-    __tablename__ = "sso_configs"
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
-    tenant_id: Mapped[str] = mapped_column(
-        ForeignKey("tenants.id", ondelete="CASCADE"), index=True
-    )
-    provider: Mapped[str] = mapped_column(String(64), default="google")
-    client_id: Mapped[str] = mapped_column(String(512), default="")
-    client_secret: Mapped[str] = mapped_column(String(512), default="")
-    discovery_url: Mapped[str] = mapped_column(Text, default="")
-    redirect_uri: Mapped[str] = mapped_column(String(512), default="")
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-
-    tenant: Mapped[Tenant] = relationship(back_populates="sso_configs")

@@ -396,8 +396,8 @@ async def test_vendor_stats_and_tenant_crud(client):
     assert del_res.status_code == 204
 
 
-async def test_audit_logs_and_tenant_sso_config(client):
-    """Test audit log creation upon login/signup and per-tenant SSO config management."""
+async def test_audit_logs(client):
+    """Test audit log creation upon login/signup."""
     # 1. Signup solo user (generates audit event)
     signup_res = await _signup(client, email="audit_user@example.com", role="solo_user")
     assert signup_res.status_code == 201
@@ -412,25 +412,4 @@ async def test_audit_logs_and_tenant_sso_config(client):
     actions = [l["action"] for l in logs]
     assert "signup" in actions
     assert "login" in actions
-
-    # 3. Create SSO config for tenant
-    sso_post = await client.post(
-        "/api/v1/sso/config",
-        headers=headers,
-        json={
-            "provider": "okta",
-            "client_id": "okta-client-123",
-            "client_secret": "okta-secret-456",
-            "discovery_url": "https://okta.example.com/.well-known/openid-configuration",
-            "enabled": True,
-        },
-    )
-    assert sso_post.status_code == 200, sso_post.text
-    assert sso_post.json()["provider"] == "okta"
-    assert sso_post.json()["client_id"] == "okta-client-123"
-
-    # 4. Fetch SSO config for tenant
-    sso_get = await client.get("/api/v1/sso/config", headers=headers)
-    assert sso_get.status_code == 200
-    assert sso_get.json()["provider"] == "okta"
 

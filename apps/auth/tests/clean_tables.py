@@ -36,7 +36,6 @@ TABLE_ORDER = [
     "refresh_tokens",
     "workspace_members",
     "workspaces",
-    "sso_configs",
     "users",
     "tenants",
     "vendor_users",
