@@ -12,6 +12,10 @@ import { useAuthStore } from "@/stores/auth-store";
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8001/api/v1";
 
+// Base URL of the EnterpriseAI Backend (Vendor Resources / AI Compiler).
+const BACKEND_API_URL =
+  process.env.NEXT_PUBLIC_BACKEND_API_URL ?? "http://localhost:8002/api/v1";
+
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -52,6 +56,7 @@ async function request<T>(
   path: string,
   init: RequestInit = {},
   token?: string,
+  base: string = API_URL,
 ): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -59,14 +64,14 @@ async function request<T>(
   };
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  let res = await fetch(`${API_URL}${path}`, { ...init, headers });
+  let res = await fetch(`${base}${path}`, { ...init, headers });
 
   // On an expired/revoked access token, try a silent refresh once, then retry.
   if (res.status === 401 && token) {
     const fresh = await tryRefreshToken();
     if (fresh) {
       headers.Authorization = `Bearer ${fresh}`;
-      res = await fetch(`${API_URL}${path}`, { ...init, headers });
+      res = await fetch(`${base}${path}`, { ...init, headers });
     }
   }
 
@@ -264,4 +269,145 @@ export const api = {
   // Role-scoped dashboard endpoint (server-side access validation)
   getDashboard: (token: string, dashboard: "vendor" | "tenant" | "user" | "workspace") =>
     request<DashboardResponse>(`/dashboard/${dashboard}`, { method: "GET" }, token),
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Vendor Resources backend (apps/backend · port 8002 · /api/v1/vendor/resources)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const VR = "/vendor/resources";
+
+export interface VendorTool {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  method: string;
+  endpoint_url: string | null;
+  parameters_schema: Record<string, unknown>;
+  is_global: boolean;
+  vault_secret_ref: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateVendorToolBody {
+  name: string;
+  description?: string;
+  category?: string;
+  method?: string;
+  endpoint_url?: string | null;
+  parameters_schema?: Record<string, unknown>;
+  is_global?: boolean;
+  vault_secret_ref?: string | null;
+}
+
+export interface CatalogEntry {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  method: string;
+  endpoint_url: string | null;
+  parameters_schema: Record<string, unknown>;
+}
+
+export interface CatalogResponse {
+  tools: CatalogEntry[];
+  count: number;
+}
+
+export interface GrantBody {
+  tenant_id: string;
+  resource_type?: "vendor_tool" | "mcp_server" | "data_source";
+  resource_id: string;
+}
+
+export interface Grant {
+  id: string;
+  tenant_id: string;
+  resource_type: string;
+  resource_id: string;
+  created_at: string;
+}
+
+export interface AgentNode {
+  id: string;
+  tool_id?: string | null;
+  node_type?: string;
+  args?: Record<string, unknown>;
+  description?: string;
+  unconfigured?: boolean;
+  [k: string]: unknown;
+}
+
+export interface AgentEdge {
+  source: string;
+  target: string;
+  condition?: string | null;
+  [k: string]: unknown;
+}
+
+export interface CompiledAgentSpec {
+  agent_name: string;
+  description?: string;
+  nodes: AgentNode[];
+  edges: AgentEdge[];
+}
+
+export interface CompileAgentBody {
+  query: string;
+  top_k?: number;
+}
+
+export interface RunAgentResponse {
+  spec: CompiledAgentSpec;
+  results: Record<string, unknown>;
+  trace: Array<{ node: string; node_type?: string; result: unknown }>;
+}
+
+/** Client for the Vendor Resources / AI Compiler backend (port 8002). */
+export const vendorApi = {
+  // Tools (vendor_admin)
+  listTools: (token: string) =>
+    request<VendorTool[]>(`${VR}/tools`, { method: "GET" }, token, BACKEND_API_URL),
+  createTool: (token: string, body: CreateVendorToolBody) =>
+    request<VendorTool>(`${VR}/tools`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }, token, BACKEND_API_URL),
+  deleteTool: (token: string, toolId: string) =>
+    request<void>(`${VR}/${toolId}`, { method: "DELETE" }, token, BACKEND_API_URL),
+  embedTool: (token: string, toolId: string) =>
+    request<void>(`${VR}/tools/${toolId}/embed`, { method: "POST" }, token, BACKEND_API_URL),
+
+  // Grants (vendor_admin)
+  grantResource: (token: string, body: GrantBody) =>
+    request<Grant>(`${VR}/grants`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }, token, BACKEND_API_URL),
+
+  // Catalog (any authenticated user; ?q= → semantic ranking)
+  getCatalog: (token: string, params?: { q?: string; top_k?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.q) qs.set("q", params.q);
+    if (params?.top_k) qs.set("top_k", String(params.top_k));
+    const query = qs.toString();
+    return request<CatalogResponse>(`${VR}/catalog${query ? `?${query}` : ""}`, {
+      method: "GET",
+    }, token, BACKEND_API_URL);
+  },
+
+  // AI Compiler (any authenticated user)
+  compileAgent: (token: string, body: CompileAgentBody) =>
+    request<CompiledAgentSpec>(`${VR}/agents/compile`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }, token, BACKEND_API_URL),
+  runAgent: (token: string, body: CompileAgentBody) =>
+    request<RunAgentResponse>(`${VR}/agents/run`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }, token, BACKEND_API_URL),
 };

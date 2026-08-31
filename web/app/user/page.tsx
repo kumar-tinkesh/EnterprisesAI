@@ -8,6 +8,7 @@ import {
   Zap,
   ArrowRight,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 
 import ProtectedDashboard from "@/components/protected-dashboard";
 import { useAuthStore } from "@/stores/auth-store";
@@ -16,28 +17,29 @@ const QUICK_ACTIONS = [
   {
     icon: Bot,
     title: "Agent Builder",
-    desc: "Create and configure AI agents with custom prompts, tools, and knowledge bases.",
+    desc: "Describe an agent in natural language — the AI Compiler picks your authorized tools and LangGraph runs it.",
     color: "#6366f1",
     bg: "#eef2ff",
+    href: "/user/agents",
   },
   {
     icon: Brain,
     title: "Knowledge Base",
-    desc: "Upload documents, connect data sources, and build RAG pipelines.",
+    desc: "Upload documents, connect data sources, and build RAG pipelines. (coming soon)",
     color: "#8b5cf6",
     bg: "#f5f3ff",
   },
   {
     icon: FolderKanban,
     title: "Projects",
-    desc: "Organise agents into projects with shared context and workflows.",
+    desc: "Organise agents into projects with shared context and workflows. (coming soon)",
     color: "#0ea5e9",
     bg: "#f0f9ff",
   },
   {
     icon: Zap,
     title: "Executions",
-    desc: "Monitor agent runs, view logs, and inspect tool-call traces.",
+    desc: "Monitor agent runs, view logs, and inspect tool-call traces. (coming soon)",
     color: "#f59e0b",
     bg: "#fffbeb",
   },
@@ -46,6 +48,7 @@ const QUICK_ACTIONS = [
 export default function UserDashboard() {
   const user = useAuthStore((s) => s.user);
   const displayName = user?.full_name || "there";
+  const router = useRouter();
 
   return (
     <ProtectedDashboard
@@ -77,6 +80,7 @@ export default function UserDashboard() {
         {QUICK_ACTIONS.map((a) => (
           <button
             key={a.title}
+            onClick={() => a.href && router.push(a.href)}
             className="group rounded-xl border border-zinc-200 bg-white p-5 text-left transition-all hover:shadow-md hover:-translate-y-0.5"
             style={{ borderColor: "transparent" }}
             onMouseEnter={(e) =>
