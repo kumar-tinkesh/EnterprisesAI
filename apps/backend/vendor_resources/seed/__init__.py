@@ -1,0 +1,1 @@
+"""Default system seed resources."""

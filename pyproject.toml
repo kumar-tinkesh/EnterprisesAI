@@ -18,6 +18,8 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0.52",
     "uvicorn[standard]>=0.52.4",
     "openai>=1.82.0",
+    "litellm>=1.98.0",
+    "langgraph>=1.2.11",
 ]
 
 [dependency-groups]
@@ -31,8 +33,8 @@ package = false
 
 [tool.pytest.ini_options]
 minversion = "7.0"
-testpaths = ["apps/auth/tests", "apps/llm_gateway/tests"]
+testpaths = ["apps/auth/tests", "apps/backend/vendor_resources/tests", "apps/llm_gateway/tests"]
 python_files = ["test_*.py"]
-pythonpath = [".", "apps/auth", "apps/llm_gateway"]
+pythonpath = [".", "apps/auth", "apps/backend", "apps/llm_gateway"]
 asyncio_mode = "auto"
 filterwarnings = ["ignore::DeprecationWarning"]

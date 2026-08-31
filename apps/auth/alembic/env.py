@@ -12,6 +12,14 @@ from src.config import get_settings
 from src.db.base import Base
 from src.models import *  # noqa: F401,F403  (register all tables)
 
+# Register the Vendor Resources tables (apps/backend) on the same Base.metadata
+# so autogenerate sees them. Guarded so the auth Alembic env still works if the
+# backend package is absent (e.g. running auth in isolation).
+try:  # pragma: no cover - import-time registration
+    import vendor_resources.models  # noqa: F401
+except ImportError:
+    pass
+
 config = context.config
 
 if config.config_file_name is not None:

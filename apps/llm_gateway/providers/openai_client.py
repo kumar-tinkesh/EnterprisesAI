@@ -1,228 +1,27 @@
 """
 LLM Gateway — OpenAI provider client.
 
-Uses the official ``openai`` async SDK under the hood.
-Normalises every response into the shared gateway types.
+A thin subclass of :class:`LiteLLMClient` that routes to OpenAI through
+LiteLLM using the ``openai/`` model-string prefix. All HTTP work, error
+mapping and response normalisation live in :class:`LiteLLMClient`; this class
+only declares the provider identity, defaults and the model prefix.
+
+The class name (``OpenAIClient``) is kept identical so the gateway factory and
+existing tests that patch ``apps.llm_gateway.gateway.OpenAIClient`` keep
+working unchanged.
 """
 
 from __future__ import annotations
 
-import logging
-from typing import AsyncIterator, Optional
-
-import openai
-from openai import AsyncAzureOpenAI, AsyncOpenAI
-
-from apps.llm_gateway.config import ProviderConfig
-from apps.llm_gateway.exceptions import (
-    AuthenticationError,
-    ContentFilterError,
-    ModelNotFoundError,
-    ProviderAPIError,
-    ProviderNotConfiguredError,
-    RateLimitError,
-    TokenLimitExceededError,
-)
-from apps.llm_gateway.types import (
-    CompletionRequest,
-    CompletionResponse,
-    EmbeddingResponse,
-    StreamChunk,
-    TokenUsage,
-    ToolCall,
-)
-from apps.llm_gateway.providers.base import BaseLLMClient
-
-logger = logging.getLogger("llm_gateway.openai")
+from apps.llm_gateway.providers.litellm_client import LiteLLMClient
 
 
-class OpenAIClient(BaseLLMClient):
-    """Async client for OpenAI and Azure OpenAI endpoints."""
+class OpenAIClient(LiteLLMClient):
+    """Async client for OpenAI (and OpenAI-compatible) endpoints via LiteLLM."""
 
     PROVIDER_NAME = "openai"
-
-    def __init__(self, config: ProviderConfig) -> None:
-        super().__init__(config)
-        if not config.is_configured:
-            raise ProviderNotConfiguredError(
-                "OPENAI_API_KEY is not set.", provider=self.PROVIDER_NAME
-            )
-
-        if config.base_url and "azure" in config.base_url.lower():
-            azure_endpoint = config.base_url.split("/openai/")[0]
-            self._client = AsyncAzureOpenAI(
-                azure_endpoint=azure_endpoint,
-                api_key=config.api_key,
-                api_version=config.api_version or "2025-04-14",
-                max_retries=config.max_retries,
-                timeout=float(config.timeout_seconds),
-            )
-        else:
-            self._client = AsyncOpenAI(
-                api_key=config.api_key,
-                organization=config.organization,
-                base_url=config.base_url,
-                max_retries=config.max_retries,
-                timeout=float(config.timeout_seconds),
-            )
-
-    # ── chat completion ──────────────────────────────────────────────────
-
-    async def complete(self, request: CompletionRequest) -> CompletionResponse:
-        model = self._resolve_model(request.model)
-        kwargs = self._build_kwargs(request, model)
-        try:
-            resp = await self._client.chat.completions.create(**kwargs)
-        except openai.APIError as exc:
-            raise self._map_error(exc, model) from exc
-
-        choice = resp.choices[0]
-        tool_calls = self._extract_tool_calls(choice)
-        usage = self._extract_usage(resp)
-
-        reasoning = getattr(choice.message, "reasoning_content", None) or getattr(
-            choice.message, "reasoning", None
-        )
-
-        return CompletionResponse(
-            content=choice.message.content,
-            reasoning=reasoning,
-            tool_calls=tool_calls,
-            usage=usage,
-            model=resp.model,
-            provider=self.PROVIDER_NAME,
-            finish_reason=choice.finish_reason,
-            raw=resp,
-        )
-
-    # ── streaming ────────────────────────────────────────────────────────
-
-    async def stream(self, request: CompletionRequest) -> AsyncIterator[StreamChunk]:
-        model = self._resolve_model(request.model)
-        kwargs = self._build_kwargs(request, model)
-        kwargs["stream"] = True
-        try:
-            async_stream = await self._client.chat.completions.create(**kwargs)
-        except openai.APIError as exc:
-            raise self._map_error(exc, model) from exc
-
-        async for chunk in async_stream:
-            if not chunk.choices:
-                continue
-            delta = chunk.choices[0].delta
-            tc: list[ToolCall] = []
-            if delta.tool_calls:
-                for t in delta.tool_calls:
-                    if t.function:
-                        tc.append(
-                            ToolCall(
-                                id=t.id or "",
-                                name=t.function.name or "",
-                                arguments=t.function.arguments or "",
-                            )
-                        )
-            yield StreamChunk(
-                content=delta.content or "",
-                finish_reason=chunk.choices[0].finish_reason,
-                tool_calls=tc,
-            )
-
-    # ── embeddings ───────────────────────────────────────────────────────
-
-    async def embed(
-        self,
-        texts: list[str],
-        *,
-        model: Optional[str] = None,
-    ) -> EmbeddingResponse:
-        model = model or self._config.default_embedding_model or "text-embedding-3-small"
-        try:
-            resp = await self._client.embeddings.create(input=texts, model=model)
-        except openai.APIError as exc:
-            raise self._map_error(exc, model) from exc
-
-        vectors = [item.embedding for item in resp.data]
-        return EmbeddingResponse(
-            embeddings=vectors,
-            model=resp.model,
-            provider=self.PROVIDER_NAME,
-            usage=TokenUsage(
-                prompt_tokens=resp.usage.prompt_tokens,
-                total_tokens=resp.usage.total_tokens,
-            ),
-        )
-
-    # ── model listing ────────────────────────────────────────────────────
-
-    async def list_models(self) -> list[str]:
-        try:
-            result = await self._client.models.list()
-            return sorted([m.id for m in result.data])
-        except openai.APIError as exc:
-            raise self._map_error(exc, "") from exc
-
-    # ── lifecycle ────────────────────────────────────────────────────────
-
-    async def close(self) -> None:
-        await self._client.close()
-
-    # ── private helpers ──────────────────────────────────────────────────
-
-    def _build_kwargs(
-        self, request: CompletionRequest, model: str
-    ) -> dict:
-        kwargs: dict = {
-            "model": model,
-            "messages": [m.to_dict() for m in request.messages],
-            "temperature": request.temperature,
-            "top_p": request.top_p,
-        }
-        if request.max_tokens is not None:
-            kwargs["max_tokens"] = request.max_tokens
-        if request.stop:
-            kwargs["stop"] = request.stop
-        if request.tools:
-            kwargs["tools"] = [t.to_dict() for t in request.tools]
-        if request.tool_choice is not None:
-            kwargs["tool_choice"] = request.tool_choice
-        if request.response_format:
-            kwargs["response_format"] = request.response_format
-        return kwargs
-
-    @staticmethod
-    def _extract_tool_calls(choice) -> list[ToolCall]:
-        if not choice.message.tool_calls:
-            return []
-        return [
-            ToolCall(
-                id=tc.id,
-                name=tc.function.name,
-                arguments=tc.function.arguments,
-            )
-            for tc in choice.message.tool_calls
-        ]
-
-    @staticmethod
-    def _extract_usage(resp) -> TokenUsage:
-        if not resp.usage:
-            return TokenUsage()
-        return TokenUsage(
-            prompt_tokens=resp.usage.prompt_tokens,
-            completion_tokens=resp.usage.completion_tokens,
-            total_tokens=resp.usage.total_tokens,
-        )
-
-    def _map_error(self, exc: openai.APIError, model: str) -> ProviderAPIError:
-        status = getattr(exc, "status_code", None)
-        base = dict(provider=self.PROVIDER_NAME, model=model, status_code=status)
-        if status == 401 or status == 403:
-            return AuthenticationError(str(exc), **base)
-        if status == 429:
-            return RateLimitError(str(exc), **base)
-        if status == 404:
-            return ModelNotFoundError(str(exc), **base)
-        if "context_length" in str(exc).lower():
-            return TokenLimitExceededError(str(exc), **base)
-        if "content_filter" in str(exc).lower():
-            return ContentFilterError(str(exc), **base)
-        return ProviderAPIError(str(exc), **base)
+    _PREFIX = "openai/"
+    _DEFAULT_EMBED_MODEL = "text-embedding-3-small"
+    EMBEDDINGS_SUPPORTED = True
+    # OpenAI base_url may be a custom proxy — forward it when set.
+    _PASS_API_BASE = True

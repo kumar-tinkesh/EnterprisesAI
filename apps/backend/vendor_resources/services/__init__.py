@@ -1,0 +1,1 @@
+"""Vendor resource business-logic services."""
