@@ -277,49 +277,47 @@ export const api = {
 
 const VR = "/vendor/resources";
 
-export interface VendorTool {
+export interface VendorMCPServer {
   id: string;
   name: string;
   description: string;
-  category: string;
-  method: string;
-  endpoint_url: string | null;
-  parameters_schema: Record<string, unknown>;
+  transport: string;
+  server_url: string;
+  bound_tools: string[];
   is_global: boolean;
-  vault_secret_ref: string | null;
   created_at: string;
   updated_at: string;
 }
 
-export interface CreateVendorToolBody {
+export interface ConnectMCPServerBody {
   name: string;
   description?: string;
-  category?: string;
-  method?: string;
-  endpoint_url?: string | null;
-  parameters_schema?: Record<string, unknown>;
+  server_url: string;
   is_global?: boolean;
-  vault_secret_ref?: string | null;
 }
 
-export interface CatalogEntry {
+export interface ConnectMCPServerResponse {
+  transport: string;
+  bound_tools: string[];
+}
+
+export interface MCPServerEntry {
   id: string;
   name: string;
   description: string;
-  category: string;
-  method: string;
-  endpoint_url: string | null;
-  parameters_schema: Record<string, unknown>;
+  transport: string;
+  server_url: string;
+  bound_tools: string[];
 }
 
 export interface CatalogResponse {
-  tools: CatalogEntry[];
+  servers: MCPServerEntry[];
   count: number;
 }
 
 export interface GrantBody {
   tenant_id: string;
-  resource_type?: "vendor_tool" | "mcp_server" | "data_source";
+  resource_type?: "mcp" | "datasource";
   resource_id: string;
 }
 
@@ -333,7 +331,7 @@ export interface Grant {
 
 export interface AgentNode {
   id: string;
-  tool_id?: string | null;
+  server_id?: string | null;
   node_type?: string;
   args?: Record<string, unknown>;
   description?: string;
@@ -368,18 +366,23 @@ export interface RunAgentResponse {
 
 /** Client for the Vendor Resources / AI Compiler backend (port 8002). */
 export const vendorApi = {
-  // Tools (vendor_admin)
-  listTools: (token: string) =>
-    request<VendorTool[]>(`${VR}/tools`, { method: "GET" }, token, BACKEND_API_URL),
-  createTool: (token: string, body: CreateVendorToolBody) =>
-    request<VendorTool>(`${VR}/tools`, {
+  // MCP servers (vendor_admin)
+  listMCPServers: (token: string) =>
+    request<VendorMCPServer[]>(`${VR}/mcp`, { method: "GET" }, token, BACKEND_API_URL),
+  createMCPServer: (token: string, body: ConnectMCPServerBody) =>
+    request<VendorMCPServer>(`${VR}/mcp`, {
       method: "POST",
       body: JSON.stringify(body),
     }, token, BACKEND_API_URL),
-  deleteTool: (token: string, toolId: string) =>
-    request<void>(`${VR}/${toolId}`, { method: "DELETE" }, token, BACKEND_API_URL),
-  embedTool: (token: string, toolId: string) =>
-    request<void>(`${VR}/tools/${toolId}/embed`, { method: "POST" }, token, BACKEND_API_URL),
+  deleteMCPServer: (token: string, serverId: string) =>
+    request<void>(`${VR}/${serverId}`, { method: "DELETE" }, token, BACKEND_API_URL),
+  embedMCPServer: (token: string, serverId: string) =>
+    request<void>(`${VR}/mcp/${serverId}/embed`, { method: "POST" }, token, BACKEND_API_URL),
+  connectMCPServer: (token: string, serverId: string, credentials?: Record<string, string> | null) =>
+    request<ConnectMCPServerResponse>(`${VR}/mcp/${serverId}/connect`, {
+      method: "POST",
+      body: JSON.stringify(credentials ? { credentials } : {}),
+    }, token, BACKEND_API_URL),
 
   // Grants (vendor_admin)
   grantResource: (token: string, body: GrantBody) =>

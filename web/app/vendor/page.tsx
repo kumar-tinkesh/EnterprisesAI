@@ -16,7 +16,7 @@ import {
   EyeOff,
   User,
   ShieldCheck,
-  Wrench,
+  Server,
 } from "lucide-react";
 
 import ProtectedDashboard from "@/components/protected-dashboard";
@@ -96,13 +96,13 @@ export default function VendorDashboard() {
       title="Vendor Admin Dashboard"
       description="Platform-level administration & tenant management for EnterpriseAI."
     >
-      {/* Vendor Tools shortcut */}
+      {/* MCP Servers shortcut */}
       <div className="mt-6 flex justify-end">
         <a
           href="/vendor/tools"
           className="inline-flex items-center gap-1.5 rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700"
         >
-          <Wrench className="h-4 w-4" /> Manage Vendor Tools
+          <Server className="h-4 w-4" /> Manage MCP Servers
         </a>
       </div>
 

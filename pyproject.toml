@@ -20,12 +20,14 @@ dependencies = [
     "openai>=1.82.0",
     "litellm>=1.98.0",
     "langgraph>=1.2.11",
+    "mcp>=2.1.1",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    "rich>=15.0.0",
 ]
 
 [tool.uv]

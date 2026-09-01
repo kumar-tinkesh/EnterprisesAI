@@ -1,4 +1,4 @@
-"""FastAPI REST endpoints for the Vendor Resources subsystem.
+"""FastAPI REST endpoints for the Vendor Resources subsystem (MCP only).
 
 All routes reuse the Auth service's auth/RBAC dependencies via absolute imports
 (``src.api.deps``, ``src.core.roles``, ``src.db.session``) — no duplicate auth
@@ -6,11 +6,11 @@ code. The router is mounted by ``apps.backend.main`` under
 ``/api/v1/vendor/resources``.
 
 Routes (Phase 1):
-    POST   /tools        vendor_admin   register a vendor tool
-    GET    /tools        vendor_admin   list all tools
-    GET    /catalog      any user       access-filtered authorised catalog
-    POST   /grants       vendor_admin   grant a resource to a tenant
-    DELETE /{id}         vendor_admin   delete a tool (cascades grants)
+    POST   /mcp        vendor_admin  register an MCP server
+    GET    /mcp        vendor_admin  list all MCP servers
+    GET    /catalog    any user      access-filtered authorised catalog
+    POST   /grants     vendor_admin  grant a resource to a tenant
+    DELETE /{id}       vendor_admin  delete an MCP server (cascades grants)
 """
 from __future__ import annotations
 
@@ -26,27 +26,28 @@ from src.db.session import get_db
 from vendor_resources.schemas import (
     CatalogEntry,
     CatalogResponse,
-    CompileAgentRequest,
-    CompiledAgentSpec,
-    CreateVendorToolRequest,
+    ConnectMCPServerRequest,
+    ConnectCredentialsRequest,
+    ConnectMCPServerResponse,
     GrantResponse,
     GrantTenantResourceRequest,
-    RunAgentRequest,
-    RunAgentResponse,
-    VendorToolResponse,
+    McpDetectRequest,
+    McpDetectResponse,
+    MCPServerResponse,
 )
 from vendor_resources.services.catalog_engine import (
     get_authorized_vendor_catalog,
     get_authorized_vendor_catalog_semantic,
 )
-from vendor_resources.services.compiler import compile_agent
-from vendor_resources.services.executor import execute_spec
-from vendor_resources.services.tool_service import (
-    create_tool,
-    delete_tool,
-    embed_tool,
+from vendor_resources.services.mcp_auth import McpAuthError
+from vendor_resources.services.mcp_detect import McpDetectError, detect_mcp_server
+from vendor_resources.services.mcp_service import (
+    connect_registered_server,
+    create_mcp_server,
+    delete_mcp_server,
+    get_mcp_server,
     grant_resource,
-    list_tools,
+    list_mcp_servers,
 )
 
 logger = logging.getLogger("vendor_resources.router")
@@ -56,55 +57,115 @@ router = APIRouter()
 _admin = Depends(require_roles(Roles.VENDOR_ADMIN))
 
 
-# ── Vendor Tool management (admin) ───────────────────────────────────────────
+# ── MCP server management (admin) ────────────────────────────
 
 
 @router.post(
-    "/tools",
-    response_model=VendorToolResponse,
+    "/mcp",
+    response_model=MCPServerResponse,
     status_code=status.HTTP_201_CREATED,
 )
-async def post_create_tool(
-    payload: CreateVendorToolRequest,
+async def post_create_mcp_server(
+    payload: ConnectMCPServerRequest,
     user: CurrentUser = _admin,
     db: AsyncSession = Depends(get_db),
 ):
-    tool = await create_tool(db, data=payload, actor_id=user.id)
+    server = await create_mcp_server(db, data=payload, actor_id=user.id)
     await db.commit()
-    await db.refresh(tool)
-    return tool
+    await db.refresh(server)
+    return server
 
 
-@router.get("/tools", response_model=list[VendorToolResponse])
-async def get_list_tools(
+@router.get("/mcp", response_model=list[MCPServerResponse])
+async def get_list_mcp_servers(
     _user: CurrentUser = _admin,
     db: AsyncSession = Depends(get_db),
 ):
-    return await list_tools(db)
+    return await list_mcp_servers(db)
 
 
-@router.post("/tools/{tool_id}/embed", status_code=status.HTTP_204_NO_CONTENT)
-async def embed_vendor_tool(
-    tool_id: str,
+@router.post("/mcp/{server_id}/embed", status_code=status.HTTP_204_NO_CONTENT)
+async def embed_mcp_server(
+    server_id: str,
     user: CurrentUser = _admin,
     db: AsyncSession = Depends(get_db),
 ):
-    """(Re)compute a tool's semantic embedding (admin).
-
-    Used to embed pre-existing tools (e.g. the seeded defaults) or to refresh
-    after changing the embedding model.
-    """
-    found = await embed_tool(db, tool_id=tool_id, actor_id=user.id)
-    if not found:
+    """(Re)compute a server's semantic embedding (admin)."""
+    server = await get_mcp_server(db, server_id=server_id)
+    if server is None:
         await db.rollback()
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Vendor tool not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found"
         )
     await db.commit()
     return None
 
 
-# ── Catalog (any authenticated user) ─────────────────────────────────────────
+@router.post("/mcp/detect", response_model=McpDetectResponse)
+async def detect_mcp_server_endpoint(
+    payload: McpDetectRequest,
+    _user: CurrentUser = _admin,
+):
+    """Natively probe any MCP URL/command and report which credential type it
+    wants (none / api_key / bearer / basic / oauth2) before connecting.
+
+    For http(s) URLs the backend sends an unauthenticated MCP ``initialize``
+    probe, parses ``WWW-Authenticate`` challenges, checks the OAuth
+    well-known metadata endpoints, and falls back to known-provider URL
+    hints. Non-URL input is classified as a stdio command.
+    """
+    try:
+        result = await detect_mcp_server(payload.server_url)
+    except McpDetectError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+    return result
+
+
+@router.post("/mcp/{server_id}/connect", response_model=ConnectMCPServerResponse)
+async def connect_mcp_server_endpoint(
+    server_id: str,
+    payload: ConnectCredentialsRequest | None = None,
+    user: CurrentUser = _admin,
+    db: AsyncSession = Depends(get_db),
+):
+    """Test connection and return discovered transport + tools.
+
+    Auth is resolved natively: stored encrypted credentials (vendor-level or
+    per-tenant) are merged with any credentials supplied in the request, then
+    ``mcp_auth`` builds the headers the server's detected auth type calls for
+    — including native OAuth2 token acquisition/refresh. Raw header maps are
+    still accepted for backward compatibility.
+    """
+    server = await get_mcp_server(db, server_id=server_id)
+    if server is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found"
+        )
+    try:
+        creds = payload.credentials if payload is not None else None
+        result = await connect_registered_server(
+            db, server=server, request_credentials=creds
+        )
+        await db.commit()  # persist any rotated OAuth tokens / dynamic registrations
+    except McpAuthError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Credential resolution failed: {exc}",
+        ) from exc
+    except Exception as exc:
+        await db.rollback()
+        logger.exception("Failed to connect MCP server %s", server_id)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Connection failed: {exc}",
+        ) from exc
+    return ConnectMCPServerResponse(**result)
+
+
+# ── Catalog (any authenticated user) ─────────────────────────────────
 
 
 @router.get("/catalog", response_model=CatalogResponse)
@@ -114,23 +175,23 @@ async def get_catalog(
     user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Access-filtered catalog. With ``q``, returns semantic-ranked top-K tools."""
+    """Access-filtered catalog. With ``q``, returns semantic-ranked top-K servers."""
     if top_k < 1:
         top_k = 1
     if top_k > 50:
         top_k = 50
 
     if q and q.strip():
-        tools = await get_authorized_vendor_catalog_semantic(
+        servers = await get_authorized_vendor_catalog_semantic(
             db, user=user, query=q.strip(), top_k=top_k
         )
     else:
-        tools = await get_authorized_vendor_catalog(db, user=user)
-    entries = [CatalogEntry.model_validate(t) for t in tools]
-    return CatalogResponse(tools=entries, count=len(entries))
+        servers = await get_authorized_vendor_catalog(db, user=user)
+    entries = [CatalogEntry.model_validate(s) for s in servers]
+    return CatalogResponse(servers=entries, count=len(entries))
 
 
-# ── Tenant grants (admin) ────────────────────────────────────────────────────
+# ── Tenant grants (admin) ────────────────────────────────────
 
 
 @router.post("/grants", response_model=GrantResponse)
@@ -157,50 +218,20 @@ async def post_grant_resource(
     return grant
 
 
-# ── AI Compiler (any authenticated user; access-filtered inside compile) ─────
+# ── Delete / revoke (admin) ──────────────────────────────────
 
 
-@router.post("/agents/compile", response_model=CompiledAgentSpec)
-async def compile_agent_endpoint(
-    payload: CompileAgentRequest,
-    user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Compile a natural-language request into a validated agent DAG spec."""
-    spec = await compile_agent(db, user=user, query=payload.query, top_k=payload.top_k)
-    return spec
-
-
-@router.post("/agents/run", response_model=RunAgentResponse)
-async def run_agent_endpoint(
-    payload: RunAgentRequest,
-    user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Compile and execute a natural-language request via LangGraph."""
-    spec = await compile_agent(db, user=user, query=payload.query, top_k=payload.top_k)
-    execution = await execute_spec(db, spec)
-    return RunAgentResponse(
-        spec=spec,
-        results=execution.get("results", {}),
-        trace=execution.get("trace", []),
-    )
-
-
-# ── Delete / revoke (admin) ──────────────────────────────────────────────────
-
-
-@router.delete("/{tool_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_vendor_tool(
-    tool_id: str,
+@router.delete("/{server_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_mcp_server_endpoint(
+    server_id: str,
     user: CurrentUser = _admin,
     db: AsyncSession = Depends(get_db),
 ):
-    deleted = await delete_tool(db, tool_id=tool_id, actor_id=user.id)
+    deleted = await delete_mcp_server(db, server_id=server_id, actor_id=user.id)
     if not deleted:
         await db.rollback()
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Vendor tool not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found"
         )
     await db.commit()
     return None

@@ -1,8 +1,7 @@
 """Pydantic v2 request/response contracts for the Vendor Resources API.
 
-Covers Vendor Tools, tenant grants, the access-filtered catalog, and the AI
-Compiler's ``CompiledAgentSpec`` (Phase 3). MCP server and data-source schemas
-remain deferred.
+Covers MCP server registration, tenant grants, the access-filtered
+catalog, and the AI Compiler's ``CompiledAgentSpec``.
 """
 from __future__ import annotations
 
@@ -11,55 +10,115 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-# Resource types currently supported by the grant table. ``mcp_server`` and
-# ``data_source`` are reserved for later phases.
-ResourceType = Literal["vendor_tool", "mcp_server", "data_source"]
+ResourceType = Literal["mcp", "datasource"]
 HttpMethod = Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
 
 
-class CreateVendorToolRequest(BaseModel):
-    """Payload to register a new Vendor Tool."""
+class ConnectMCPServerRequest(BaseModel):
+    """Payload to register a new MCP server.
 
-    name: str = Field(min_length=2, max_length=128)
+    Transport, bound tools, and the required credential type are
+    auto-detected by probing/connecting to the server.
+    """
+
+    name: str = Field(min_length=2, max_length=255)
     description: str = Field(default="", max_length=4000)
-    category: str = Field(default="general", max_length=64)
-    method: HttpMethod = "POST"
-    endpoint_url: str | None = Field(default=None, max_length=512)
-    parameters_schema: dict[str, Any] = Field(default_factory=dict)
+    server_url: str = Field(max_length=512)
     is_global: bool = False
-    vault_secret_ref: str | None = Field(default=None, max_length=255)
+    # Optional credentials used *at registration time* for tool discovery on
+    # auth-protected servers (not persisted).
+    credentials: dict[str, str] | None = None
 
-    @field_validator("parameters_schema")
+    @field_validator("server_url")
     @classmethod
-    def _must_be_dict(cls, v: dict[str, Any]) -> dict[str, Any]:
-        if not isinstance(v, dict):
-            raise ValueError("parameters_schema must be a JSON object")
+    def _url_nonempty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("server_url must not be empty")
         return v
 
 
-class VendorToolResponse(BaseModel):
-    """Full tool representation (admin view)."""
+class McpDetectRequest(BaseModel):
+    """Ask the backend to probe an MCP URL and report what it wants."""
+
+    server_url: str = Field(min_length=1, max_length=512)
+
+
+class McpCredentialField(BaseModel):
+    """One credential input the UI should render for a detected auth type."""
+
+    name: str
+    label: str
+    type: str = "text"
+    placeholder: str = ""
+    secret: bool = False
+    required: bool = True
+
+
+class McpDetectResponse(BaseModel):
+    """Result of probing an MCP URL/command natively.
+
+    ``auth_type`` ∈ none | api_key | bearer | basic | oauth2 | env | unknown
+    ``confidence`` ∈ open | challenge | well-known | hint | command | none
+    """
+
+    ok: bool
+    server_url: str
+    transport: str
+    endpoint: str
+    reachable: bool | None = None
+    auth_required: bool | None = None
+    auth_type: str
+    confidence: str
+    credential_fields: list[McpCredentialField] = Field(default_factory=list)
+    hints: list[str] = Field(default_factory=list)
+    oauth_scopes: list[str] = Field(default_factory=list)
+    # Discovered OAuth metadata (RFC 8414/9728): token_endpoint,
+    # registration_endpoint, scopes_supported, grant_types_supported.
+    oauth: dict = Field(default_factory=dict)
+    error: str | None = None
+
+
+class ConnectCredentialsRequest(BaseModel):
+    """Optional credentials supplied when testing/connecting to an MCP server."""
+
+    credentials: dict[str, str] | None = None
+
+
+class MCPServerResponse(BaseModel):
+    """Full MCP server representation (admin view)."""
 
     model_config = ConfigDict(from_attributes=True)
 
     id: str
     name: str
     description: str
-    category: str
-    method: str
-    endpoint_url: str | None
-    parameters_schema: dict[str, Any]
+    transport: str
+    server_url: str
+    bound_tools: list
+    auth_config: dict = Field(default_factory=dict)
     is_global: bool
-    vault_secret_ref: str | None
     created_at: datetime
     updated_at: datetime
+
+
+class ConnectMCPServerResponse(BaseModel):
+    """Result of a connect-test: discovered transport, auth and tools."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    transport: str
+    bound_tools: list[str]
+    tools: list[dict[str, Any]] = Field(default_factory=list)
+    auth_type: str = "none"
+    server_info: dict[str, Any] | None = None
+    protocol_version: str | None = None
 
 
 class GrantTenantResourceRequest(BaseModel):
     """Grant a Vendor Resource to a Tenant (all members inherit access)."""
 
     tenant_id: str = Field(min_length=1)
-    resource_type: ResourceType = "vendor_tool"
+    resource_type: ResourceType = "mcp"
     resource_id: str = Field(min_length=1)
 
 
@@ -76,40 +135,36 @@ class GrantResponse(BaseModel):
 
 
 class CatalogEntry(BaseModel):
-    """A catalog tool as seen by a consumer (never exposes secret refs)."""
+    """An MCP server as seen by a consumer (never exposes secret refs)."""
 
     model_config = ConfigDict(from_attributes=True)
 
     id: str
     name: str
     description: str
-    category: str
-    method: str
-    endpoint_url: str | None
-    parameters_schema: dict[str, Any]
+    transport: str
+    server_url: str
+    bound_tools: list
 
 
 class CatalogResponse(BaseModel):
     """The authorized catalog for the calling user (access-filtered)."""
 
-    tools: list[CatalogEntry]
+    servers: list[CatalogEntry]
     count: int
 
 
-# ── AI Compiler (Phase 3) ────────────────────────────────────────────────────
-
-
 class AgentNode(BaseModel):
-    """A single node in a compiled agent DAG (usually a bound Vendor Tool call)."""
+    """A single node in a compiled agent DAG (usually a bound MCP call)."""
 
-    model_config = ConfigDict(extra="allow")  # tolerate extra LLM-emitted keys
+    model_config = ConfigDict(extra="allow")
 
     id: str
-    tool_id: str | None = None
-    node_type: str = "tool.call"  # tool.call | logic.condition | notification.send | ai.agent
+    server_id: str | None = None
+    node_type: str = "mcp.call"
     args: dict[str, Any] = Field(default_factory=dict)
     description: str = ""
-    unconfigured: bool = False  # True when no matching tool / no endpoint
+    unconfigured: bool = False
 
 
 class AgentEdge(BaseModel):
@@ -117,13 +172,13 @@ class AgentEdge(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    source: str  # avoid the `from` keyword
+    source: str
     target: str
-    condition: str | None = None  # optional, for logic.condition branches
+    condition: str | None = None
 
 
 class CompiledAgentSpec(BaseModel):
-    """The validated, LLM-compiled agent DAG bound to Vendor Tool IDs."""
+    """The validated, LLM-compiled agent DAG bound to MCP Server IDs."""
 
     agent_name: str
     description: str = ""

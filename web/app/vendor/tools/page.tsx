@@ -3,14 +3,16 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  Wrench,
+  Server,
   Plus,
   Trash2,
-  Sparkles,
   Share2,
   X,
   Globe,
   Lock,
+  Radio,
+  Link,
+  Check,
 } from "lucide-react";
 
 import ProtectedDashboard from "@/components/protected-dashboard";
@@ -18,26 +20,38 @@ import { useAuthStore } from "@/stores/auth-store";
 import { api, ApiError, type VendorTenant } from "@/lib/api";
 import {
   vendorApi,
-  type VendorTool,
-  type CreateVendorToolBody,
+  type VendorMCPServer,
+  type ConnectMCPServerBody,
+  type ConnectMCPServerResponse,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Field } from "@/components/auth-fields";
 
-export default function VendorToolsPage() {
+export default function VendorMCPPage() {
   const accessToken = useAuthStore((s) => s.accessToken) || "";
   const queryClient = useQueryClient();
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [showGrantModal, setShowGrantModal] = useState(false);
-  const [grantTool, setGrantTool] = useState<VendorTool | null>(null);
+  const [showToolsModal, setShowToolsModal] = useState(false);
+  const [showConnectModal, setShowConnectModal] = useState(false);
+  const [grantServer, setGrantServer] = useState<VendorMCPServer | null>(null);
+  const [toolsServer, setToolsServer] = useState<{
+    id: string;
+    name: string;
+    response: ConnectMCPServerResponse | null;
+    error: string | null;
+  } | null>(null);
+  const [connectServer, setConnectServer] = useState<VendorMCPServer | null>(null);
+  const [credKey, setCredKey] = useState("");
+  const [credValue, setCredValue] = useState("");
 
   // Queries
-  const { data: tools = [], isLoading } = useQuery({
-    queryKey: ["vendor-tools", accessToken],
-    queryFn: () => vendorApi.listTools(accessToken),
+  const { data: servers = [], isLoading } = useQuery({
+    queryKey: ["vendor-mcp-servers", accessToken],
+    queryFn: () => vendorApi.listMCPServers(accessToken),
     enabled: !!accessToken,
   });
 
@@ -49,28 +63,48 @@ export default function VendorToolsPage() {
 
   // Mutations
   const createMutation = useMutation({
-    mutationFn: (vals: CreateVendorToolBody) => vendorApi.createTool(accessToken, vals),
+    mutationFn: (vals: ConnectMCPServerBody) => vendorApi.createMCPServer(accessToken, vals),
     onSuccess: () => {
       setShowAddModal(false);
-      queryClient.invalidateQueries({ queryKey: ["vendor-tools"] });
+      queryClient.invalidateQueries({ queryKey: ["vendor-mcp-servers"] });
     },
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => vendorApi.deleteTool(accessToken, id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["vendor-tools"] }),
+    mutationFn: (id: string) => vendorApi.deleteMCPServer(accessToken, id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["vendor-mcp-servers"] }),
   });
 
   const embedMutation = useMutation({
-    mutationFn: (id: string) => vendorApi.embedTool(accessToken, id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["vendor-tools"] }),
+    mutationFn: (id: string) => vendorApi.embedMCPServer(accessToken, id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["vendor-mcp-servers"] }),
+  });
+
+  const connectMutation = useMutation({
+    mutationFn: ({ id, credentials }: { id: string; credentials?: Record<string, string> | null }) =>
+      vendorApi.connectMCPServer(accessToken, id, credentials),
+    onSuccess: (data, vars) => {
+      const id = (vars as any).id as string;
+      setToolsServer({ id, name: servers.find((s) => s.id === id)?.name ?? id, response: data, error: null });
+      setShowToolsModal(true);
+    },
+    onError: (err, vars) => {
+      const id = (vars as any).id as string;
+      setToolsServer({
+        id,
+        name: servers.find((s) => s.id === id)?.name ?? id,
+        response: null,
+        error: err instanceof ApiError ? err.message : "Connection failed",
+      });
+      setShowToolsModal(true);
+    },
   });
 
   const grantMutation = useMutation({
     mutationFn: (vals: { tenant_id: string; resource_id: string }) =>
       vendorApi.grantResource(accessToken, {
         tenant_id: vals.tenant_id,
-        resource_type: "vendor_tool",
+        resource_type: "mcp",
         resource_id: vals.resource_id,
       }),
     onSuccess: () => setShowGrantModal(false),
@@ -79,25 +113,25 @@ export default function VendorToolsPage() {
   return (
     <ProtectedDashboard
       path="/vendor"
-      title="Vendor Tools"
-      description="Register REST/OpenAPI tools, embed them for semantic matching, and grant access to tenants."
+      title="MCP Servers"
+      description="Register MCP servers, embed them for semantic matching, and grant access to tenants."
     >
       <div className="mt-6 flex items-center justify-between">
         <a href="/vendor" className="text-sm text-zinc-500 hover:text-zinc-800 cursor-pointer">
           ← Back to dashboard
         </a>
         <Button onClick={() => setShowAddModal(true)} size="sm">
-          <Plus className="h-4 w-4 mr-1" /> Register Tool
+          <Plus className="h-4 w-4 mr-1" /> Register MCP Server
         </Button>
       </div>
 
       <div className="mt-4 rounded-xl border border-zinc-200 bg-white p-6 shadow-xs">
         <div className="flex items-center gap-2 border-b border-zinc-100 pb-4">
-          <Wrench className="h-5 w-5 text-indigo-600" />
+          <Server className="h-5 w-5 text-indigo-600" />
           <div>
-            <h2 className="text-lg font-semibold text-zinc-900">Registered Vendor Tools</h2>
+            <h2 className="text-lg font-semibold text-zinc-900">Registered MCP Servers</h2>
             <p className="text-sm text-zinc-500">
-              Tools are embedded on create (best-effort) for the AI Compiler&apos;s semantic matcher.
+              Servers are embedded on create (best-effort) for the AI Compiler&apos;s semantic matcher.
             </p>
           </div>
         </div>
@@ -106,38 +140,36 @@ export default function VendorToolsPage() {
           <div className="flex justify-center py-8">
             <Spinner className="h-6 w-6 text-zinc-500" />
           </div>
-        ) : tools.length === 0 ? (
+        ) : servers.length === 0 ? (
           <p className="py-8 text-center text-sm text-zinc-400">
-            No tools registered yet — click “Register Tool”.
+            No MCP servers registered yet — click &ldquo;Register MCP Server&rdquo;.
           </p>
         ) : (
           <div className="mt-4 overflow-x-auto">
             <table className="w-full text-left text-sm text-zinc-600">
               <thead className="bg-zinc-50 text-xs font-semibold uppercase text-zinc-500">
                 <tr>
-                  <th className="px-4 py-3">Tool</th>
-                  <th className="px-4 py-3">Category</th>
-                  <th className="px-4 py-3">Method</th>
+                  <th className="px-4 py-3">Server</th>
+                  <th className="px-4 py-3">Transport</th>
                   <th className="px-4 py-3">Scope</th>
-                  <th className="px-4 py-3">Endpoint</th>
+                  <th className="px-4 py-3">URL</th>
                   <th className="px-4 py-3 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-100">
-                {tools.map((t) => (
-                  <tr key={t.id} className="hover:bg-zinc-50/50">
+                {servers.map((s) => (
+                  <tr key={s.id} className="hover:bg-zinc-50/50">
                     <td className="px-4 py-3">
-                      <div className="font-medium text-zinc-900">{t.name}</div>
-                      <div className="text-xs text-zinc-400">{t.description || "—"}</div>
+                      <div className="font-medium text-zinc-900">{s.name}</div>
+                      <div className="text-xs text-zinc-400">{s.description || "—"}</div>
                     </td>
                     <td className="px-4 py-3">
-                      <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700">
-                        {t.category}
+                      <span className="inline-flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700">
+                        {s.transport}
                       </span>
                     </td>
-                    <td className="px-4 py-3 font-mono text-xs">{t.method}</td>
                     <td className="px-4 py-3">
-                      {t.is_global ? (
+                      {s.is_global ? (
                         <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
                           <Globe className="h-3 w-3" /> Global
                         </span>
@@ -148,21 +180,34 @@ export default function VendorToolsPage() {
                       )}
                     </td>
                     <td className="px-4 py-3 text-xs text-zinc-500">
-                      {t.endpoint_url || <span className="text-zinc-400">none (simulated)</span>}
+                      {s.server_url || <span className="text-zinc-400">—</span>}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-2">
                         <button
-                          onClick={() => embedMutation.mutate(t.id)}
+                          onClick={() => {
+                            setConnectServer(s);
+                            setCredKey("");
+                            setCredValue("");
+                            setShowConnectModal(true);
+                          }}
+                          className="p-1 text-zinc-400 hover:text-emerald-600 cursor-pointer"
+                          title="Test connection & discover tools"
+                          disabled={connectMutation.isPending}
+                        >
+                          <Link className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => embedMutation.mutate(s.id)}
                           className="p-1 text-zinc-400 hover:text-indigo-600 cursor-pointer"
                           title="(Re)compute semantic embedding"
                           disabled={embedMutation.isPending}
                         >
-                          <Sparkles className="h-4 w-4" />
+                          <Radio className="h-4 w-4" />
                         </button>
                         <button
                           onClick={() => {
-                            setGrantTool(t);
+                            setGrantServer(s);
                             setShowGrantModal(true);
                           }}
                           className="p-1 text-zinc-400 hover:text-sky-600 cursor-pointer"
@@ -172,12 +217,12 @@ export default function VendorToolsPage() {
                         </button>
                         <button
                           onClick={() => {
-                            if (confirm(`Delete tool “${t.name}”? This revokes any tenant grants.`)) {
-                              deleteMutation.mutate(t.id);
+                            if (confirm(`Delete server "${s.name}"? This revokes any tenant grants.`)) {
+                              deleteMutation.mutate(s.id);
                             }
                           }}
                           className="p-1 text-zinc-400 hover:text-red-600 cursor-pointer"
-                          title="Delete tool"
+                          title="Delete server"
                           disabled={deleteMutation.isPending}
                         >
                           <Trash2 className="h-4 w-4" />
@@ -193,7 +238,7 @@ export default function VendorToolsPage() {
       </div>
 
       {showAddModal && (
-        <CreateToolModal
+        <CreateMCPModal
           onClose={() => setShowAddModal(false)}
           onSubmit={(vals) => createMutation.mutate(vals)}
           isPending={createMutation.isPending}
@@ -201,19 +246,19 @@ export default function VendorToolsPage() {
             createMutation.isError
               ? createMutation.error instanceof ApiError
                 ? createMutation.error.message
-                : "Failed to register tool"
+                : "Failed to register MCP server"
               : null
           }
         />
       )}
 
-      {showGrantModal && grantTool && (
-        <GrantToolModal
-          tool={grantTool}
+      {showGrantModal && grantServer && (
+        <GrantServerModal
+          server={grantServer}
           tenants={tenants}
           onClose={() => setShowGrantModal(false)}
           onSubmit={(vals) =>
-            grantMutation.mutate({ tenant_id: vals.tenant_id, resource_id: grantTool.id })
+            grantMutation.mutate({ tenant_id: vals.tenant_id, resource_id: grantServer.id })
           }
           isPending={grantMutation.isPending}
           error={
@@ -225,47 +270,62 @@ export default function VendorToolsPage() {
           }
         />
       )}
+
+      {showToolsModal && toolsServer && (
+        <ToolsModal
+          serverName={toolsServer.name}
+          response={toolsServer.response}
+          error={toolsServer.error}
+          isPending={connectMutation.isPending}
+          onClose={() => setShowToolsModal(false)}
+        />
+      )}
+
+      {showConnectModal && connectServer && (
+        <ConnectCredentialModal
+          server={connectServer}
+          onClose={() => setShowConnectModal(false)}
+          onSubmit={() => {
+            const creds = credKey && credValue ? { [credKey]: credValue } : undefined;
+            connectMutation.mutate({ id: connectServer.id, credentials: creds ?? null });
+            setShowConnectModal(false);
+          }}
+          credKey={credKey}
+          credValue={credValue}
+          setCredKey={setCredKey}
+          setCredValue={setCredValue}
+          isPending={connectMutation.isPending}
+        />
+      )}
     </ProtectedDashboard>
   );
 }
 
-function CreateToolModal({
+function CreateMCPModal({
   onClose,
   onSubmit,
   isPending,
   error,
 }: {
   onClose: () => void;
-  onSubmit: (vals: CreateVendorToolBody) => void;
+  onSubmit: (vals: ConnectMCPServerBody) => void;
   isPending: boolean;
   error: string | null;
 }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [category, setCategory] = useState("custom");
-  const [method, setMethod] = useState("POST");
-  const [endpointUrl, setEndpointUrl] = useState("");
+  const [serverUrl, setServerUrl] = useState("");
   const [isGlobal, setIsGlobal] = useState(false);
-  const [paramsSchema, setParamsSchema] = useState('{\n  "type": "object",\n  "properties": {}\n}');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name) return;
-    let parsed: Record<string, unknown> = {};
-    try {
-      parsed = paramsSchema.trim() ? JSON.parse(paramsSchema) : {};
-    } catch {
-      alert("parameters_schema must be valid JSON");
-      return;
-    }
+    if (!serverUrl.trim()) return;
     onSubmit({
       name,
       description,
-      category,
-      method,
-      endpoint_url: endpointUrl || null,
+      server_url: serverUrl,
       is_global: isGlobal,
-      parameters_schema: parsed,
     });
   };
 
@@ -273,61 +333,38 @@ function CreateToolModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
       <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl">
         <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
-          <h3 className="text-lg font-semibold text-zinc-900">Register Vendor Tool</h3>
+          <h3 className="text-lg font-semibold text-zinc-900">Register MCP Server</h3>
           <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600 cursor-pointer">
             <X className="h-5 w-5" />
           </button>
         </div>
 
+        <p className="mt-1 text-xs text-zinc-500">
+          Transport and tools are auto-discovered on connect.
+        </p>
+
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
-          <Field label="Tool name">
+          <Field label="Server name">
             <Input
-              placeholder="finance.getInvoice"
+              placeholder="finance.invoice-server"
               value={name}
               onChange={(e) => setName(e.target.value)}
               required
             />
           </Field>
-          <Field label="Description (used by the AI Compiler for semantic selection)">
+          <Field label="Description">
             <Input
-              placeholder="Retrieve a vendor invoice by id."
+              placeholder="Connect to the invoice MCP server."
               value={description}
               onChange={(e) => setDescription(e.target.value)}
             />
           </Field>
-          <div className="grid grid-cols-2 gap-4">
-            <Field label="Category">
-              <Input
-                placeholder="finance"
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-              />
-            </Field>
-            <Field label="HTTP method">
-              <select
-                value={method}
-                onChange={(e) => setMethod(e.target.value)}
-                className="flex h-10 w-full rounded-md border border-zinc-300 bg-white px-3 text-sm focus-visible:ring-2 focus-visible:ring-zinc-900"
-              >
-                {["GET", "POST", "PUT", "PATCH", "DELETE"].map((m) => (
-                  <option key={m} value={m}>{m}</option>
-                ))}
-              </select>
-            </Field>
-          </div>
-          <Field label="Endpoint URL (leave blank for a simulated/no-op tool)">
+          <Field label="Server URL">
             <Input
-              placeholder="https://api.example.com/invoices"
-              value={endpointUrl}
-              onChange={(e) => setEndpointUrl(e.target.value)}
-            />
-          </Field>
-          <Field label="Parameters schema (JSON)">
-            <textarea
-              value={paramsSchema}
-              onChange={(e) => setParamsSchema(e.target.value)}
-              rows={5}
-              className="flex w-full rounded-md border border-zinc-300 bg-white px-3 py-2 font-mono text-xs focus-visible:ring-2 focus-visible:ring-zinc-900"
+              placeholder="https://mcp.example.com/invoice"
+              value={serverUrl}
+              onChange={(e) => setServerUrl(e.target.value)}
+              required
             />
           </Field>
           <label className="flex items-center gap-2 text-sm text-zinc-700">
@@ -354,15 +391,81 @@ function CreateToolModal({
   );
 }
 
-function GrantToolModal({
-  tool,
+function ToolsModal({
+  serverName,
+  response,
+  error,
+  isPending,
+  onClose,
+}: {
+  serverName: string;
+  response: ConnectMCPServerResponse | null;
+  error: string | null;
+  isPending: boolean;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+        <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
+          <h3 className="text-lg font-semibold text-zinc-900">
+            Tools for &ldquo;{serverName}&rdquo;
+          </h3>
+          <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600 cursor-pointer">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        {isPending ? (
+          <div className="flex justify-center py-8">
+            <Spinner className="h-6 w-6 text-zinc-500" />
+          </div>
+        ) : error ? (
+          <div className="py-4">
+            <p className="text-sm text-red-600">{error}</p>
+          </div>
+        ) : response ? (
+          <div className="py-4 space-y-3">
+            <div className="flex items-center gap-2 text-sm text-zinc-600">
+              <span className="inline-flex items-center rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium">
+                {response.transport}
+              </span>
+              <span className="text-xs text-zinc-500">
+                {response.bound_tools.length} tool(s) discovered
+              </span>
+            </div>
+            {response.bound_tools.length > 0 ? (
+              <ul className="space-y-1">
+                {response.bound_tools.map((tool) => (
+                  <li key={tool} className="flex items-center gap-2 text-sm text-zinc-700">
+                    <Check className="h-3.5 w-3.5 text-emerald-500" />
+                    {tool}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-zinc-400">No tools discovered.</p>
+            )}
+          </div>
+        ) : null}
+
+        <div className="flex justify-end pt-4">
+          <Button variant="outline" onClick={onClose}>Close</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GrantServerModal({
+  server,
   tenants,
   onClose,
   onSubmit,
   isPending,
   error,
 }: {
-  tool: VendorTool;
+  server: VendorMCPServer;
   tenants: VendorTenant[];
   onClose: () => void;
   onSubmit: (vals: { tenant_id: string }) => void;
@@ -382,7 +485,7 @@ function GrantToolModal({
       <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
         <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
           <h3 className="text-lg font-semibold text-zinc-900">
-            Grant “{tool.name}” to tenant
+            Grant &ldquo;{server.name}&rdquo; to tenant
           </h3>
           <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600 cursor-pointer">
             <X className="h-5 w-5" />
@@ -406,7 +509,7 @@ function GrantToolModal({
             </select>
           </Field>
           <p className="text-xs text-zinc-500">
-            All members of this tenant will inherit access to this tool.
+            All members of this tenant will inherit access to this MCP server.
           </p>
 
           {error && <p className="text-xs text-red-600">{error}</p>}
@@ -416,6 +519,61 @@ function GrantToolModal({
             <Button type="submit" disabled={isPending}>
               {isPending ? <Spinner /> : <Share2 className="h-4 w-4 mr-1" />} Grant access
             </Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function ConnectCredentialModal({
+  server,
+  onClose,
+  onSubmit,
+  credKey,
+  credValue,
+  setCredKey,
+  setCredValue,
+  isPending,
+}: {
+  server: VendorMCPServer;
+  onClose: () => void;
+  onSubmit: () => void;
+  credKey: string;
+  credValue: string;
+  setCredKey: (v: string) => void;
+  setCredValue: (v: string) => void;
+  isPending: boolean;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+        <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
+          <h3 className="text-lg font-semibold text-zinc-900">Connect to "{server.name}"</h3>
+          <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600 cursor-pointer">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            onSubmit();
+          }}
+          className="mt-4 space-y-4"
+        >
+          <Field label="Credential key (e.g. Authorization)">
+            <Input value={credKey} onChange={(e) => setCredKey(e.target.value)} placeholder="Authorization" />
+          </Field>
+          <Field label="Credential value (e.g. Bearer TOKEN)">
+            <Input value={credValue} onChange={(e) => setCredValue(e.target.value)} placeholder="Bearer ..." />
+          </Field>
+
+          <p className="text-xs text-zinc-500">Leave blank to attempt anonymous connect.</p>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+            <Button type="submit" disabled={isPending}>{isPending ? <Spinner /> : <Link className="h-4 w-4 mr-1" />} Connect</Button>
           </div>
         </form>
       </div>

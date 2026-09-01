@@ -1,1 +1,1 @@
-"""Vendor resources test package."""
+"""Vendor resources test package (MCP)."""

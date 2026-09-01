@@ -1,16 +1,12 @@
 """Catalog engine — the AI Compiler's authorised capability view.
 
 Phase 1 implements **access-filtering only**: given an authenticated user,
-return the vendor tools they are allowed to bind to an agent.
+return the MCP servers they are allowed to bind to an agent.
 
-    * ``vendor_admin`` → every registered tool.
-    * ``solo_user``     → tools flagged ``is_global``.
-    * ``tenant_user`` / ``tenant_admin`` → ``is_global`` tools **plus** tools
-      granted to the caller's tenant via ``tenant_resource_grants``.
-
-Semantic similarity matching (embed the NL query, rank the filtered set) is
-deferred to a later phase; :func:`get_authorized_vendor_catalog_semantic` is
-the intentional seam and currently raises ``NotImplementedError``.
+    * ``vendor_admin`` → every registered MCP server.
+    * ``solo_user``     → MCP servers flagged ``is_global``.
+    * ``tenant_user`` / ``tenant_admin`` → ``is_global`` MCP servers **plus**
+      MCP servers granted to the caller's tenant via ``tenant_resource_grants``.
 """
 from __future__ import annotations
 
@@ -22,40 +18,38 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.deps import CurrentUser
 from src.core.roles import Roles
 
-from vendor_resources.models import TenantResourceGrant, ToolEmbedding, VendorTool
-from vendor_resources.services.embeddings import cosine_similarity, embed_text
+from vendor_resources.models import TenantResourceGrant, VendorMCPServer
 
 
 async def get_authorized_vendor_catalog(
     db: AsyncSession, *, user: CurrentUser
-) -> list[VendorTool]:
-    """Return the tools the calling user is authorised to use (access-filtered)."""
+) -> list[VendorMCPServer]:
+    """Return the MCP servers the calling user is authorised to use."""
     if user.role == Roles.VENDOR_ADMIN:
-        result = await db.execute(select(VendorTool).order_by(VendorTool.name))
+        result = await db.execute(select(VendorMCPServer).order_by(VendorMCPServer.name))
         return list(result.scalars().all())
 
     if user.role == Roles.SOLO_USER:
         result = await db.execute(
-            select(VendorTool)
-            .where(VendorTool.is_global.is_(True))
-            .order_by(VendorTool.name)
+            select(VendorMCPServer)
+            .where(VendorMCPServer.is_global.is_(True))
+            .order_by(VendorMCPServer.name)
         )
         return list(result.scalars().all())
 
-    # tenant_user / tenant_admin: globals + granted-to-my-tenant
     grant_subq = select(TenantResourceGrant.resource_id).where(
         TenantResourceGrant.tenant_id == user.tenant_id,
-        TenantResourceGrant.resource_type == "vendor_tool",
+        TenantResourceGrant.resource_type == "mcp",
     )
     result = await db.execute(
-        select(VendorTool)
+        select(VendorMCPServer)
         .where(
             or_(
-                VendorTool.is_global.is_(True),
-                VendorTool.id.in_(grant_subq),
+                VendorMCPServer.is_global.is_(True),
+                VendorMCPServer.id.in_(grant_subq),
             )
         )
-        .order_by(VendorTool.name)
+        .order_by(VendorMCPServer.name)
     )
     return list(result.scalars().all())
 
@@ -67,15 +61,14 @@ async def get_authorized_vendor_catalog_semantic(
     query: str,
     top_k: int = 5,
     embedding_provider: Optional[str] = None,
-) -> list[VendorTool]:
+) -> list[VendorMCPServer]:
     """Semantic match: rank the access-filtered catalog against ``query``.
 
-    Access control is enforced **first** (via :func:`get_authorized_vendor_catalog`),
-    then the candidate tools are ranked by cosine similarity between the query
-    embedding and each tool's stored ``ToolEmbedding``. Tools without an
-    embedding (or with a mismatched dimension) are skipped. If no embeddings are
-    available or the query can't be embedded, falls back to the access-filtered
-    list truncated to ``top_k``.
+    Access control is enforced **first**, then the candidate servers are
+    ranked by cosine similarity between the query embedding and each
+    server's stored embedding. If no embeddings are available or the
+    query can't be embedded, falls back to the access-filtered list
+    truncated to ``top_k``.
     """
     candidates = await get_authorized_vendor_catalog(db, user=user)
     if not candidates or not query:
@@ -88,26 +81,66 @@ async def get_authorized_vendor_catalog_semantic(
 
     candidate_ids = [t.id for t in candidates]
     emap = {
-        e.tool_id: e
+        e.id: e
         for e in (
             await db.execute(
-                select(ToolEmbedding).where(ToolEmbedding.tool_id.in_(candidate_ids))
+                select(VendorMCPServer).where(VendorMCPServer.id.in_(candidate_ids))
             )
         ).scalars().all()
     }
 
-    scored: list[tuple[float, VendorTool]] = []
-    for tool in candidates:
-        emb = emap.get(tool.id)
+    scored: list[tuple[float, VendorMCPServer]] = []
+    for server in candidates:
+        emb = emap.get(server.id)
         if emb is None or emb.dim != len(q_vec):
-            continue  # no embedding or mixed model — skip neutrally
-        scored.append((cosine_similarity(q_vec, emb.embedding), tool))
+            continue
+        scored.append((cosine_similarity(q_vec, emb.embedding), server))
 
     if not scored:
         return candidates[:top_k]
 
     scored.sort(key=lambda s: s[0], reverse=True)
-    return [tool for _, tool in scored[:top_k]]
+    return [server for _, server in scored[:top_k]]
+
+
+async def embed_text(
+    text: str, *, provider: Optional[str] = None, model: Optional[str] = None
+) -> Optional[tuple[list[float], str]]:
+    """Embed ``text`` via the gateway. Returns ``(vector, model)`` or ``None``."""
+    if not text:
+        return None
+    try:
+        from apps.llm_gateway.gateway import LLMGateway
+        from apps.llm_gateway.exceptions import LLMGatewayError
+        from apps.llm_gateway.types import EmbeddingResponse
+        from functools import lru_cache
+
+        @lru_cache
+        def _get_gw() -> LLMGateway:
+            return LLMGateway.from_env()
+
+        gw = _get_gw()
+        resp: EmbeddingResponse = await gw.embed([text], provider=provider, model=model)
+    except LLMGatewayError:
+        return None
+    except Exception:
+        return None
+
+    if not resp.embeddings:
+        return None
+    return list(resp.embeddings[0]), resp.model or (model or "")
+
+
+def cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Cosine similarity of two vectors."""
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    na = (sum(x * x for x in a)) ** 0.5
+    nb = (sum(y * y for y in b)) ** 0.5
+    if na == 0.0 or nb == 0.0:
+        return 0.0
+    return dot / (na * nb)
 
 
 __all__ = [

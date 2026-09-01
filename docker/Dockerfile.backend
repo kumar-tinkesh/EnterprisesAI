@@ -1,0 +1,45 @@
+# ---------------------------------------------------------------------------
+# Backend Service Dockerfile
+# Builds the EnterpriseAI backend service for MCP server management
+# ---------------------------------------------------------------------------
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    curl \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy uv configuration and install dependencies
+COPY pyproject.toml uv.lock ./
+RUN pip install uv
+RUN uv sync --frozen
+
+# Copy source code
+COPY apps/ apps/
+COPY alembic.ini ./
+
+# Create entrypoint script
+RUN cat > entrypoint.sh << 'EOF'
+#!/bin/bash
+set -e
+
+echo "[backend] Starting EnterpriseAI Backend Service..."
+
+# Run database migrations (shared with auth service)
+echo "[backend] Running database migrations..."
+uv run alembic upgrade head 2>/dev/null || echo "[backend] Migration skipped (auth service handles it)"
+
+# Start the backend service
+echo "[backend] Starting uvicorn server on port 8002..."
+cd apps/backend && uv run uvicorn main:app --host 0.0.0.0 --port 8002
+EOF
+
+RUN chmod +x entrypoint.sh
+
+EXPOSE 8002
+
+ENTRYPOINT ["./entrypoint.sh"]

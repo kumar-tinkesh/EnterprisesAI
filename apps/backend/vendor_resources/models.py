@@ -5,12 +5,12 @@ All models inherit the shared :class:`~src.db.base.Base` and
 imports), so they attach to the *same* ``Base.metadata`` as the auth tables and
 live in the single centralized database.
 
-Phase 1 defines only ``vendor_tools`` and ``tenant_resource_grants``. The
-``resource_type`` string on grants already accommodates ``mcp_server`` /
-``data_source`` values added in later phases without a schema change.
+Phase 1 defines only ``vendor_mcp_servers`` and ``tenant_resource_grants``.
+The ``resource_type`` string on grants already accommodates ``datasource``
+values added in later phases without a schema change.
 
 NOTE: SQLite (the default dev DB) has no ``JSONB`` / ``pgvector`` —
-``parameters_schema`` uses portable ``sqlalchemy.JSON``.
+``bound_tools`` uses portable ``sqlalchemy.JSON``.
 """
 from __future__ import annotations
 
@@ -34,24 +34,50 @@ def uuid_str() -> str:
     return str(uuid.uuid4())
 
 
-class VendorTool(Base, TimestampMixin):
-    """A declarative REST API / OpenAPI tool registered by a Vendor Admin."""
+class VendorMCPServer(Base, TimestampMixin):
+    """A registered MCP Server (SSE or Stdio transport)."""
 
-    __tablename__ = "vendor_tools"
+    __tablename__ = "vendor_mcp_servers"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
-    name: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    category: Mapped[str] = mapped_column(String(64), nullable=False, default="general", index=True)
-    method: Mapped[str] = mapped_column(String(16), nullable=False, default="POST")
-    endpoint_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    parameters_schema: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    transport: Mapped[str] = mapped_column(String(32), nullable=False, default="sse")
+    server_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    bound_tools: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    # Detected credential requirement for this server (from mcp_detect):
+    # {"auth_type": "none|api_key|bearer|basic|oauth2|env",
+    #  "credential_fields": [{name, label, type, placeholder, secret, required}],
+    #  "transport": ..., "confidence": ..., "hints": [...]}
+    auth_config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     is_global: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
-    vault_secret_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
+class VendorMCPCredential(Base, TimestampMixin):
+    """Encrypted credentials for an MCP server (vendor-level or per-tenant).
+
+    ``encrypted_credentials`` holds a Fernet-encrypted JSON blob of the
+    credential fields (API keys, basic passwords, OAuth client secrets and
+    refresh tokens). ``tenant_id IS NULL`` marks vendor-level credentials;
+    a per-tenant row overrides the vendor-level fallback. Managed by
+    ``vendor_resources.services.mcp_auth``.
+    """
+
+    __tablename__ = "vendor_mcp_credentials"
+    __table_args__ = (
+        Index("ix_vmc_server_tenant", "server_id", "tenant_id", unique=True),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    server_id: Mapped[str] = mapped_column(
+        ForeignKey("vendor_mcp_servers.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    tenant_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    encrypted_credentials: Mapped[str] = mapped_column(Text, nullable=False)
 
 
 class TenantResourceGrant(Base, TimestampMixin):
-    """Maps a Vendor Resource (tool / mcp / datasource) to a Tenant.
+    """Maps a Vendor Resource (mcp / datasource) to a Tenant.
 
     All members of the granted tenant inherit access automatically.
     """
@@ -73,26 +99,3 @@ class TenantResourceGrant(Base, TimestampMixin):
     )
     resource_type: Mapped[str] = mapped_column(String(32), nullable=False)
     resource_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-
-
-class ToolEmbedding(Base, TimestampMixin):
-    """A single embedding vector for a vendor tool (semantic catalog matching).
-
-    One row per tool (unique ``tool_id``); cascade-deleted with the tool.
-    Stored as portable ``JSON`` (list[float]) so it works on SQLite without
-    pgvector / sqlite-vec. The schema stays swappable to a native vector index
-    later — only this model and the ranking code would change.
-    """
-
-    __tablename__ = "tool_embeddings"
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
-    tool_id: Mapped[str] = mapped_column(
-        ForeignKey("vendor_tools.id", ondelete="CASCADE"),
-        nullable=False,
-        unique=True,
-        index=True,
-    )
-    embedding: Mapped[list] = mapped_column(JSON, nullable=False)
-    model: Mapped[str] = mapped_column(String(128), nullable=False, default="")
-    dim: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

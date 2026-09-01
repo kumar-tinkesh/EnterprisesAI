@@ -130,6 +130,47 @@ services:
       retries: 6
       start_period: 15s
 
+  # --- Backend service (MCP server management) -----------------------------
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    image: enterpriseai-backend
+    container_name: enterpriseai-backend
+    restart: unless-stopped
+    ports:
+      - "8002:8002"
+    environment:
+      ENV: production
+      DEBUG: "false"
+      APP_NAME: EnterpriseAI Backend Service
+      BACKEND_API_V1_PREFIX: /api/v1
+      # Reuse the same database as auth service
+      DATABASE_URL: ${AUTH_DATABASE_URL:-sqlite+aiosqlite:////data/auth.db}
+      BACKEND_CORS_ORIGINS: '["http://localhost:3000","http://127.0.0.1:3000"]'
+      # Share the same JWT settings as auth service
+      JWT_ISSUER: enterprise-ai-auth
+      JWT_AUDIENCE: enterprise-ai
+      SECRET_KEY: ${SECRET_KEY:-your-secret-key-here}
+    volumes:
+      - ./data:/data  # Shared database with auth service
+      - ./data/.keys:/app/apps/auth/.keys  # Shared RSA keypair with auth service
+    depends_on:
+      auth:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8002/health', timeout=3)",
+        ]
+      interval: 60s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
   # --- Optional: PostgreSQL (profile "postgres") ---------------------------
   db:
     image: postgres:16-alpine

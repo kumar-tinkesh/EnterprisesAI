@@ -1,1 +1,1 @@
-"""Vendor-specific security primitives (encryption / vault)."""
+"""Vendor-specific security primitives."""

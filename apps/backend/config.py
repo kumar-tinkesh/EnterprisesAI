@@ -2,8 +2,8 @@
 
 The backend reuses the Auth service's database engine and JWT verification
 (``src.db.session``, ``src.api.deps``) — there is no second engine and no
-duplicated JWT config. This module only adds backend-specific settings such as
-the vendor vault key and the API prefix.
+duplicated JWT config. This module only adds backend-specific settings
+such as the API prefix.
 """
 from __future__ import annotations
 
@@ -25,12 +25,6 @@ class BackendSettings(BaseSettings):
         case_sensitive=False,
     )
 
-    # --- Vendor resources ------------------------------------------------
-    # 32-byte urlsafe-base64 key for AES-256-GCM tool-secret encryption.
-    # If empty, a deterministic dev-only key is derived (NEVER in production).
-    VENDOR_VAULT_KEY: str = ""
-
-    # --- HTTP ------------------------------------------------------------
     BACKEND_API_V1_PREFIX: str = "/api/v1"
     BACKEND_CORS_ORIGINS: list[str] = Field(
         default_factory=lambda: [

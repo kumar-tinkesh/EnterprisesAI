@@ -5,11 +5,22 @@ Includes:
 - health check
 - automatic schema migration on startup (Alembic -> head, any DATABASE_URL)
 - CORS middleware reading from the global settings
+- Vendor Resources (MCP servers) router
 """
 from __future__ import annotations
 
 import asyncio
+import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
+
+# Ensure vendor_resources and this package's ``src.*`` imports resolve. This
+# MUST happen before importing ``api_router`` below, because the (re-enabled)
+# MCP router transitively imports ``vendor_resources.models``.
+ROOT = Path(__file__).resolve().parents[3]  # EnterpriseAI/ (file is at apps/auth/src/main.py)
+for _p in (ROOT, ROOT / "apps" / "auth", ROOT / "apps" / "backend"):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,7 +30,11 @@ from src.api.v1.router import api_router
 from src.config import Settings, get_settings
 from src.core.security import get_jwks
 
+from vendor_resources.router import router as vendor_resources_router  # noqa: E402
+from apps.backend.config import get_backend_settings  # noqa: E402
+
 settings: Settings = get_settings()
+_backend_settings = get_backend_settings()
 
 
 def create_app() -> FastAPI:
@@ -78,6 +93,11 @@ def create_app() -> FastAPI:
         return get_jwks()
 
     app.include_router(api_router, prefix=settings.API_V1_PREFIX)
+    app.include_router(
+        vendor_resources_router,
+        prefix=f"{_backend_settings.BACKEND_API_V1_PREFIX}/vendor/resources",
+        tags=["vendor-resources"],
+    )
     return app
 
 

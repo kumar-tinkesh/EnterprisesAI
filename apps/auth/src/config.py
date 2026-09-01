@@ -53,6 +53,14 @@ class Settings(BaseSettings):
     JWT_AUDIENCE: str = "enterprise-ai"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     JWT_REFRESH_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
+    # Tolerated clock skew (in seconds) when validating JWT time claims
+    # (exp/nbf). Guards against small clock drift between issuing and
+    # validating services, or VM/clock resync jumps in dev environments.
+    # Override via the JWT_LEEWAY_SECONDS env var.
+    JWT_LEEWAY_SECONDS: int = 300
+    # Key material for Fernet-encrypting stored MCP credentials. Falls back
+    # to the JWT private key when unset (it is always generated/persisted).
+    MCP_CREDENTIALS_SECRET: str = ""
 
     # --- SSO / OIDC -------------------------------------------------------
     SSO_PROVIDER: str = "google"

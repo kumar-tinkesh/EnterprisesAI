@@ -7,7 +7,7 @@ import {
   Sparkles,
   Play,
   Search,
-  Wrench,
+  Server,
   ArrowRight,
   CircleDot,
 } from "lucide-react";
@@ -80,7 +80,7 @@ export default function UserAgentsPage() {
     <ProtectedDashboard
       path="/user"
       title="AI Compiler"
-      description="Describe an agent in natural language — the compiler picks your authorized tools and LangGraph executes the plan."
+      description="Describe an agent in natural language — the compiler picks your authorized MCP servers and LangGraph executes the plan."
     >
       <div className="mt-6 flex items-center justify-between">
         <a href="/user" className="text-sm text-zinc-500 hover:text-zinc-800 cursor-pointer">
@@ -94,10 +94,10 @@ export default function UserAgentsPage() {
           <Bot className="h-5 w-5 text-indigo-600" />
           <h2 className="text-lg font-semibold text-zinc-900">Compile an agent</h2>
         </div>
-        <p className="mt-1 text-sm text-zinc-500">
-          Only tools you&apos;re authorized for (global tools, or tools granted to your tenant)
-          can be selected.
-        </p>
+          <p className="mt-1 text-sm text-zinc-500">
+            Only servers you&apos;re authorized for (global servers, or servers
+            granted to your tenant) can be selected.
+          </p>
         <form onSubmit={handleCompile} className="mt-4 flex gap-2">
           <Input
             placeholder="e.g. verify a vendor invoice over 5000 and notify finance"
@@ -129,16 +129,16 @@ export default function UserAgentsPage() {
       <div className="mt-8 rounded-xl border border-zinc-200 bg-white p-6 shadow-xs">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-zinc-100 pb-4">
           <div className="flex items-center gap-2">
-            <Wrench className="h-5 w-5 text-sky-600" />
+            <Server className="h-5 w-5 text-sky-600" />
             <div>
               <h2 className="text-lg font-semibold text-zinc-900">Your authorized catalog</h2>
-              <p className="text-sm text-zinc-500">Tools the compiler may bind for you.</p>
+              <p className="text-sm text-zinc-500">MCP servers the compiler may bind for you.</p>
             </div>
           </div>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
             <Input
-              placeholder="Semantic search tools…"
+              placeholder="Semantic search servers…"
               value={catalogQuery}
               onChange={(e) => setCatalogQuery(e.target.value)}
               className="pl-9 sm:w-64"
@@ -150,31 +150,29 @@ export default function UserAgentsPage() {
           <div className="flex justify-center py-8">
             <Spinner className="h-6 w-6 text-zinc-500" />
           </div>
-        ) : (catalog?.tools ?? []).length === 0 ? (
+        ) : (catalog?.servers ?? []).length === 0 ? (
           <p className="py-8 text-center text-sm text-zinc-400">
-            No tools available. Ask a vendor admin to register or grant tools.
+            No servers available. Ask a vendor admin to register or grant servers.
           </p>
         ) : (
           <ul className="mt-4 grid gap-3 sm:grid-cols-2">
-            {catalog!.tools.map((t) => (
-              <li key={t.id} className="rounded-lg border border-zinc-200 p-4">
+            {catalog!.servers.map((s) => (
+              <li key={s.id} className="rounded-lg border border-zinc-200 p-4">
                 <div className="flex items-center justify-between">
-                  <span className="font-mono text-sm font-medium text-zinc-900">{t.name}</span>
+                  <span className="font-mono text-sm font-medium text-zinc-900">{s.name}</span>
                   <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600">
-                    {t.category}
+                    {s.transport}
                   </span>
                 </div>
-                <p className="mt-1 text-xs text-zinc-500">{t.description || "—"}</p>
+                <p className="mt-1 text-xs text-zinc-500">{s.description || "—"}</p>
                 <div className="mt-2 flex items-center gap-2 text-xs text-zinc-400">
-                  <span className="font-mono">{t.method}</span>
-                  <span>·</span>
-                  <span>{t.endpoint_url ? "live endpoint" : "simulated"}</span>
+                  <span>{s.server_url ? "live endpoint" : "simulated"}</span>
                 </div>
               </li>
             ))}
           </ul>
         )}
-        <p className="mt-3 text-xs text-zinc-400">{catalog?.count ?? 0} tools</p>
+        <p className="mt-3 text-xs text-zinc-400">{catalog?.count ?? 0} servers</p>
       </div>
     </ProtectedDashboard>
   );
@@ -191,7 +189,7 @@ function SpecCard({ spec }: { spec: CompiledAgentSpec }) {
 
       {spec.nodes.length === 0 ? (
         <p className="mt-4 text-sm text-zinc-400">
-          No tools matched your request from your authorized catalog.
+          No servers matched your request from your authorized catalog.
         </p>
       ) : (
         <ol className="mt-4 space-y-3">
@@ -200,7 +198,7 @@ function SpecCard({ spec }: { spec: CompiledAgentSpec }) {
               <div className="flex items-center gap-2">
                 <CircleDot className="h-4 w-4 text-indigo-500" />
                 <span className="text-xs font-semibold uppercase text-zinc-400">
-                  Step {i + 1} · {n.node_type ?? "tool.call"}
+                  Step {i + 1} · {n.node_type ?? "mcp.call"}
                 </span>
               </div>
               <div className="mt-1 font-mono text-sm text-zinc-900">{n.id}</div>
@@ -208,13 +206,13 @@ function SpecCard({ spec }: { spec: CompiledAgentSpec }) {
                 <p className="text-xs text-zinc-500">{n.description}</p>
               )}
               <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-                {n.tool_id ? (
+                {n.server_id ? (
                   <span className="rounded bg-emerald-50 px-2 py-0.5 font-mono text-emerald-700">
-                    tool: {n.tool_id}
+                    server: {n.server_id}
                   </span>
                 ) : (
                   <span className="rounded bg-amber-50 px-2 py-0.5 text-amber-700">
-                    unconfigured (no matching tool)
+                    unconfigured (no matching server)
                   </span>
                 )}
                 {n.unconfigured && (
