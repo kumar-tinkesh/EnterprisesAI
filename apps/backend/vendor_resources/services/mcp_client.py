@@ -29,6 +29,17 @@ logger = logging.getLogger("vendor_resources.mcp_client")
 
 _DEFAULT_TIMEOUT = 30.0
 
+# Package runners resolve their own dependencies/entry points from a registry —
+# they never need a local source checkout, so ``source_repo_url`` must NOT
+# trigger a repo clone when the command uses one of these.
+_PACKAGE_RUNNER_COMMANDS = {
+    "npx", "npm", "pnpm", "pnpx", "pip", "pipx", "uv", "uvx",
+    "docker", "deno", "bun", "bunx",
+}
+
+_REPO_CLONE_TIMEOUT = 120  # seconds (was 30 — too tight for constrained networks)
+_REPO_BUILD_TIMEOUT = 120
+
 # Header names a caller may pass in ``credentials`` verbatim (backward-compat:
 # older clients sent a raw header map). Anything else is mapped via auth_type.
 _KNOWN_AUTH_HEADERS = {"authorization", "x-api-key", "api-key", "x-auth-token"}
@@ -169,22 +180,17 @@ async def connect_mcp_server(
     auth_type: str | None = None,
     timeout: float = _DEFAULT_TIMEOUT,
     auth_headers: dict[str, str] | None = None,
+    source_repo_url: str | None = None,
+    env_vars: dict[str, str] | None = None,
 ) -> dict:
-    """Connect to an MCP server and return {transport, bound_tools, tools, ...}.
-
-    Transport is auto-detected from the URL scheme when not given: http(s)
-    URLs try streamable HTTP first, then fall back to SSE; anything else is
-    treated as a stdio command. Auth resolution is native via
-    ``services.mcp_auth.resolve_auth`` — pass its ``headers`` result as
-    ``auth_headers``; if omitted, credentials are mapped into auth headers
-    directly (legacy path). Credentials are also injected as environment
-    variables (stdio).
-    """
+    """Connect to an MCP server and return {transport, bound_tools, tools, ...}."""
     target = server_url.strip()
     transport = transport or _detect_transport(target)
 
     if transport == "stdio":
-        return await _connect_stdio(target, credentials)
+        return await _connect_stdio(
+            target, credentials, source_repo_url=source_repo_url, env_vars=env_vars
+        )
 
     headers = (
         auth_headers
@@ -217,22 +223,142 @@ async def connect_mcp_server(
     raise ConnectionError(f"Failed to connect via {attempts}: {last_error}")
 
 
-async def _connect_stdio(command: str, credentials: dict[str, str] | None) -> dict:
-    """Spawn a stdio MCP server process, inject credentials as env vars and
-    substitute ``{field}`` placeholders in the command with credential values
+async def _prepare_local_repo_stdio(
+    command: str, source_repo_url: str | None
+) -> tuple[str, list[str], str | None]:
+    """Resolves stdio command parameters.
+
+    Only fetches a GitHub repository when the *command itself* points at one
+    (a GitHub URL, a ``git+`` specifier, or a bare relative entry point that
+    cannot be resolved without the source tree). ``source_repo_url`` alone is
+    treated as registration metadata: a self-resolving package runner such as
+    ``npx -y @org/pkg`` never triggers a clone/download.
+    """
+    parts = shlex.split(command)
+    cwd = None
+
+    git_url: str | None = None
+    if "github.com" in command or command.startswith("git+"):
+        git_url = command
+    elif source_repo_url and parts and parts[0] not in _PACKAGE_RUNNER_COMMANDS:
+        # Bare entry point (e.g. "node dist/index.js") — needs the repo
+        # checked out locally to be executable.
+        git_url = source_repo_url
+
+    if git_url and ("github.com" in git_url or git_url.startswith("http")):
+        try:
+            import re
+            import subprocess
+            from pathlib import Path
+
+            match = re.match(r"https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?(?:/.*)?$", git_url)
+            if match:
+                owner, repo = match.groups()
+                tmp_dir = Path("/tmp/mcp_repos") / f"{owner}_{repo}"
+                tmp_dir.mkdir(parents=True, exist_ok=True)
+
+                # Fetch the repo if not already cached locally.
+                if not (tmp_dir / "package.json").exists() and not (tmp_dir / "pyproject.toml").exists():
+                    try:
+                        subprocess.run(
+                            ["git", "clone", "--depth", "1", git_url, str(tmp_dir)],
+                            check=True,
+                            capture_output=True,
+                            timeout=_REPO_CLONE_TIMEOUT,
+                        )
+                    except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as clone_exc:
+                        logger.warning(
+                            "git clone failed for %s (%s); falling back to tarball download",
+                            git_url,
+                            clone_exc,
+                        )
+                        await _fetch_repo_tarball(owner, repo, tmp_dir)
+
+                # Install dependencies & build if Node.js project
+                if (tmp_dir / "package.json").exists():
+                    subprocess.run(
+                        ["npm", "install", "--no-audit", "--no-fund"],
+                        cwd=tmp_dir, capture_output=True, timeout=_REPO_BUILD_TIMEOUT,
+                    )
+                    subprocess.run(
+                        ["npm", "run", "build"],
+                        cwd=tmp_dir, capture_output=True, timeout=_REPO_BUILD_TIMEOUT,
+                    )
+
+                cwd = str(tmp_dir)
+
+                # Determine entry executable
+                if (tmp_dir / "dist" / "index.js").exists():
+                    parts = ["node", "dist/index.js"]
+                elif (tmp_dir / "build" / "index.js").exists():
+                    parts = ["node", "build/index.js"]
+                elif (tmp_dir / "index.js").exists():
+                    parts = ["node", "index.js"]
+                elif (tmp_dir / "server.py").exists():
+                    parts = ["python", "server.py"]
+                elif (tmp_dir / "main.py").exists():
+                    parts = ["python", "main.py"]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("failed_to_prepare_local_repo %s: %s", git_url, exc)
+
+    return parts[0], parts[1:], cwd
+
+
+async def _fetch_repo_tarball(owner: str, repo: str, dest_dir) -> None:
+    """Download and extract a GitHub repo tarball (fallback when ``git clone``
+    is unavailable, blocked, or too slow). Tries ``main`` then ``master``."""
+    import io
+    import shutil
+    import tarfile
+    import tempfile
+    from pathlib import Path
+
+    last_status = 0
+    async with httpx.AsyncClient(timeout=90.0, follow_redirects=True) as client:
+        for branch in ("main", "master"):
+            url = f"https://github.com/{owner}/{repo}/archive/refs/heads/{branch}.tar.gz"
+            resp = await client.get(url)
+            if resp.status_code == 200:
+                break
+            last_status = resp.status_code
+        else:
+            raise ConnectionError(
+                f"tarball download failed for {owner}/{repo} (HTTP {last_status})"
+            )
+
+    with tempfile.TemporaryDirectory() as td:
+        with tarfile.open(fileobj=io.BytesIO(resp.content), mode="r:gz") as tf:
+            tf.extractall(td, filter="data")  # noqa: S202 - extracts to sandboxed temp dir
+        extracted = next(Path(td).iterdir())
+        shutil.copytree(extracted, dest_dir, dirs_exist_ok=True)
+
+
+async def _connect_stdio(
+    command: str,
+    credentials: dict[str, str] | None,
+    source_repo_url: str | None = None,
+    env_vars: dict[str, str] | None = None,
+) -> dict:
+    """Spawn a stdio MCP server process, inject credentials and detected
+    ``env_vars`` as environment variables and substitute ``{field}``
+    placeholders in the command with credential values
     (e.g. ``npx -y x/y-mcp --token {api_key}``)."""
     env = {**os.environ}
-    parts = shlex.split(command)
+    if isinstance(env_vars, dict):
+        # Skip empty values and JSON "null" strings persisted by the UI.
+        env.update(
+            {
+                str(k).upper(): str(v)
+                for k, v in env_vars.items()
+                if isinstance(v, str) and v.strip() and v.strip().lower() != "null"
+            }
+        )
     if credentials:
         env.update({k.upper(): v for k, v in credentials.items()})
-        parts = [
-            next(
-                (v for k, v in credentials.items() if part == "{" + k + "}"),
-                part,
-            )
-            for part in parts
-        ]
-    params = StdioServerParameters(command=parts[0], args=parts[1:], env=env)
+
+    cmd_binary, cmd_args, cwd = await _prepare_local_repo_stdio(command, source_repo_url)
+
+    params = StdioServerParameters(command=cmd_binary, args=cmd_args, env=env, cwd=cwd)
     async with stdio_client(params) as (read_stream, write_stream):
         details = await _session_details(read_stream, write_stream)
     logger.info("stdio connected to %s — discovered %d tool(s)", command, len(details["tools"]))

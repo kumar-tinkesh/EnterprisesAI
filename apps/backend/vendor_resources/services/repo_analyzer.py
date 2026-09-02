@@ -76,37 +76,56 @@ def _infer_transport_and_runtime(
             return str(val)
         return ""
 
-    # Container-first preference
-    dockerfile_content = get_content("dockerfile") or get_content("Dockerfile")
-    docker_compose_content = get_content("docker-compose.yml") or get_content("docker-compose.yaml")
-    if dockerfile_content or docker_compose_content:
-        transport = "docker"
-        runtime = "docker"
-        if dockerfile_content and (("COPY" in dockerfile_content and "--from=" not in dockerfile_content) or ("FROM" in dockerfile_content)):
-            cmd = "docker"
-            if "RUN" in dockerfile_content:
-                cmd += " run --rm -i"
-            else:
-                cmd += " run --rm"
-            if "WORKDIR" in dockerfile_content:
-                cmd += " && cd /app && " + dockerfile_content.split("WORKDIR")[1].split("\n")[0].strip()
-            command = cmd.strip()
-        elif docker_compose_content:
-            command = "docker-compose up -d"
-
-    elif get_content("package.json"):
+    # Manifest-first preference (Node, Python, Go, Rust, Docker)
+    if get_content("package.json"):
         transport = "stdio"
         runtime = "node"
         pkg_content = get_content("package.json")
-        # Try to parse JSON if it's a string
         import json
         try:
             pkg = json.loads(pkg_content) if isinstance(pkg_content, str) else pkg_content
-            script = pkg.get("scripts", {}).get("start") or pkg.get("scripts", {}).get("dev") or "node ."
-            entry = pkg.get("main") or pkg.get("bin", {}).get("mcp") or "."
-            command = f"npx -y {entry}" if entry.endswith(".js") else f"cd /app && {script}"
+            pkg_name = pkg.get("name")
+            if pkg_name:
+                command = f"npx -y {pkg_name}"
+            else:
+                script = pkg.get("scripts", {}).get("start") or pkg.get("scripts", {}).get("dev")
+                command = f"npm start" if script else "node index.js"
         except (json.JSONDecodeError, AttributeError):
-            command = "cd /app && npm start"
+            command = "npm start"
+
+    elif get_content("pyproject.toml") or get_content("requirements.txt"):
+        transport = "stdio"
+        runtime = "python"
+        entry = "server.py"
+        pyproject_content = get_content("pyproject.toml")
+        if "[tool.mcp]" in pyproject_content and "server" in pyproject_content:
+            entry = "server.py"
+        elif get_content("requirements.txt"):
+            entry = "mcp_server.py"
+        command = f"python {entry}"
+
+    elif get_content("go.mod"):
+        transport = "stdio"
+        runtime = "go"
+        gomod_content = get_content("go.mod")
+        module_match = re.search(r"module\s+(\S+)", gomod_content)
+        module = module_match.group(1) if module_match else "."
+        command = f"go run ./{module}"
+
+    elif get_content("Cargo.toml"):
+        transport = "stdio"
+        runtime = "rust"
+        command = "cargo run --bin mcp-server"
+
+    elif get_content("dockerfile") or get_content("Dockerfile"):
+        transport = "docker"
+        runtime = "docker"
+        command = "docker run --rm -i mcp-server"
+
+    elif get_content("docker-compose.yml") or get_content("docker-compose.yaml"):
+        transport = "docker"
+        runtime = "docker"
+        command = "docker-compose up -d"
 
     elif get_content("pyproject.toml"):
         transport = "stdio"
@@ -481,11 +500,35 @@ async def _scan_github_repo(url: str, root: Path) -> dict[str, Any]:
     return {}
 
 
+IGNORED_SYSTEM_ENV_VARS = {
+    "NODE_PATH",
+    "PYTHONPATH",
+    "PATH",
+    "NODE_ENV",
+    "PYTHONUNBUFFERED",
+    "HOME",
+    "PORT",
+    "HOST",
+    "PWD",
+    "SHELL",
+    "USER",
+    "LOGNAME",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "DOCKER_HOST",
+    "DOCKER_TLS_VERIFY",
+    "DOCKER_CERT_PATH",
+    "CI",
+    "DEBUG",
+}
+
+
 def _extract_env_vars(scanned: dict[str, Any]) -> list[str]:
     """Extract required environment variables from scanned manifests.
 
-    Uses regex patterns to identify common credential keys like GITHUB_TOKEN,
-    OPENAI_API_KEY, etc.
+    Scans .env files and README documentation for required secret credential keys,
+    automatically filtering out system/runtime environment variables like NODE_PATH.
     """
     env_vars = set()
     pattern = r"\b([A-Z0-9_]{2,}_(?:TOKEN|KEY|SECRET|PASSWORD|AUTH|API|ID|URL))\b"
@@ -503,47 +546,36 @@ def _extract_env_vars(scanned: dict[str, Any]) -> list[str]:
         content = get_content(env_file)
         if content:
             matches = re.findall(pattern, content, re.IGNORECASE)
-            env_vars.update(matches)
+            for m in matches:
+                m_upper = m.upper()
+                if m_upper not in IGNORED_SYSTEM_ENV_VARS:
+                    env_vars.add(m_upper)
 
     # Check for GitHub token in URLs or manifests
     for key in ["manifest", "README.md"]:
         content = get_content(key)
         if content:
-            # Look for GitHub token patterns (more lenient)
-            github_matches = re.findall(
-                r"github_pat=[A-Za-z0-9_\-]+", content
-            )
-            if github_matches:
+            # Look for explicit env var declarations like `FOO_SECRET=` or `export FOO_KEY=`
+            env_matches = re.findall(r"(?:export\s+)?([A-Z0-9_]{2,}_(?:TOKEN|KEY|SECRET|PASSWORD|AUTH|API|ID|URL))=", content)
+            for m in env_matches:
+                m_upper = m.upper()
+                if m_upper not in IGNORED_SYSTEM_ENV_VARS:
+                    env_vars.add(m_upper)
+
+            if "github_pat=" in content:
                 env_vars.add("GITHUB_TOKEN")
 
-    # Add common MCP server environment variables
-    common_env_vars = {
-        "GITHUB_TOKEN",
-        "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "GROQ_API_KEY",
-        "GEMINI_API_KEY",
-        "SLACK_TOKEN",
-        "DISCORD_TOKEN",
-        "WEBHOOK_URL",
-        "DATABASE_URL",
-        "REDIS_URL",
-        "S3_ACCESS_KEY",
-        "S3_SECRET_KEY",
-        "SMTP_PASSWORD",
-        "JWT_SECRET",
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-    }
+    # Filter out system runtime variables and auto-managed OAuth runtime tokens
+    cleaned = []
+    for v in env_vars:
+        if v in IGNORED_SYSTEM_ENV_VARS:
+            continue
+        # OAuth runtime tokens are generated automatically via client_credentials / auth code exchange
+        if v.endswith("_REFRESH_TOKEN") or v.endswith("_ACCESS_TOKEN") or v.endswith("_EXPIRES_IN"):
+            continue
+        cleaned.append(v)
 
-    # Heuristic: If any Python/Node.js manifest is present, add relevant vars
-    if get_content("pyproject.toml") or get_content("package.json"):
-        env_vars.update(["PYTHONPATH", "NODE_PATH"])
-
-    if get_content("dockerfile") or get_content("Dockerfile") or get_content("docker-compose.yml"):
-        env_vars.update(["DOCKER_HOST", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH"])
-
-    return sorted(list(env_vars))
+    return sorted(cleaned)
 
 
 def _detect_auth_type(scanned: dict[str, Any], remote_endpoint: str | None) -> str:

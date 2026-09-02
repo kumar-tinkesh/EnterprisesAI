@@ -12,11 +12,23 @@ from src.config import get_settings
 from src.db.base import Base
 from src.models import *  # noqa: F401,F403  (register all tables)
 
+import sys
+from pathlib import Path
+
 # Register the Vendor Resources tables (apps/backend) on the same Base.metadata
-# so autogenerate sees them. Guarded so the auth Alembic env still works if the
-# backend package is absent (e.g. running auth in isolation).
+# so autogenerate sees them. IMPORTANT: import them under the SAME short module
+# name the apps use (``vendor_resources.models``, resolved via apps/backend on
+# sys.path). Importing them as ``apps.backend.vendor_resources.models`` would
+# load the file a *second* time under a different module name and re-define the
+# tables on the shared metadata → "Table 'vendor_mcp_servers' is already
+# defined for this MetaData instance".
+_ROOT = Path(__file__).resolve().parents[3]  # EnterpriseAI/ (this file: apps/auth/alembic/env.py)
+for _p in (str(_ROOT), str(_ROOT / "apps" / "auth"), str(_ROOT / "apps" / "backend")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
 try:  # pragma: no cover - import-time registration
-    __import__("apps.backend.vendor_resources.models")
+    import vendor_resources.models  # noqa: F401
 except ImportError:
     pass
 

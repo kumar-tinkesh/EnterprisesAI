@@ -321,8 +321,7 @@ export default function VendorMCPPage() {
         <ConnectCredentialModal
           server={connectServer}
           onClose={() => setShowConnectModal(false)}
-          onSubmit={() => {
-            const creds = credKey && credValue ? { [credKey]: credValue } : undefined;
+          onSubmit={(creds) => {
             connectMutation.mutate({ id: connectServer.id, credentials: creds ?? null });
             setShowConnectModal(false);
           }}
@@ -574,42 +573,112 @@ function ConnectCredentialModal({
 }: {
   server: VendorMCPServer;
   onClose: () => void;
-  onSubmit: () => void;
+  onSubmit: (creds?: Record<string, string>) => void;
   credKey: string;
   credValue: string;
   setCredKey: (v: string) => void;
   setCredValue: (v: string) => void;
   isPending: boolean;
 }) {
+  const [customCreds, setCustomCreds] = useState<Record<string, string>>({});
+  // Credential fields come from two sources:
+  //  1. auth_config.credential_fields — populated by MCP detection for remote
+  //     servers (entries are {name, label, type, ...} objects).
+  //  2. env_vars — stdio servers are not probeable, so their required keys
+  //     surface as the env vars captured at registration.
+  // An EMPTY detected list must fall through to env_vars, hence the length
+  // check instead of `||` (an empty array is truthy in JS and would block
+  // the fallback). Env keys that already have a stored value are injected
+  // automatically at connect time, so only the empty ones are asked for.
+  const detectedFields: string[] = Array.isArray(
+    (server.auth_config as any)?.credential_fields
+  )
+    ? ((server.auth_config as any).credential_fields as any[])
+        .map((f) => (typeof f === "string" ? f : f?.name))
+        .filter(Boolean)
+    : [];
+  const envFields: string[] = server.env_vars
+    ? Object.keys(server.env_vars).filter(
+        (k) => !server.env_vars?.[k] // skip keys with a stored value
+      )
+    : [];
+  const credentialFields: string[] =
+    detectedFields.length > 0 ? detectedFields : envFields;
+  const isStdio = server.transport === "stdio";
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (credentialFields.length > 0 && Object.keys(customCreds).length > 0) {
+      onSubmit(customCreds);
+    } else if (credKey && credValue) {
+      onSubmit({ [credKey]: credValue });
+    } else {
+      onSubmit(undefined);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
       <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
         <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
-          <h3 className="text-lg font-semibold text-zinc-900">Connect to "{server.name}"</h3>
+          <h3 className="text-lg font-semibold text-zinc-900">Test Connection: "{server.name}"</h3>
           <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600 cursor-pointer">
             <X className="h-5 w-5" />
           </button>
         </div>
 
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            onSubmit();
-          }}
-          className="mt-4 space-y-4"
-        >
-          <Field label="Credential key (e.g. Authorization)">
-            <Input value={credKey} onChange={(e) => setCredKey(e.target.value)} placeholder="Authorization" />
-          </Field>
-          <Field label="Credential value (e.g. Bearer TOKEN)">
-            <Input value={credValue} onChange={(e) => setCredValue(e.target.value)} placeholder="Bearer ..." />
-          </Field>
+        <form onSubmit={handleSubmit} className="mt-4 space-y-4">
+          <p className="text-xs text-zinc-500">
+            Enter required credentials to test connection and discover available tools. Credentials will be encrypted and stored in the secure vault.
+          </p>
 
-          <p className="text-xs text-zinc-500">Leave blank to attempt anonymous connect.</p>
+          {credentialFields.length > 0 ? (
+            <div className="space-y-3">
+              <label className="text-xs font-semibold text-zinc-700">
+                Required Credentials{isStdio ? " (passed as environment variables)" : ""}
+              </label>
+              {credentialFields.map((field) => (
+                <Field key={field} label={field}>
+                  <Input
+                    type="password"
+                    placeholder={`Enter ${field}`}
+                    value={customCreds[field] || ""}
+                    onChange={(e) => setCustomCreds({ ...customCreds, [field]: e.target.value })}
+                  />
+                </Field>
+              ))}
+            </div>
+          ) : (
+            <>
+              <Field label="Credential key (e.g. Authorization or API_KEY)">
+                <Input
+                  value={credKey}
+                  onChange={(e) => setCredKey(e.target.value)}
+                  placeholder="Authorization"
+                />
+              </Field>
+              <Field label="Credential value (e.g. Bearer TOKEN or sk_test_...)">
+                <Input
+                  type="password"
+                  value={credValue}
+                  onChange={(e) => setCredValue(e.target.value)}
+                  placeholder="Bearer ..."
+                />
+              </Field>
+              <p className="text-xs text-zinc-400">
+                Leave blank if the server does not require authentication.
+                {isStdio
+                  ? " For stdio servers use the environment variable name as the key (e.g. the token variable the server's README documents) — it will be injected into the server process."
+                  : ""}
+              </p>
+            </>
+          )}
 
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={isPending}>{isPending ? <Spinner /> : <Link className="h-4 w-4 mr-1" />} Connect</Button>
+            <Button type="submit" disabled={isPending}>
+              {isPending ? <Spinner /> : <Link className="h-4 w-4 mr-1" />} Test Connection & Discover Tools
+            </Button>
           </div>
         </form>
       </div>
@@ -639,7 +708,6 @@ function AnalyzeRepoModal({
   const [serverName, setServerName] = useState("");
   const [description, setDescription] = useState("");
   const [isGlobal, setIsGlobal] = useState(false);
-  const [envVars, setEnvVars] = useState<Record<string, string>>({});
 
   const handleAnalyze = (e: React.FormEvent) => {
     e.preventDefault();
@@ -655,13 +723,17 @@ function AnalyzeRepoModal({
       analyzeResult?.suggested_command ||
       urlInput.trim();
 
+    const detectedEnvVars = analyzeResult?.required_env_vars?.length
+      ? Object.fromEntries(analyzeResult.required_env_vars.map((k) => [k, ""]))
+      : undefined;
+
     onRegister({
       name: serverName.trim(),
       description,
       server_url: targetUrl,
       is_global: isGlobal,
       source_repo_url: activeTab === "github" ? urlInput.trim() : undefined,
-      env_vars: envVars,
+      env_vars: detectedEnvVars,
     });
   };
 
@@ -703,7 +775,7 @@ function AnalyzeRepoModal({
         </div>
 
         {analyzeResult ? (
-          // Analysis Results Report Card & Registration Form
+          // Analysis Results Report Card & Simple Registration Form
           <form onSubmit={handleRegister} className="mt-4 space-y-4">
             <div className="p-3 bg-indigo-50/50 rounded-lg border border-indigo-100 space-y-2">
               <div className="flex items-center justify-between text-xs font-semibold text-indigo-900">
@@ -722,11 +794,16 @@ function AnalyzeRepoModal({
                   {analyzeResult.remote_endpoint}
                 </p>
               )}
+              {analyzeResult.required_env_vars.length > 0 && (
+                <p className="text-[11px] text-indigo-700 font-medium pt-1">
+                  Detected Credentials needed: {analyzeResult.required_env_vars.join(", ")} (Prompted on Test Connection)
+                </p>
+              )}
             </div>
 
             <Field label="Server Name">
               <Input
-                placeholder="e.g. GitHub MCP Server"
+                placeholder="e.g. QuickBooks Online MCP"
                 value={serverName}
                 onChange={(e) => setServerName(e.target.value)}
                 required
@@ -740,22 +817,6 @@ function AnalyzeRepoModal({
                 onChange={(e) => setDescription(e.target.value)}
               />
             </Field>
-
-            {analyzeResult.required_env_vars.length > 0 && (
-              <div className="space-y-2">
-                <label className="text-xs font-medium text-zinc-700">Required Environment Secrets</label>
-                {analyzeResult.required_env_vars.map((key) => (
-                  <Field key={key} label={key}>
-                    <Input
-                      type="password"
-                      placeholder={`Enter ${key}`}
-                      value={envVars[key] || ""}
-                      onChange={(e) => setEnvVars({ ...envVars, [key]: e.target.value })}
-                    />
-                  </Field>
-                ))}
-              </div>
-            )}
 
             <label className="flex items-center gap-2 text-sm text-zinc-700">
               <input
@@ -774,7 +835,7 @@ function AnalyzeRepoModal({
                 Cancel
               </Button>
               <Button type="submit" disabled={isRegistering}>
-                {isRegistering ? <Spinner /> : <Plus className="h-4 w-4 mr-1" />} Register & Discover Tools
+                {isRegistering ? <Spinner /> : <Plus className="h-4 w-4 mr-1" />} Register MCP Server
               </Button>
             </div>
           </form>
@@ -809,7 +870,7 @@ function AnalyzeRepoModal({
           <form onSubmit={handleAnalyze} className="mt-4 space-y-4">
             <Field label="GitHub Repository URL">
               <Input
-                placeholder="https://github.com/github/github-mcp-server"
+                placeholder="https://github.com/intuit/quickbooks-online-mcp-server"
                 value={urlInput}
                 onChange={(e) => setUrlInput(e.target.value)}
                 required

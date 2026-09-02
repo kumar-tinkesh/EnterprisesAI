@@ -112,14 +112,15 @@ class TestExtractEnvVars:
         vars = _extract_env_vars(scanned)
         assert "GITHUB_TOKEN" in vars
 
-    def test_common_mcp_env_vars_added(self):
-        """Should include common MCP environment variables."""
+    def test_system_env_vars_filtered(self):
+        """Should filter out system/runtime variables like NODE_PATH and PYTHONPATH."""
         scanned = {
-            "package.json": '{"name": "mcp"}',
+            ".env.example": "NODE_PATH=/usr/lib\nPYTHONPATH=/app\nMY_SERVICE_API_KEY=secret123\n",
         }
         vars = _extract_env_vars(scanned)
-        # Should include common env vars for Node.js projects
-        assert any("NODE" in v for v in vars)
+        assert "MY_SERVICE_API_KEY" in vars
+        assert "NODE_PATH" not in vars
+        assert "PYTHONPATH" not in vars
 
 
 class TestDetectAuthType:

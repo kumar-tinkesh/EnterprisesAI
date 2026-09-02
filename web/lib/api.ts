@@ -299,6 +299,7 @@ export interface VendorMCPServer {
   transport: string;
   server_url: string;
   source_repo_url?: string;
+  auth_config?: Record<string, any>;
   env_vars?: Record<string, string>;
   bound_tools: string[];
   is_global: boolean;

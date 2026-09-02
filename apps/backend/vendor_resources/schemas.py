@@ -131,6 +131,8 @@ class MCPServerResponse(BaseModel):
     bound_tools: list
     auth_config: dict = Field(default_factory=dict)
     is_global: bool
+    source_repo_url: str | None = None
+    env_vars: dict | None = None
     created_at: datetime
     updated_at: datetime
 

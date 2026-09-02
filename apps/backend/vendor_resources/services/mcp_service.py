@@ -254,6 +254,8 @@ async def connect_registered_server(
         server.server_url,
         credentials=auth["credentials"],
         auth_headers=auth["headers"] or None,
+        source_repo_url=server.source_repo_url,
+        env_vars=server.env_vars if isinstance(server.env_vars, dict) else None,
     )
     result["auth_type"] = auth["auth_type"]
     return result

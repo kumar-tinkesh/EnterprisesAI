@@ -162,9 +162,24 @@ async def connect_mcp_server_endpoint(
     except Exception as exc:
         await db.rollback()
         logger.exception("Failed to connect MCP server %s", server_id)
+        
+        # Unpack BaseExceptionGroup (Python 3.11+) to extract root cause
+        err_msg = str(exc)
+        if isinstance(exc, BaseExceptionGroup):
+            sub_msgs = []
+            for sub in exc.exceptions:
+                if isinstance(sub, BaseExceptionGroup):
+                    sub_msgs.extend([str(s) for s in sub.exceptions])
+                else:
+                    sub_msgs.append(str(sub))
+            err_msg = " | ".join(sub_msgs)
+
+        if "Connection closed" in err_msg or "MCPError" in err_msg:
+            err_msg = "MCP server process exited (connection closed). Please verify primary credentials and server command."
+
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Connection failed: {exc}",
+            detail=f"Connection failed: {err_msg}",
         ) from exc
     return ConnectMCPServerResponse(**result)
 
