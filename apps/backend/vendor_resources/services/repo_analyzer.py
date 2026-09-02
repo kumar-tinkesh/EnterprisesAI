@@ -53,6 +53,34 @@ async def analyze_repo(repo_url: str) -> AnalyzeRepoResponse:
     return await _analyze_local_path(repo_url, parsed, root)
 
 
+def _best_python_entry(
+    pyproject_content: str,
+    requirements_content: str,
+    python_files: list[str] | None,
+) -> str:
+    """Pick the most likely Python entry file.
+
+    Honors an explicit marker if present, otherwise picks the first matching
+    common entry name from the actual files in the repo (so we report the real
+    ``main.py`` rather than a guessed ``server.py``).
+    """
+    if "[tool.mcp]" in pyproject_content and "server" in pyproject_content:
+        return "server.py"
+
+    common_names = ("main.py", "server.py", "app.py", "cli.py", "mcp_server.py", "__main__.py")
+    files = python_files or []
+    for name in common_names:
+        if name in files:
+            return name
+    if files:
+        return files[0]
+    if requirements_content:
+        return "mcp_server.py"
+    return "server.py"
+
+
+
+
 def _infer_transport_and_runtime(
     scanned: dict[str, Any],
 ) -> tuple[str, str, str | None, str | None]:
@@ -104,12 +132,11 @@ def _infer_transport_and_runtime(
     elif get_content("pyproject.toml") or get_content("requirements.txt"):
         transport = "stdio"
         runtime = "python"
-        entry = "server.py"
         pyproject_content = get_content("pyproject.toml")
-        if "[tool.mcp]" in pyproject_content and "server" in pyproject_content:
-            entry = "server.py"
-        elif get_content("requirements.txt"):
-            entry = "mcp_server.py"
+        # Prefer the real entry file if we know which .py files exist.
+        entry = _best_python_entry(
+            pyproject_content, get_content("requirements.txt"), scanned.get("python_files")
+        )
         command = f"python {entry}"
 
     elif get_content("go.mod"):
@@ -281,6 +308,13 @@ async def _analyze_github_repo(url: str, parsed, root: Path) -> AnalyzeRepoRespo
     # Detect transport/runtime
     transport, runtime, command, remote_endpoint = _infer_transport_and_runtime(scanned)
 
+    # The server may live in a nested subdirectory (e.g. whatsapp-mcp keeps it
+    # in whatsapp-mcp-server/). Prefix the command so it runs from the right
+    # directory — _pick_local_entry will later resolve the exact entry file.
+    subdir = scanned.get("_server_subdir")
+    if subdir and command and not command.startswith("docker"):
+        command = f"{subdir}/{command}"
+
     # Extract required environment variables
     required_env_vars = _extract_env_vars(scanned)
 
@@ -290,13 +324,13 @@ async def _analyze_github_repo(url: str, parsed, root: Path) -> AnalyzeRepoRespo
     # If suggested command is still unknown, fall back to a source-based
     # entry (the connect layer clones source_repo_url and cd's into it).
     if not command and runtime == "node":
-        command = "node index.js"
+        command = f"{subdir}/node index.js" if subdir else "node index.js"
     elif not command and runtime == "python":
-        command = "python server.py"
+        command = f"{subdir}/python server.py" if subdir else "python server.py"
     elif not command:
         # No manifest found at all — best-effort stdio entry. A GitHub URL
         # must never be stored as a remote endpoint.
-        command = "python server.py"
+        command = f"{subdir}/python server.py" if subdir else "python server.py"
 
     return AnalyzeRepoResponse(
         detected=True,
@@ -418,11 +452,17 @@ async def _analyze_local_path(path: str, parsed, root: Path) -> AnalyzeRepoRespo
 
 
 async def _scan_local_dir(dir_path: Path) -> dict[str, Any]:
-    """Scan a local directory for MCP server manifests."""
-    scanned = {}
+    """Scan a local directory for MCP server manifests.
 
-    # Look for standard MCP server manifest files
-    for marker in [
+    Scans the top level first, then — if no manifests are found there —
+    drills into the immediate subdirectory that carries the most manifest
+    files (repos like lharries/whatsapp-mcp keep the server in a nested
+    ``whatsapp-mcp-server/`` dir). The chosen subdirectory is scanned as if
+    it were the repo root so command/env detection resolve real paths.
+    """
+    scanned: dict[str, Any] = {}
+
+    manifest_names = {
         "Dockerfile",
         "docker-compose.yml",
         "docker-compose.yaml",
@@ -433,19 +473,48 @@ async def _scan_local_dir(dir_path: Path) -> dict[str, Any]:
         "setup.cfg",
         "go.mod",
         "Cargo.toml",
-        "pyproject.toml",
         "README.md",
         ".env.example",
         ".env",
-    ]:
-        file_path = dir_path / marker
-        if file_path.exists():
-            scanned[marker] = await _read_file_safely(file_path)
+    }
 
-    # Add all Python files as potential servers
-    python_files = list(dir_path.glob("*.py"))
-    if python_files:
-        scanned["python_files"] = [f.name for f in python_files[:5]]  # Limit to 5
+    async def _scan_dir(d: Path) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        for marker in manifest_names:
+            fp = d / marker
+            if fp.exists():
+                out[marker] = await _read_file_safely(fp)
+        python_files = [f.name for f in sorted(d.glob("*.py"))[:5]]
+        if python_files:
+            out["python_files"] = python_files
+        return out
+
+    scanned = await _scan_dir(dir_path)
+
+    # No *build* manifests at the top level (a lone README.md doesn't count)
+    # — look one level down for the primary server directory and rescan.
+    build_manifests = (
+        "package.json", "pyproject.toml", "requirements.txt",
+        "go.mod", "Cargo.toml", "Dockerfile",
+    )
+    has_build_manifest = any(m in scanned for m in build_manifests)
+    if not has_build_manifest:
+        best_dir: Path | None = None
+        best_count = 0
+        try:
+            for child in sorted(dir_path.iterdir()):
+                if not child.is_dir() or child.name.startswith("."):
+                    continue
+                count = sum(1 for m in manifest_names if (child / m).exists())
+                count += len(list(child.glob("*.py")))
+                if count > best_count:
+                    best_count = count
+                    best_dir = child
+        except PermissionError:
+            pass
+        if best_dir is not None:
+            scanned = await _scan_dir(best_dir)
+            scanned["_server_subdir"] = best_dir.name
 
     return scanned
 

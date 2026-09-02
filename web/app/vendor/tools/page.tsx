@@ -605,10 +605,13 @@ function ConnectCredentialModal({
   const credentialFields: string[] =
     detectedFields.length > 0 ? detectedFields : envFields;
   const isStdio = server.transport === "stdio";
+  const needsNoCreds = credentialFields.length === 0 && isStdio;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (credentialFields.length > 0 && Object.keys(customCreds).length > 0) {
+    if (needsNoCreds) {
+      onSubmit(undefined);
+    } else if (credentialFields.length > 0 && Object.keys(customCreds).length > 0) {
       onSubmit(customCreds);
     } else if (credKey && credValue) {
       onSubmit({ [credKey]: credValue });
@@ -628,9 +631,22 @@ function ConnectCredentialModal({
         </div>
 
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
-          <p className="text-xs text-zinc-500">
-            Enter required credentials to test connection and discover available tools. Credentials will be encrypted and stored in the secure vault.
-          </p>
+          {needsNoCreds ? (
+            <div className="rounded-lg bg-emerald-50 border border-emerald-100 p-3">
+              <p className="text-xs font-medium text-emerald-800">
+                No credentials required.
+              </p>
+              <p className="mt-1 text-xs text-emerald-600">
+                This stdio server authenticates at runtime (e.g. via a local token or QR
+                flow) and none were detected at registration. Click below to connect and
+                discover tools.
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500">
+              Enter required credentials to test connection and discover available tools. Credentials will be encrypted and stored in the secure vault.
+            </p>
+          )}
 
           {credentialFields.length > 0 ? (
             <div className="space-y-3">
@@ -648,7 +664,7 @@ function ConnectCredentialModal({
                 </Field>
               ))}
             </div>
-          ) : (
+          ) : !needsNoCreds ? (
             <>
               <Field label="Credential key (e.g. Authorization or API_KEY)">
                 <Input
@@ -672,7 +688,7 @@ function ConnectCredentialModal({
                   : ""}
               </p>
             </>
-          )}
+          ) : null}
 
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>

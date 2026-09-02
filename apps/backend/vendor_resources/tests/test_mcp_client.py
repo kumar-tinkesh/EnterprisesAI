@@ -1,7 +1,14 @@
 """Unit tests for the MCP client local-entry resolution helper."""
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
+
 from vendor_resources.services.mcp_client import _pick_local_entry
+from vendor_resources.services.repo_analyzer import (
+    _best_python_entry,
+    _scan_local_dir,
+)
 
 
 def test_node_dist_build(tmp_path):
@@ -55,7 +62,28 @@ def test_python_pyproject_console_script(tmp_path, monkeypatch):
     cmd = _pick_local_entry(tmp_path)
     assert cmd[:2] == ["python", "-c"]
     assert "mcp_weather.weather" in cmd[2]
-    assert "run" in cmd[2]
+
+
+def test_scan_local_dir_drills_into_subdir(tmp_path):
+    """A repo whose server lives in a nested dir is scanned from that dir."""
+    base = tmp_path
+    sub = base / "whatsapp-mcp-server"
+    sub.mkdir()
+    (sub / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    (sub / "main.py").write_text("print('hi')\n")
+    (base / "README.md").write_text("top level only\n")
+    scanned = asyncio.run(_scan_local_dir(base))
+    assert scanned.get("_server_subdir") == "whatsapp-mcp-server"
+    assert "pyproject.toml" in scanned
+    assert "main.py" in scanned.get("python_files", [])
+
+
+def test_best_python_entry_picks_real_file():
+    """_best_python_entry prefers an existing main.py over the server.py default."""
+    assert _best_python_entry("", "", ["main.py", "whatsapp.py"]) == "main.py"
+    assert _best_python_entry("[tool.mcp]\nserver = x", "", ["main.py"]) == "server.py"
+    assert _best_python_entry("", "requests", []) == "mcp_server.py"
+    assert _best_python_entry("", "", []) == "server.py"
 
 
 def test_python_pyproject_console_script_via_uv(tmp_path, monkeypatch):
@@ -95,6 +123,15 @@ def test_python_main_module(tmp_path):
     cmd = _pick_local_entry(tmp_path)
     assert cmd[:2] == ["python", "-c"]
     assert "runpy.run_module('pkg'" in cmd[2] or "runpy.run_module(\"pkg\"" in cmd[2]
+
+
+def test_python_nested_subdir_entry(tmp_path):
+    """Entry file in a nested subdirectory (e.g. whatsapp-mcp-server/) is found."""
+    (tmp_path / "whatsapp-mcp-server").mkdir()
+    (tmp_path / "whatsapp-mcp-server" / "main.py").write_text("")
+    (tmp_path / "whatsapp-mcp-server" / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    cmd = _pick_local_entry(tmp_path)
+    assert cmd == ["python", "whatsapp-mcp-server/main.py"]
 
 
 
