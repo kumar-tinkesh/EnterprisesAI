@@ -17,6 +17,7 @@ import base64
 import logging
 import os
 import shlex
+import shutil
 from typing import Any
 
 import httpx
@@ -298,6 +299,46 @@ async def _prepare_local_repo_stdio(
     return parts[0], parts[1:], cwd
 
 
+def _python_module_base(root, mod: str):
+    """Return the base dir (repo root or ``src/``) containing ``mod``."""
+    rel = mod.replace(".", "/")
+    for base in (root, root / "src"):
+        if (base / f"{rel}.py").exists() or (base / rel / "__init__.py").exists():
+            return base
+    return None
+
+
+def _python_console_entry_code(root, entry: str) -> str | None:
+    """Build a ``python -c`` snippet that runs a console-script entry.
+
+    ``entry`` is the ``[project.scripts]`` value — ``mod:obj`` or
+    ``mod:obj.attr`` (e.g. ``mcp_weather.weather:mcp.run``). Not a
+    ``python -m`` target: the object is imported and then called, mirroring
+    the generated console-script wrapper. ``None`` when the module cannot be
+    located in the repo (root or ``src/`` layout).
+    """
+    mod, _, obj_path = entry.partition(":")
+    obj_path = obj_path.strip().strip("()")
+    mod = mod.strip()
+    if not mod or not obj_path:
+        return None
+    base = _python_module_base(root, mod)
+    if base is None:
+        return None
+    code = (
+        "import importlib, sys; "
+        f"sys.path.insert(0, {str(base)!r}); "
+        f"_o = importlib.import_module({mod!r}); "
+    )
+    o = "_o"
+    for attr in obj_path.split("."):
+        attr = attr.strip()
+        if attr:
+            code += f"{o} = getattr({o}, {attr!r}, None); "
+    code += f"{o}()"
+    return code
+
+
 def _pick_local_entry(tmp_dir) -> list[str] | None:
     """Heuristically pick the most likely MCP entry command from a clone.
 
@@ -309,9 +350,12 @@ def _pick_local_entry(tmp_dir) -> list[str] | None:
       3. ``package.json.main`` / root ``index.js`` / ``src/index.js``
     Python:
       4. root ``server.py`` / ``main.py`` / ``mcp_server.py`` / ``app.py``
-      5. ``pyproject.toml`` ``[project.scripts]`` console entry → ``python -m <mod>``
-      6. recursive ``**/server.py`` / ``**/mcp_server.py`` / ``**/main.py``
-      7. recursive ``**/__main__.py`` → ``python -m <dir_as_module>``
+      5. ``pyproject.toml`` ``[tool.mcp.servers]`` declared command
+      6. ``pyproject.toml`` ``[project.scripts]`` console entry →
+         ``uv run --project <repo> <name>`` (auto-installs deps), else a
+         ``python -c`` invocation of the declared ``module:obj.attr()``
+      7. package ``__main__.py`` (flat or ``src/``) via ``runpy``
+      8. recursive ``**/server.py`` / ``**/main.py`` (skips tool dirs)
 
     Returns ``None`` when nothing plausible is found.
     """
@@ -346,47 +390,74 @@ def _pick_local_entry(tmp_dir) -> list[str] | None:
             pass
 
     # ── Python ───────────────────────────────────────────────────────────
-    for rel in ("server.py", "main.py", "mcp_server.py", "app.py"):
-        if (root / rel).exists():
-            return ["python", rel]
-
     pyproject = root / "pyproject.toml"
+    pdata: dict | None = None
     if pyproject.exists():
         try:
             import tomllib
 
-            data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-            scripts = (
-                (data.get("project") or {}).get("scripts")
-                or (data.get("project") or {}).get("gui-scripts")
-                or {}
-            )
-            if scripts:
-                first = next(iter(scripts.values()))  # e.g. "src.pkg:main"
-                mod = first.split(":")[0].rsplit(".", 1)[0]
-                if mod:
-                    return ["python", "-m", mod]
-            tool_mcp = (data.get("tool") or {}).get("mcp", {}).get("servers", {})
-            if tool_mcp:
-                srv = next(iter(tool_mcp.values()), {})
-                cmd = srv.get("command")
-                if cmd:
-                    return [cmd] + list(srv.get("args") or [])[:2]
+            pdata = tomllib.loads(pyproject.read_text(encoding="utf-8"))
         except Exception:
-            pass
+            pdata = None
 
-    # Recursive fallback under src/ (or any layout).
+    for rel in ("server.py", "main.py", "mcp_server.py", "app.py"):
+        if (root / rel).exists():
+            return ["python", rel]
+
+    # [tool.mcp.servers] declared command — highest-authority Python signal.
+    if pdata:
+        tool_mcp = (pdata.get("tool") or {}).get("mcp", {}).get("servers", {})
+        if tool_mcp:
+            srv = next(iter(tool_mcp.values()), {})
+            cmd = srv.get("command")
+            if cmd:
+                return [cmd] + list(srv.get("args") or [])[:2]
+
+    # [project.scripts] console entry (e.g. "mcp-weather" =
+    # "mcp_weather.weather:mcp.run"). NOT a `python -m` module — prefer
+    # `uv run --project <repo> <name>` (auto-installs deps), fall back to a
+    # `python -c` call importing the exact object (works when deps exist).
+    if pdata:
+        scripts = (
+            (pdata.get("project") or {}).get("scripts")
+            or (pdata.get("project") or {}).get("gui-scripts")
+            or {}
+        )
+        if scripts:
+            name, entry = next(iter(scripts.items()))
+            if shutil.which("uv"):
+                return ["uv", "run", "--project", str(root), str(name)]
+            code = _python_console_entry_code(root, entry)
+            if code:
+                return ["python", "-c", code]
+
+    # __main__.py inside a package dir (flat or src/) — run via runpy so the
+    # package resolves without PYTHONPATH plumbing.
+    for base in (root, root / "src"):
+        if not base.is_dir():
+            continue
+        for child in sorted(base.iterdir()):
+            if not child.is_dir() or child.name in (
+                "__pycache__", ".git", "node_modules", ".venv", "venv",
+            ):
+                continue
+            if (child / "__main__.py").exists():
+                code = (
+                    "import runpy, sys; "
+                    f"sys.path.insert(0, {str(base)!r}); "
+                    f"runpy.run_module({child.name!r}, run_name='__main__')"
+                )
+                return ["python", "-c", code]
+
+    # Recursive fallback under src/ (or any layout) — skip tool/build dirs.
     for target in ("server.py", "mcp_server.py", "main.py"):
-        hits = sorted(root.rglob(target))
-        for hit in hits:
+        for hit in sorted(root.rglob(target)):
+            rel_parts = hit.relative_to(root).parts
+            if any(p in ("__pycache__", ".git", "node_modules", ".venv", "venv") for p in rel_parts):
+                continue
             rel = str(hit.relative_to(root))
             if rel != target:  # only add non-root hits (roots handled above)
                 return ["python", rel]
-
-    for hit in sorted(root.rglob("__main__.py")):
-        module = str(hit.parent.relative_to(root)).replace("/", ".")
-        if module not in ("", "."):
-            return ["python", "-m", module]
 
     return None
 
