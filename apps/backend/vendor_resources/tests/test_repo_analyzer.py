@@ -69,16 +69,45 @@ class TestInferTransportAndRuntime:
         assert runtime == "rust"
         assert "cargo run" in command
 
-    def test_readme_remote_endpoint_detected(self):
-        """README.md with remote MCP endpoint should detect streamable_http."""
+    def test_package_json_with_bin_uses_npx(self):
+        """A package with a published CLI (bin) should run via npx."""
         scanned = {
-            "README.md": "MCP Server available at https://api.example.com/mcp",
+            "package.json": '{"name": "@notionhq/notion-mcp-server", "bin": {"notion-mcp-server": "dist/index.js"}, "main": "index.js"}',
         }
-        transport, runtime, command, remote = _infer_transport_and_runtime(scanned)
-        assert transport == "streamable_http"
-        assert runtime == "remote"
+        transport, runtime, command, _remote = _infer_transport_and_runtime(scanned)
+        assert transport == "stdio"
+        assert runtime == "node"
+        assert command == "npx -y @notionhq/notion-mcp-server"
+
+    def test_package_json_name_without_bin_runs_from_source(self):
+        """A package with a name but no bin is NOT runnable via npx — run from source."""
+        scanned = {
+            "package.json": '{"name": "@qboapi/qbo-mcp-server", "main": "dist/index.js"}',
+        }
+        transport, runtime, command, _remote = _infer_transport_and_runtime(scanned)
+        assert transport == "stdio"
+        assert runtime == "node"
+        assert command == "node dist/index.js"
+
+    def test_readme_ignores_github_repo_url(self):
+        """A GitHub repo URL in a README must never be treated as a remote endpoint."""
+        scanned = {
+            "README.md": "Run it: https://github.com/lharries/whatsapp-mcp/sse",
+        }
+        transport, runtime, _command, remote = _infer_transport_and_runtime(scanned)
+        assert remote is None
+        assert transport == "stdio"
+
+    def test_readme_picks_non_github_endpoint(self):
+        """A real remote endpoint is still detected even when a GitHub URL is present."""
+        scanned = {
+            "README.md": (
+                "Repo: https://github.com/org/some-srv/mcp\n"
+                "Endpoint: https://api.example.com/mcp"
+            ),
+        }
+        _transport, _runtime, _command, remote = _infer_transport_and_runtime(scanned)
         assert remote == "https://api.example.com/mcp"
-        assert command is None
 
     def test_docker_compose_detected(self):
         """docker-compose.yml should indicate docker transport."""

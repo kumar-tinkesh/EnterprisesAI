@@ -85,8 +85,16 @@ def _infer_transport_and_runtime(
         try:
             pkg = json.loads(pkg_content) if isinstance(pkg_content, str) else pkg_content
             pkg_name = pkg.get("name")
-            if pkg_name:
+            pkg_bin = pkg.get("bin")
+            if pkg_name and pkg_bin:
+                # Package declares a published CLI entry point → install & run.
                 command = f"npx -y {pkg_name}"
+            elif pkg_name:
+                # Name exists but no bin field — NOT safely runnable via npx
+                # (the package may not be published). Run from source; the
+                # connect layer clones source_repo_url first.
+                main = pkg.get("main") or "index.js"
+                command = f"node {main}"
             else:
                 script = pkg.get("scripts", {}).get("start") or pkg.get("scripts", {}).get("dev")
                 command = f"npm start" if script else "node index.js"
@@ -155,11 +163,16 @@ def _infer_transport_and_runtime(
 
     elif get_content("README.md"):
         readme = get_content("README.md")
-        # Extract remote HTTP(S) endpoint with /mcp or /sse path patterns
-        urls = re.findall(
-            r"https?://[^\s'\"']+(?:/[\w\-\.\~\$\+\!\*\'\(\)\;\=\&\%\?#]+)?/mcp|/sse|/stream",
-            readme,
-        )
+        # Extract remote HTTP(S) endpoint with /mcp, /sse or /stream path
+        # suffix. Match whole URLs, then require the MCP suffix — the old
+        # alternation could match a bare "/sse" on its own. A GitHub
+        # repository URL is never a remote endpoint — filter it out.
+        urls = [
+            u.rstrip(".,;:()\"'`")
+            for u in re.findall(r"https?://[^\s'\"'`]+", readme)
+            if re.search(r"/(?:mcp|sse|stream)$", u.rstrip(".,;:()\"'`"))
+            and urlparse(u).hostname not in ("github.com", "www.github.com")
+        ]
         if urls:
             remote_endpoint = urls[0]
             transport = "streamable_http"
@@ -173,9 +186,11 @@ def _infer_transport_and_runtime(
     # Fallback to explicit remote endpoint pattern
     manifest_content = get_content("manifest")
     if not remote_endpoint and "://" in manifest_content:
-        remote_endpoint = manifest_content
-        transport = "streamable_http"
-        runtime = "remote"
+        candidate = manifest_content.strip()
+        if urlparse(candidate).hostname not in ("github.com", "www.github.com"):
+            remote_endpoint = candidate
+            transport = "streamable_http"
+            runtime = "remote"
 
     return transport, runtime, command, remote_endpoint
 
@@ -235,6 +250,9 @@ async def _analyze_github_repo(url: str, parsed, root: Path) -> AnalyzeRepoRespo
             if clone_dir.exists():
                 shutil.rmtree(clone_dir, ignore_errors=True)
 
+            # Always clone the canonical repo URL — the raw input may contain
+            # a sub-path (e.g. .../tree/main/src/filesystem) which git rejects.
+            canonical_url = f"https://github.com/{owner}/{repo_name}"
             subprocess.run(
                 [
                     git_bin,
@@ -242,12 +260,12 @@ async def _analyze_github_repo(url: str, parsed, root: Path) -> AnalyzeRepoRespo
                     "--depth",
                     "1",
                     "--filter=blob:none",
-                    url,
+                    canonical_url,
                     str(clone_dir),
                 ],
                 check=True,
                 capture_output=True,
-                timeout=15,
+                timeout=30,
             )
 
             scanned = await _scan_local_dir(clone_dir)
@@ -269,10 +287,15 @@ async def _analyze_github_repo(url: str, parsed, root: Path) -> AnalyzeRepoRespo
     # Determine auth type based on detected patterns
     auth_type = _detect_auth_type(scanned, remote_endpoint)
 
-    # If suggested command is npx or npm and repo name is known, craft exact npx command
+    # If suggested command is still unknown, fall back to a source-based
+    # entry (the connect layer clones source_repo_url and cd's into it).
     if not command and runtime == "node":
-        command = f"npx -y {repo_name}"
+        command = "node index.js"
     elif not command and runtime == "python":
+        command = "python server.py"
+    elif not command:
+        # No manifest found at all — best-effort stdio entry. A GitHub URL
+        # must never be stored as a remote endpoint.
         command = "python server.py"
 
     return AnalyzeRepoResponse(

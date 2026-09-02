@@ -287,21 +287,108 @@ async def _prepare_local_repo_stdio(
 
                 cwd = str(tmp_dir)
 
-                # Determine entry executable
-                if (tmp_dir / "dist" / "index.js").exists():
-                    parts = ["node", "dist/index.js"]
-                elif (tmp_dir / "build" / "index.js").exists():
-                    parts = ["node", "build/index.js"]
-                elif (tmp_dir / "index.js").exists():
-                    parts = ["node", "index.js"]
-                elif (tmp_dir / "server.py").exists():
-                    parts = ["python", "server.py"]
-                elif (tmp_dir / "main.py").exists():
-                    parts = ["python", "main.py"]
+                # Determine entry executable (robust — searches beyond the
+                # obvious root files, covers pyproject console scripts etc).
+                found = _pick_local_entry(tmp_dir)
+                if found:
+                    parts = found
         except Exception as exc:  # noqa: BLE001
             logger.warning("failed_to_prepare_local_repo %s: %s", git_url, exc)
 
     return parts[0], parts[1:], cwd
+
+
+def _pick_local_entry(tmp_dir) -> list[str] | None:
+    """Heuristically pick the most likely MCP entry command from a clone.
+
+    Order of preference (all paths resolved relative to ``tmp_dir``):
+
+    Node:
+      1. built output ``dist/index.js`` / ``build/index.js``
+      2. ``package.json.bin`` entry point
+      3. ``package.json.main`` / root ``index.js`` / ``src/index.js``
+    Python:
+      4. root ``server.py`` / ``main.py`` / ``mcp_server.py`` / ``app.py``
+      5. ``pyproject.toml`` ``[project.scripts]`` console entry → ``python -m <mod>``
+      6. recursive ``**/server.py`` / ``**/mcp_server.py`` / ``**/main.py``
+      7. recursive ``**/__main__.py`` → ``python -m <dir_as_module>``
+
+    Returns ``None`` when nothing plausible is found.
+    """
+    import json
+
+    from pathlib import Path as _P
+
+    root = _P(tmp_dir)
+
+    # ── Node ─────────────────────────────────────────────────────────────
+    for rel in ("dist/index.js", "build/index.js", "src/index.js", "index.js"):
+        if (root / rel).exists():
+            return ["node", rel]
+
+    pkg_json = root / "package.json"
+    if pkg_json.exists():
+        try:
+            pkg = json.loads(pkg_json.read_text(encoding="utf-8"))
+            bin_entry = pkg.get("bin")
+            if isinstance(bin_entry, dict):
+                entry = next(iter(bin_entry.values()))
+            elif isinstance(bin_entry, str):
+                entry = bin_entry
+            else:
+                entry = None
+            if entry and (root / entry).exists():
+                return ["node", str(entry)]
+            main = pkg.get("main")
+            if main and (root / main).exists():
+                return ["node", str(main)]
+        except Exception:
+            pass
+
+    # ── Python ───────────────────────────────────────────────────────────
+    for rel in ("server.py", "main.py", "mcp_server.py", "app.py"):
+        if (root / rel).exists():
+            return ["python", rel]
+
+    pyproject = root / "pyproject.toml"
+    if pyproject.exists():
+        try:
+            import tomllib
+
+            data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+            scripts = (
+                (data.get("project") or {}).get("scripts")
+                or (data.get("project") or {}).get("gui-scripts")
+                or {}
+            )
+            if scripts:
+                first = next(iter(scripts.values()))  # e.g. "src.pkg:main"
+                mod = first.split(":")[0].rsplit(".", 1)[0]
+                if mod:
+                    return ["python", "-m", mod]
+            tool_mcp = (data.get("tool") or {}).get("mcp", {}).get("servers", {})
+            if tool_mcp:
+                srv = next(iter(tool_mcp.values()), {})
+                cmd = srv.get("command")
+                if cmd:
+                    return [cmd] + list(srv.get("args") or [])[:2]
+        except Exception:
+            pass
+
+    # Recursive fallback under src/ (or any layout).
+    for target in ("server.py", "mcp_server.py", "main.py"):
+        hits = sorted(root.rglob(target))
+        for hit in hits:
+            rel = str(hit.relative_to(root))
+            if rel != target:  # only add non-root hits (roots handled above)
+                return ["python", rel]
+
+    for hit in sorted(root.rglob("__main__.py")):
+        module = str(hit.parent.relative_to(root)).replace("/", ".")
+        if module not in ("", "."):
+            return ["python", "-m", module]
+
+    return None
 
 
 async def _fetch_repo_tarball(owner: str, repo: str, dest_dir) -> None:

@@ -79,6 +79,8 @@ async def create_mcp_server(
             ),
             auth_type=detection["auth_type"],
             auth_headers=auth["headers"],
+            source_repo_url=data.source_repo_url,
+            env_vars=data.env_vars if isinstance(data.env_vars, dict) else None,
         )
         # Successful handshake (possibly with credentials) proves the
         # requirement: remember the auth type actually used.
