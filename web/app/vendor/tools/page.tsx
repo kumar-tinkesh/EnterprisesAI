@@ -803,7 +803,7 @@ function AnalyzeRepoModal({
 
             <Field label="Server Name">
               <Input
-                placeholder="e.g. QuickBooks Online MCP"
+                placeholder="e.g. My MCP Server"
                 value={serverName}
                 onChange={(e) => setServerName(e.target.value)}
                 required
@@ -870,7 +870,7 @@ function AnalyzeRepoModal({
           <form onSubmit={handleAnalyze} className="mt-4 space-y-4">
             <Field label="GitHub Repository URL">
               <Input
-                placeholder="https://github.com/intuit/quickbooks-online-mcp-server"
+                placeholder="https://github.com/org/mcp-server"
                 value={urlInput}
                 onChange={(e) => setUrlInput(e.target.value)}
                 required

@@ -523,6 +523,19 @@ IGNORED_SYSTEM_ENV_VARS = {
     "DEBUG",
 }
 
+# Generic secret-style env var key shapes. No provider names — anything
+# ending in one of these suffixes (e.g. ``FOO_TOKEN``, ``BAR_PAT``,
+# ``BAZ_CLIENT_ID``) is treated as a credential the server declares.
+_CREDENTIAL_ENV_KEY_RE = re.compile(
+    r"\b([A-Z0-9_]{2,}_(?:TOKEN|KEY|SECRET|PASSWORD|AUTH|API|ID|URL|PAT|CLIENT_ID|ACCESS_KEY))\b",
+    re.IGNORECASE,
+)
+# Same shape, but only when followed by ``=`` (an explicit declaration).
+_CREDENTIAL_ENV_DECL_RE = re.compile(
+    r"(?:export\s+)?([A-Za-z0-9_]{2,}_(?:TOKEN|KEY|SECRET|PASSWORD|AUTH|API|ID|URL|PAT|CLIENT_ID|ACCESS_KEY))=",
+    re.IGNORECASE,
+)
+
 
 def _extract_env_vars(scanned: dict[str, Any]) -> list[str]:
     """Extract required environment variables from scanned manifests.
@@ -531,7 +544,6 @@ def _extract_env_vars(scanned: dict[str, Any]) -> list[str]:
     automatically filtering out system/runtime environment variables like NODE_PATH.
     """
     env_vars = set()
-    pattern = r"\b([A-Z0-9_]{2,}_(?:TOKEN|KEY|SECRET|PASSWORD|AUTH|API|ID|URL))\b"
 
     def get_content(key: str) -> str:
         val = scanned.get(key, "")
@@ -545,25 +557,20 @@ def _extract_env_vars(scanned: dict[str, Any]) -> list[str]:
     for env_file in ["env", "env.example", ".env", ".env.example"]:
         content = get_content(env_file)
         if content:
-            matches = re.findall(pattern, content, re.IGNORECASE)
-            for m in matches:
+            for m in _CREDENTIAL_ENV_KEY_RE.findall(content):
                 m_upper = m.upper()
                 if m_upper not in IGNORED_SYSTEM_ENV_VARS:
                     env_vars.add(m_upper)
 
-    # Check for GitHub token in URLs or manifests
+    # Scan documentation for explicit credential declarations (``FOO_KEY=``,
+    # ``export FOO_TOKEN=``, ``foo_pat=`` … case-insensitive).
     for key in ["manifest", "README.md"]:
         content = get_content(key)
         if content:
-            # Look for explicit env var declarations like `FOO_SECRET=` or `export FOO_KEY=`
-            env_matches = re.findall(r"(?:export\s+)?([A-Z0-9_]{2,}_(?:TOKEN|KEY|SECRET|PASSWORD|AUTH|API|ID|URL))=", content)
-            for m in env_matches:
+            for m in _CREDENTIAL_ENV_DECL_RE.findall(content):
                 m_upper = m.upper()
                 if m_upper not in IGNORED_SYSTEM_ENV_VARS:
                     env_vars.add(m_upper)
-
-            if "github_pat=" in content:
-                env_vars.add("GITHUB_TOKEN")
 
     # Filter out system runtime variables and auto-managed OAuth runtime tokens
     cleaned = []
@@ -578,10 +585,18 @@ def _extract_env_vars(scanned: dict[str, Any]) -> list[str]:
     return sorted(cleaned)
 
 
-def _detect_auth_type(scanned: dict[str, Any], remote_endpoint: str | None) -> str:
-    """Detect authentication type based on scanned manifests and endpoint.
+def _detect_auth_type(scanned: dict[str, Any], remote_endpoint: str | None = None) -> str:
+    """Detect authentication type based on what the server itself documents.
 
-    Returns one of: none, api_key, bearer, basic, oauth2, env, unknown.
+    Returns one of: none, api_key, bearer, basic, oauth2, env.
+
+    ``remote_endpoint`` is intentionally ignored: an endpoint's auth scheme
+    can never be inferred from its hostname (the same literal domain name
+    can serve services with entirely different auth requirements), so nothing
+    is guessed from URL patterns. Every classification comes from signals the
+    server itself advertises — manifest/README mentions of bearer / API-key /
+    OAuth / basic auth, and the credential-style environment variables it
+    declares in ``.env*``.
     """
     def get_content(key: str) -> str:
         val = scanned.get(key, "")
@@ -591,8 +606,12 @@ def _detect_auth_type(scanned: dict[str, Any], remote_endpoint: str | None) -> s
             return str(val)
         return ""
 
+    # Generic credential-env check: any declared secret-style env var (from
+    # .env* or documentation) signals env-based auth when nothing stronger
+    # is documented. No provider names are consulted.
+    hints = ["env_detected"] if _extract_env_vars(scanned) else []
+
     # Check for authentication hints in manifests
-    hints = []
     for key in ["manifest", "README.md", "package.json"]:
         content = get_content(key)
         if content:
@@ -604,21 +623,6 @@ def _detect_auth_type(scanned: dict[str, Any], remote_endpoint: str | None) -> s
                 hints.append("oauth_detected")
             if "basic auth" in content.lower() or "authorization: basic" in content.lower():
                 hints.append("basic_detected")
-
-    # Check for standard authentication environment variables
-    for key in ["GITHUB_TOKEN", "OPENAI_API_KEY", "AWS_SECRET_ACCESS_KEY"]:
-        content = get_content("env") + get_content("env.example") + get_content(".env") + get_content(".env.example")
-        if key in content:
-            hints.append(f"{key}_detected")
-
-    # Check remote endpoint patterns
-    if remote_endpoint:
-        if "github.com" in remote_endpoint:
-            return "bearer"
-        if "openai.com" in remote_endpoint or "api.openai.com" in remote_endpoint:
-            return "api_key"
-        if "slack.com" in remote_endpoint:
-            return "bearer"
 
     # Determine based on heuristics
     if any("bearer" in h.lower() for h in hints):

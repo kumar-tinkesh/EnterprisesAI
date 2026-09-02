@@ -104,13 +104,23 @@ class TestExtractEnvVars:
         assert "OPENAI_API_KEY" in vars
         assert "DATABASE_URL" in vars
 
-    def test_github_token_in_manifest(self):
-        """Should detect GITHUB_TOKEN when github_pat in manifest."""
+    def test_pat_declaration_detected(self):
+        """Any ``*_pat=`` declaration should be extracted (no GitHub special case)."""
         scanned = {
-            "manifest": "github_pat=abc123",
+            "manifest": "github_pat=abc123\ngitlab_pat=def456",
         }
         vars = _extract_env_vars(scanned)
-        assert "GITHUB_TOKEN" in vars
+        assert "GITHUB_PAT" in vars
+        assert "GITLAB_PAT" in vars
+
+    def test_token_declaration_in_readme_detected(self):
+        """``export FOO_TOKEN=`` in a README should be extracted generically."""
+        scanned = {
+            "README.md": "export MY_SERVICE_TOKEN=secret\nexport MY_SERVICE_KEY=other",
+        }
+        vars = _extract_env_vars(scanned)
+        assert "MY_SERVICE_TOKEN" in vars
+        assert "MY_SERVICE_KEY" in vars
 
     def test_system_env_vars_filtered(self):
         """Should filter out system/runtime variables like NODE_PATH and PYTHONPATH."""
@@ -150,17 +160,24 @@ class TestDetectAuthType:
         auth = _detect_auth_type(scanned, None)
         assert auth == "basic"
 
-    def test_github_endpoint_bearer(self):
-        """GitHub endpoints should default to bearer auth."""
+    def test_hostname_never_guesses_auth(self):
+        """Hostname must never decide auth — github.com/openai.com URLs are ignored."""
         scanned = {}
-        auth = _detect_auth_type(scanned, "https://github.com/api")
-        assert auth == "bearer"
+        assert _detect_auth_type(scanned, "https://github.com/api") == "none"
+        assert _detect_auth_type(scanned, "https://api.openai.com/v1") == "none"
+        assert _detect_auth_type(scanned, "https://slack.com/api") == "none"
 
-    def test_openai_endpoint_api_key(self):
-        """OpenAI endpoints should default to api_key auth."""
-        scanned = {}
+    def test_documented_auth_wins_over_url(self):
+        """What the server documents is used, even when the URL is a known host."""
+        scanned = {"README.md": "Set MY_KEY as an x-api-key header: x-api-key <MY_KEY>"}
         auth = _detect_auth_type(scanned, "https://api.openai.com/v1")
         assert auth == "api_key"
+
+    def test_env_vars_only_returns_env(self):
+        """A credential-style env var with no stronger hint should classify as env."""
+        scanned = {".env.example": "NOTION_TOKEN=ntn_xxx"}
+        auth = _detect_auth_type(scanned, None)
+        assert auth == "env"
 
     def test_unknown_defaults_to_none(self):
         """Unknown endpoints should default to none auth."""

@@ -2,8 +2,9 @@
 type of credential it wants *before* connecting.
 
 Detection is **standards-driven and contains zero provider-specific
-hardcoding**: nothing in this module knows about Gmail, GitHub, Slack, etc.
-Every classification comes from what the server itself advertises.
+hardcoding**: no vendor, hosted product, or hostname is referenced anywhere
+in this module. Every classification comes from what the server itself
+advertises.
 
 Detection pipeline for an ``http(s)://`` URL:
   1. Probe candidate endpoints (the URL itself, then ``<url>/mcp`` and

@@ -114,9 +114,10 @@ async def detect_mcp_server_endpoint(
     wants (none / api_key / bearer / basic / oauth2) before connecting.
 
     For http(s) URLs the backend sends an unauthenticated MCP ``initialize``
-    probe, parses ``WWW-Authenticate`` challenges, checks the OAuth
-    well-known metadata endpoints, and falls back to known-provider URL
-    hints. Non-URL input is classified as a stdio command.
+    probe, parses ``WWW-Authenticate`` challenges, and checks the RFC 9728 /
+    RFC 8414 OAuth well-known metadata endpoints. Nothing is guessed from
+    URL patterns — every classification comes from what the server itself
+    advertises. Non-URL input is classified as a stdio command.
     """
     try:
         result = await detect_mcp_server(payload.server_url)
