@@ -16,7 +16,7 @@ from src.models import *  # noqa: F401,F403  (register all tables)
 # so autogenerate sees them. Guarded so the auth Alembic env still works if the
 # backend package is absent (e.g. running auth in isolation).
 try:  # pragma: no cover - import-time registration
-    import vendor_resources.models  # noqa: F401
+    __import__("apps.backend.vendor_resources.models")
 except ImportError:
     pass
 

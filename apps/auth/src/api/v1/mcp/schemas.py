@@ -49,15 +49,6 @@ class McpServerOut(McpServerBase):
     model_config = {"from_attributes": True}
 
 
-class McpServerWithCredentials(McpServerOut):
-    """MCP server with credential management info."""
-    requires_auth: bool = Field(False, description="Whether server requires authentication")
-    auth_type: Optional[str] = Field(None, description="Authentication type (oauth2, api_key, etc.)")
-    credential_fields: list[str] = Field(
-        default_factory=list, 
-        description="Required credential field names"
-    )
-
 
 # Tenant Resource Grant schemas
 class TenantResourceGrantBase(BaseModel):

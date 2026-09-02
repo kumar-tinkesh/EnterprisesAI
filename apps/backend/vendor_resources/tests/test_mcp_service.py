@@ -79,7 +79,7 @@ async def test_catalog_tenant_sees_globals_plus_granted(db):
     await db.commit()
     glob = await _make_mcp(db, "ten.glob", is_global=True)
     priv = await _make_mcp(db, "ten.priv", is_global=False)
-    other_priv = await _make_mcp(db, "ten.other_priv", is_global=False)
+    await _make_mcp(db, "ten.other_priv", is_global=False)
 
     await grant_resource(
         db,

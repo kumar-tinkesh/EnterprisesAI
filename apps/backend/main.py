@@ -29,10 +29,8 @@ from fastapi import FastAPI  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
 from src.config import get_settings as get_auth_settings  # noqa: E402
-from src.db.session import SessionLocal, create_db_tables  # noqa: E402
+from src.db.session import create_db_tables  # noqa: E402
 
-# Register vendor_resources models on Base.metadata (side effect of import).
-import vendor_resources.models  # noqa: F401,E402
 from vendor_resources.router import router as vendor_resources_router  # noqa: E402
 
 from apps.backend.config import get_backend_settings  # noqa: E402

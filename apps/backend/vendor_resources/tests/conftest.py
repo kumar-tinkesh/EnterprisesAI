@@ -76,7 +76,7 @@ from src.db.base import Base  # noqa: E402
 from src.db.session import get_db  # noqa: E402
 from src.models import *  # noqa: E402,F403
 
-import vendor_resources.models  # noqa: E402,F401
+__import__("vendor_resources.models")
 
 _test_engine = create_async_engine(_TEST_URL, echo=False)
 _TestSessionLocal = async_sessionmaker(

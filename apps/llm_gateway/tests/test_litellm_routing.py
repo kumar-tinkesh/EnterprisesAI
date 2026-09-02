@@ -29,7 +29,6 @@ from apps.llm_gateway.gateway import LLMGateway
 from apps.llm_gateway.providers import (
     GeminiClient,
     GroqClient,
-    LiteLLMClient,
     OpenAIClient,
 )
 from apps.llm_gateway.types import (

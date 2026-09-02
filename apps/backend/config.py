@@ -12,7 +12,6 @@ from functools import lru_cache
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from src.config import get_settings as get_auth_settings
 
 
 class BackendSettings(BaseSettings):
@@ -39,8 +38,3 @@ class BackendSettings(BaseSettings):
 def get_backend_settings() -> BackendSettings:
     """Return the cached backend settings singleton."""
     return BackendSettings()
-
-
-def get_database_url() -> str:
-    """Return the shared DATABASE_URL from the auth settings."""
-    return get_auth_settings().DATABASE_URL

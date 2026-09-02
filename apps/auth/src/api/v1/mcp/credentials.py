@@ -1,11 +1,9 @@
 """Credential management for MCP servers with encryption."""
 from __future__ import annotations
 
-import json
 from typing import Any, Optional
 
 from cryptography.fernet import Fernet
-from sqlalchemy import select, and_, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import CurrentUser
@@ -42,19 +40,6 @@ class McpCredentialManager:
         key = urlsafe_b64encode(kdf.derive(secret.encode()))
         return Fernet(key)
 
-    def _encrypt_credentials(self, credentials: dict[str, str]) -> str:
-        """Encrypt credential dictionary to string."""
-        json_str = json.dumps(credentials, sort_keys=True)
-        encrypted_bytes = self._fernet.encrypt(json_str.encode())
-        return encrypted_bytes.decode()
-
-    def _decrypt_credentials(self, encrypted_data: str) -> dict[str, str]:
-        """Decrypt string back to credential dictionary."""
-        try:
-            decrypted_bytes = self._fernet.decrypt(encrypted_data.encode())
-            return json.loads(decrypted_bytes.decode())
-        except Exception as e:
-            raise ValueError(f"Failed to decrypt credentials: {e}")
 
     async def store_server_credentials(
         self,
@@ -77,9 +62,6 @@ class McpCredentialManager:
         # For now, store in a simple table (in production, use proper secrets management)
         # We'll extend the existing model or create a new credentials table
         # For this implementation, we'll store in the server's bound_tools as a demo
-        
-        # This is a simplified approach - in production you'd want a separate credentials table
-        encrypted_creds = self._encrypt_credentials(credentials)
         
         # Store credential metadata in server's bound_tools for now
         # In production, create a separate vendor_mcp_credentials table

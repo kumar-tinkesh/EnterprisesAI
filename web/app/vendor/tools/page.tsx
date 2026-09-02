@@ -17,7 +17,7 @@ import {
 
 import ProtectedDashboard from "@/components/protected-dashboard";
 import { useAuthStore } from "@/stores/auth-store";
-import { api, ApiError, type VendorTenant } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import {
   vendorApi,
   type VendorMCPServer,

@@ -20,7 +20,6 @@ from sqlalchemy import (
     Boolean,
     ForeignKey,
     Index,
-    Integer,
     JSON,
     String,
     Text,
