@@ -16,7 +16,7 @@ from src.core.audit import log_audit_event
 from src.models import Tenant
 
 from vendor_resources.models import TenantResourceGrant, VendorMCPServer
-from vendor_resources.schemas import ConnectMCPServerRequest, GrantTenantResourceRequest
+from vendor_resources.schemas import ConnectMCPServerRequest, GrantTenantResourceRequest, AnalyzeRepoResponse
 from vendor_resources.services import mcp_auth
 from vendor_resources.services.mcp_client import connect_mcp_server
 from vendor_resources.services.mcp_detect import detect_mcp_server
@@ -92,6 +92,8 @@ async def create_mcp_server(
         description=data.description,
         transport=result["transport"],
         server_url=data.server_url,
+        source_repo_url=data.source_repo_url,
+        env_vars=data.env_vars,
         bound_tools=result["bound_tools"],
         auth_config=auth_config,
         is_global=data.is_global,

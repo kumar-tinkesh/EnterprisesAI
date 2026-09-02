@@ -13,16 +13,20 @@ import {
   Radio,
   Link,
   Check,
+  Search,
+  Globe as GlobeIcon,
 } from "lucide-react";
 
 import ProtectedDashboard from "@/components/protected-dashboard";
 import { useAuthStore } from "@/stores/auth-store";
-import { api, ApiError } from "@/lib/api";
+import { api, ApiError, type VendorTenant } from "@/lib/api";
 import {
   vendorApi,
   type VendorMCPServer,
   type ConnectMCPServerBody,
   type ConnectMCPServerResponse,
+  type AnalyzeRepoResponse,
+  type AnalyzeRepoRequest,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,9 +38,13 @@ export default function VendorMCPPage() {
   const queryClient = useQueryClient();
 
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showAnalyzeModal, setShowAnalyzeModal] = useState(false);
   const [showGrantModal, setShowGrantModal] = useState(false);
   const [showToolsModal, setShowToolsModal] = useState(false);
   const [showConnectModal, setShowConnectModal] = useState(false);
+  const [analyzeRepoUrl, setAnalyzeRepoUrl] = useState("");
+  const [analyzeResult, setAnalyzeResult] = useState<AnalyzeRepoResponse | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [grantServer, setGrantServer] = useState<VendorMCPServer | null>(null);
   const [toolsServer, setToolsServer] = useState<{
     id: string;
@@ -61,7 +69,28 @@ export default function VendorMCPPage() {
     enabled: !!accessToken,
   });
 
-  // Mutations
+  // Analyze repo mutation
+  const analyzeRepoMutation = useMutation({
+    mutationFn: (repoUrl: string) => vendorApi.analyzeRepo(accessToken, repoUrl),
+    onSuccess: (data) => {
+      setAnalyzeResult(data);
+      setIsAnalyzing(false);
+    },
+    onError: (err) => {
+      setAnalyzeResult(null);
+      setIsAnalyzing(false);
+    },
+  });
+
+  const handleAnalyzeRepo = (url: string) => {
+    if (!url || !url.trim()) return;
+    setAnalyzeRepoUrl(url.trim());
+    setIsAnalyzing(true);
+    setAnalyzeResult(null);
+    analyzeRepoMutation.mutate(url.trim());
+  };
+
+  // Resource & Server Management Mutations
   const createMutation = useMutation({
     mutationFn: (vals: ConnectMCPServerBody) => vendorApi.createMCPServer(accessToken, vals),
     onSuccess: () => {
@@ -238,12 +267,19 @@ export default function VendorMCPPage() {
       </div>
 
       {showAddModal && (
-        <CreateMCPModal
+        <AnalyzeRepoModal
           onClose={() => setShowAddModal(false)}
-          onSubmit={(vals) => createMutation.mutate(vals)}
-          isPending={createMutation.isPending}
+          onAnalyze={handleAnalyzeRepo}
+          onRegister={(vals) => createMutation.mutate(vals)}
+          isAnalyzing={isAnalyzing}
+          isRegistering={createMutation.isPending}
+          analyzeResult={analyzeResult}
           error={
-            createMutation.isError
+            analyzeRepoMutation.isError
+              ? analyzeRepoMutation.error instanceof ApiError
+                ? analyzeRepoMutation.error.message
+                : "Failed to analyze repository"
+              : createMutation.isError
               ? createMutation.error instanceof ApiError
                 ? createMutation.error.message
                 : "Failed to register MCP server"
@@ -576,6 +612,225 @@ function ConnectCredentialModal({
             <Button type="submit" disabled={isPending}>{isPending ? <Spinner /> : <Link className="h-4 w-4 mr-1" />} Connect</Button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+}
+
+function AnalyzeRepoModal({
+  onClose,
+  onAnalyze,
+  onRegister,
+  isAnalyzing,
+  isRegistering,
+  analyzeResult,
+  error,
+}: {
+  onClose: () => void;
+  onAnalyze: (url: string) => void;
+  onRegister: (vals: ConnectMCPServerBody) => void;
+  isAnalyzing: boolean;
+  isRegistering: boolean;
+  analyzeResult: AnalyzeRepoResponse | null;
+  error: string | null;
+}) {
+  const [urlInput, setUrlInput] = useState("");
+  const [activeTab, setActiveTab] = useState<"remote" | "github">("github");
+  const [serverName, setServerName] = useState("");
+  const [description, setDescription] = useState("");
+  const [isGlobal, setIsGlobal] = useState(false);
+  const [envVars, setEnvVars] = useState<Record<string, string>>({});
+
+  const handleAnalyze = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!urlInput.trim()) return;
+    onAnalyze(urlInput.trim());
+  };
+
+  const handleRegister = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!serverName.trim()) return;
+    const targetUrl =
+      analyzeResult?.remote_endpoint ||
+      analyzeResult?.suggested_command ||
+      urlInput.trim();
+
+    onRegister({
+      name: serverName.trim(),
+      description,
+      server_url: targetUrl,
+      is_global: isGlobal,
+      source_repo_url: activeTab === "github" ? urlInput.trim() : undefined,
+      env_vars: envVars,
+    });
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+      <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl">
+        <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
+          <h3 className="text-lg font-semibold text-zinc-900">Register MCP Server</h3>
+          <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600 cursor-pointer">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="mt-4 border-b border-zinc-100">
+          <nav className="flex gap-4" aria-label="Tabs">
+            <button
+              type="button"
+              onClick={() => setActiveTab("remote")}
+              className={`py-2 px-1 border-b-2 font-medium text-sm flex items-center gap-1.5 cursor-pointer ${
+                activeTab === "remote"
+                  ? "border-indigo-600 text-indigo-600"
+                  : "border-transparent text-zinc-500 hover:text-zinc-700"
+              }`}
+            >
+              <Globe className="h-4 w-4" /> Remote MCP Endpoint
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("github")}
+              className={`py-2 px-1 border-b-2 font-medium text-sm flex items-center gap-1.5 cursor-pointer ${
+                activeTab === "github"
+                  ? "border-indigo-600 text-indigo-600"
+                  : "border-transparent text-zinc-500 hover:text-zinc-700"
+              }`}
+            >
+              <Server className="h-4 w-4" /> GitHub Repository URL
+            </button>
+          </nav>
+        </div>
+
+        {analyzeResult ? (
+          // Analysis Results Report Card & Registration Form
+          <form onSubmit={handleRegister} className="mt-4 space-y-4">
+            <div className="p-3 bg-indigo-50/50 rounded-lg border border-indigo-100 space-y-2">
+              <div className="flex items-center justify-between text-xs font-semibold text-indigo-900">
+                <span>Analysis Complete</span>
+                <span className="capitalize px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">
+                  {analyzeResult.transport} ({analyzeResult.runtime})
+                </span>
+              </div>
+              {analyzeResult.suggested_command && (
+                <p className="text-xs font-mono bg-white p-2 rounded border border-indigo-100 text-zinc-800">
+                  {analyzeResult.suggested_command}
+                </p>
+              )}
+              {analyzeResult.remote_endpoint && (
+                <p className="text-xs font-mono bg-white p-2 rounded border border-indigo-100 text-zinc-800">
+                  {analyzeResult.remote_endpoint}
+                </p>
+              )}
+            </div>
+
+            <Field label="Server Name">
+              <Input
+                placeholder="e.g. GitHub MCP Server"
+                value={serverName}
+                onChange={(e) => setServerName(e.target.value)}
+                required
+              />
+            </Field>
+
+            <Field label="Description">
+              <Input
+                placeholder="Optional description"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+              />
+            </Field>
+
+            {analyzeResult.required_env_vars.length > 0 && (
+              <div className="space-y-2">
+                <label className="text-xs font-medium text-zinc-700">Required Environment Secrets</label>
+                {analyzeResult.required_env_vars.map((key) => (
+                  <Field key={key} label={key}>
+                    <Input
+                      type="password"
+                      placeholder={`Enter ${key}`}
+                      value={envVars[key] || ""}
+                      onChange={(e) => setEnvVars({ ...envVars, [key]: e.target.value })}
+                    />
+                  </Field>
+                ))}
+              </div>
+            )}
+
+            <label className="flex items-center gap-2 text-sm text-zinc-700">
+              <input
+                type="checkbox"
+                checked={isGlobal}
+                onChange={(e) => setIsGlobal(e.target.checked)}
+                className="h-4 w-4 rounded border-zinc-300"
+              />
+              Global (available to all solo users without tenant grant)
+            </label>
+
+            {error && <p className="text-xs text-red-600">{error}</p>}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button type="button" variant="outline" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={isRegistering}>
+                {isRegistering ? <Spinner /> : <Plus className="h-4 w-4 mr-1" />} Register & Discover Tools
+              </Button>
+            </div>
+          </form>
+        ) : activeTab === "remote" ? (
+          // Remote MCP Endpoint Form
+          <form onSubmit={handleAnalyze} className="mt-4 space-y-4">
+            <Field label="Remote MCP Endpoint URL">
+              <Input
+                placeholder="https://mcp.example.com/sse"
+                value={urlInput}
+                onChange={(e) => setUrlInput(e.target.value)}
+                required
+              />
+            </Field>
+            <p className="text-xs text-zinc-500">
+              Enter a live MCP endpoint URL (HTTP/SSE). We&apos;ll probe it to detect transport & auth requirement.
+            </p>
+
+            {error && <p className="text-xs text-red-600">{error}</p>}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button type="button" variant="outline" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={isAnalyzing}>
+                {isAnalyzing ? <Spinner /> : <Radio className="h-4 w-4 mr-1" />} Analyze Endpoint
+              </Button>
+            </div>
+          </form>
+        ) : (
+          // GitHub Repo URL Form
+          <form onSubmit={handleAnalyze} className="mt-4 space-y-4">
+            <Field label="GitHub Repository URL">
+              <Input
+                placeholder="https://github.com/github/github-mcp-server"
+                value={urlInput}
+                onChange={(e) => setUrlInput(e.target.value)}
+                required
+              />
+            </Field>
+            <p className="text-xs text-zinc-500">
+              Enter a GitHub repo URL. We&apos;ll analyze its manifest, Dockerfile, and README to auto-detect transport, runtime, and required environment variables.
+            </p>
+
+            {error && <p className="text-xs text-red-600">{error}</p>}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button type="button" variant="outline" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={isAnalyzing}>
+                {isAnalyzing ? <Spinner /> : <Server className="h-4 w-4 mr-1" />} Analyze Repository
+              </Button>
+            </div>
+          </form>
+        )}
       </div>
     </div>
   );

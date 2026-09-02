@@ -18,7 +18,7 @@ import {
 import ProtectedDashboard from "@/components/protected-dashboard";
 import { AuditLogsPanel } from "@/components/audit-logs-panel";
 import { useAuthStore } from "@/stores/auth-store";
-import { api, ApiError } from "@/lib/api";
+import { api, ApiError, type TenantMember } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";

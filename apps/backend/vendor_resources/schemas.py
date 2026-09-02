@@ -14,6 +14,36 @@ ResourceType = Literal["mcp", "datasource"]
 HttpMethod = Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
 
 
+class AnalyzeRepoRequest(BaseModel):
+    """Request to analyze a GitHub repository or other URL for MCP characteristics."""
+
+    repo_url: str = Field(
+        min_length=1,
+        max_length=512,
+        description="GitHub repository URL (e.g., https://github.com/org/repo) or direct MCP endpoint URL",
+    )
+
+
+class AnalyzeRepoResponse(BaseModel):
+    """Analysis result of an MCP server repository or endpoint.
+
+    Contains detected transport type, runtime, command suggestion, remote endpoint,
+    required environment variables, and authentication type.
+    """
+
+    detected: bool = Field(..., description="Whether analysis was successful")
+    transport: str = Field(
+        ...,
+        description="Detected transport: stdio, streamable_http, sse, docker, unknown",
+    )
+    runtime: str = Field(..., description="Runtime environment: node, python, docker, go, rust, remote, custom, unknown")
+    suggested_command: str | None = Field(None, description="Suggested command to start the MCP server")
+    remote_endpoint: str | None = Field(None, description="Remote MCP endpoint URL if detected")
+    required_env_vars: list[str] = Field(default_factory=list, description="Environment variable names required by the MCP server")
+    auth_type: str = Field(..., description="Authentication type: none, api_key, bearer, basic, oauth2, env, unknown")
+    hints: list[str] = Field(default_factory=list, description="Analysis hints and warnings")
+
+
 class ConnectMCPServerRequest(BaseModel):
     """Payload to register a new MCP server.
 
@@ -28,6 +58,10 @@ class ConnectMCPServerRequest(BaseModel):
     # Optional credentials used *at registration time* for tool discovery on
     # auth-protected servers (not persisted).
     credentials: dict[str, str] | None = None
+    # Source repository URL (GitHub) that this MCP server originated from
+    source_repo_url: str | None = Field(None, max_length=512, description="GitHub repository URL that contains this MCP server")
+    # Environment variables required by the MCP server (detected from repo analysis)
+    env_vars: dict[str, str] | None = Field(None, description="Environment variables required by the MCP server")
 
     @field_validator("server_url")
     @classmethod

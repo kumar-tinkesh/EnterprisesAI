@@ -2,7 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 
-import { api } from "@/lib/api";
+import { api, type AuditLog } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
 import { Spinner } from "@/components/ui/spinner";
 

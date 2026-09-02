@@ -24,6 +24,8 @@ from src.core.roles import Roles
 from src.db.session import get_db
 
 from vendor_resources.schemas import (
+    AnalyzeRepoRequest,
+    AnalyzeRepoResponse,
     CatalogEntry,
     CatalogResponse,
     ConnectMCPServerRequest,
@@ -40,6 +42,7 @@ from vendor_resources.services.catalog_engine import (
     get_authorized_vendor_catalog_semantic,
 )
 from vendor_resources.services.mcp_auth import McpAuthError
+from vendor_resources.services.mcp_client import connect_mcp_server
 from vendor_resources.services.mcp_detect import McpDetectError, detect_mcp_server
 from vendor_resources.services.mcp_service import (
     connect_registered_server,
@@ -49,6 +52,7 @@ from vendor_resources.services.mcp_service import (
     grant_resource,
     list_mcp_servers,
 )
+from vendor_resources.services.repo_analyzer import analyze_repo
 
 logger = logging.getLogger("vendor_resources.router")
 
@@ -189,6 +193,36 @@ async def get_catalog(
         servers = await get_authorized_vendor_catalog(db, user=user)
     entries = [CatalogEntry.model_validate(s) for s in servers]
     return CatalogResponse(servers=entries, count=len(entries))
+
+
+# ── New MCP repo analyzer (admin) ────────────────────────────
+
+
+@router.post(
+    "/mcp/analyze-repo",
+    response_model=AnalyzeRepoResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def analyze_mcp_repo_endpoint(
+    payload: AnalyzeRepoRequest,
+    _user: CurrentUser = _admin,
+):
+    """Analyze a GitHub repository or direct endpoint for MCP characteristics.
+
+    Determines transport type (stdio, docker, streamable_http, sse),
+    runtime environment, suggested startup command, remote endpoint,
+    required environment variables, and authentication type.
+
+    Zero hardcoded vendor rules — all detection is runtime heuristic-based.
+    """
+    try:
+        result = await analyze_repo(payload.repo_url)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Repository analysis failed: {str(exc)}",
+        ) from exc
+    return result
 
 
 # ── Tenant grants (admin) ────────────────────────────────────

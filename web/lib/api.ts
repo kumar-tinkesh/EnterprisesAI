@@ -277,12 +277,29 @@ export const api = {
 
 const VR = "/vendor/resources";
 
+export interface AnalyzeRepoRequest {
+  repo_url: string;
+}
+
+export interface AnalyzeRepoResponse {
+  detected: boolean;
+  transport: "stdio" | "streamable_http" | "sse" | "docker" | "unknown";
+  runtime: "node" | "python" | "docker" | "go" | "rust" | "remote" | "custom" | "unknown";
+  suggested_command: string | null;
+  remote_endpoint: string | null;
+  required_env_vars: string[];
+  auth_type: string;
+  hints: string[];
+}
+
 export interface VendorMCPServer {
   id: string;
   name: string;
   description: string;
   transport: string;
   server_url: string;
+  source_repo_url?: string;
+  env_vars?: Record<string, string>;
   bound_tools: string[];
   is_global: boolean;
   created_at: string;
@@ -294,6 +311,8 @@ export interface ConnectMCPServerBody {
   description?: string;
   server_url: string;
   is_global?: boolean;
+  source_repo_url?: string;
+  env_vars?: Record<string, string>;
 }
 
 export interface ConnectMCPServerResponse {
@@ -382,6 +401,13 @@ export const vendorApi = {
     request<ConnectMCPServerResponse>(`${VR}/mcp/${serverId}/connect`, {
       method: "POST",
       body: JSON.stringify(credentials ? { credentials } : {}),
+    }, token, BACKEND_API_URL),
+
+  // Analyze MCP Repository (vendor_admin)
+  analyzeRepo: (token: string, repoUrl: string) =>
+    request<AnalyzeRepoResponse>(`${VR}/mcp/analyze-repo`, {
+      method: "POST",
+      body: JSON.stringify({ repo_url: repoUrl }),
     }, token, BACKEND_API_URL),
 
   // Grants (vendor_admin)

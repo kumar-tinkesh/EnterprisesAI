@@ -15,6 +15,7 @@ NOTE: SQLite (the default dev DB) has no ``JSONB`` / ``pgvector`` —
 from __future__ import annotations
 
 import uuid
+from typing import Optional
 
 from sqlalchemy import (
     Boolean,
@@ -43,11 +44,13 @@ class VendorMCPServer(Base, TimestampMixin):
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     transport: Mapped[str] = mapped_column(String(32), nullable=False, default="sse")
     server_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    source_repo_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    env_vars: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, default=None)
     bound_tools: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     # Detected credential requirement for this server (from mcp_detect):
     # {"auth_type": "none|api_key|bearer|basic|oauth2|env",
     #  "credential_fields": [{name, label, type, placeholder, secret, required}],
-    #  "transport": ..., "confidence": ..., "hints": [...]}
+    #  "transport": ..., "confidence": ..., "hints": []}
     auth_config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     is_global: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
 

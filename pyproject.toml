@@ -19,6 +19,8 @@ dependencies = [
     "uvicorn[standard]>=0.52.4",
     "litellm>=1.98.0",
     "mcp>=2.1.1",
+    "PyGithub>=2.1.0",
+    "structlog>=25.1.0",
 ]
 
 [dependency-groups]

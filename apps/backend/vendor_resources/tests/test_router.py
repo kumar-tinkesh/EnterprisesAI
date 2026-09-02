@@ -2,7 +2,7 @@
 
 Covers: MCP server creation/listing, RBAC (admin vs non-admin),
 the access-filtered catalog across roles, tenant grants (create +
-idempotent), and MCP server deletion with grant cascade.
+idempotent), MCP server deletion with grant cascade, and repo analysis.
 """
 from __future__ import annotations
 
@@ -20,6 +20,10 @@ def _mcp_payload(name="finance.getInvoice", is_global=False):
         "bound_tools": ["getInvoice"],
         "is_global": is_global,
     }
+
+
+def _analyze_repo_payload(repo_url="https://github.com/org/mcp-server"):
+    return {"repo_url": repo_url}
 
 
 # ── health ───────────────────────────────────────────────────────────
@@ -185,3 +189,57 @@ async def test_delete_mcp_cascades_grants(admin_client, tenant_client, tenant):
 async def test_delete_mcp_not_found(admin_client):
     res = await admin_client.delete(f"{BASE}/nonexistent-server-id")
     assert res.status_code == 404
+
+
+# ── MCP repo analysis ────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_analyze_repo_as_vendor_admin(admin_client):
+    """Vendor admin can analyze a GitHub repository for MCP characteristics."""
+    res = await admin_client.post(
+        f"{BASE}/mcp/analyze-repo",
+        json=_analyze_repo_payload("https://github.com/modelcontextprotocol/servers"),
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert "detected" in body
+    assert "transport" in body
+    assert "runtime" in body
+    assert "suggested_command" in body
+    assert "remote_endpoint" in body
+    assert "required_env_vars" in body
+    assert "auth_type" in body
+    assert "hints" in body
+
+
+@pytest.mark.asyncio
+async def test_analyze_repo_as_solo_user_forbidden(solo_client):
+    """Solo users cannot access the analyze-repo endpoint."""
+    res = await solo_client.post(
+        f"{BASE}/mcp/analyze-repo",
+        json=_analyze_repo_payload("https://github.com/org/repo"),
+    )
+    assert res.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_analyze_repo_validation_error(admin_client):
+    """Missing repo_url should return validation error."""
+    res = await admin_client.post(f"{BASE}/mcp/analyze-repo", json={})
+    assert res.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_analyze_repo_invalid_url(admin_client):
+    """Invalid URL should return error."""
+    res = await admin_client.post(
+        f"{BASE}/mcp/analyze-repo",
+        json=_analyze_repo_payload("not-a-valid-url"),
+    )
+    # Should handle gracefully - may return 200 with error info or 400
+    assert res.status_code in (200, 400)
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

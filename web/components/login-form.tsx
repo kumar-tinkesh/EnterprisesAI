@@ -7,7 +7,7 @@ import { useForm } from "react-hook-form";
 import { LogIn } from "lucide-react";
 
 import { api, ApiError } from "@/lib/api";
-import { dashboardPathForRole, loginSchema } from "@/lib/validations";
+import { dashboardPathForRole, loginSchema, type LoginValues } from "@/lib/validations";
 import { useAuthStore } from "@/stores/auth-store";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

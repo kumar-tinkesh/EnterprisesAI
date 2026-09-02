@@ -6,6 +6,7 @@ from vendor_resources.services.mcp_service import (
     grant_resource,
     list_mcp_servers,
 )
+from vendor_resources.services.repo_analyzer import analyze_repo
 
 __all__ = [
     "create_mcp_server",
@@ -13,4 +14,5 @@ __all__ = [
     "get_mcp_server",
     "delete_mcp_server",
     "grant_resource",
+    "analyze_repo",
 ]
