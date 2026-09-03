@@ -1,47 +1,72 @@
 # EnterpriseAI — Architecture & Component Authentication Flows
 
-This document provides a comprehensive technical overview of the **EnterpriseAI Platform Architecture**, detailing the **Flow of Each Component**, the **3-Tier Multi-Tenant Security Hierarchy**, the **End-to-End Authentication & Execution Model**, and the **Role Interaction & MCP Server Lifecycle Guide**.
+This document provides a comprehensive technical overview of the **EnterpriseAI Platform Architecture**, detailing the **Flow of Each Component**, the **3-Tier Multi-Tenant Security Hierarchy**, the **End-to-End Authentication & Execution Model**, and the **Role Interaction & Universal MCP Server Lifecycle Guide**.
+
+> Last updated: 2026-09-03 — reflects the current `main-llmgatway-vendor` deployment (5 containers + optional Postgres), the Universal MCP Engine (GitHub repo analysis → isolated stdio/remote execution), and the stdio process-isolation hardening (`uv run --directory`, env sanitization, repo-cache reuse).
 
 ---
 
 ## 1. System Overview & Component Topology
 
-EnterpriseAI is structured into microservices with centralized shared database access and standardized authentication token contracts:
+EnterpriseAI is structured into microservices with centralized shared database access and standardized authentication token contracts (RS256 JWT issued by `auth`, verified by every other service). All HTTP services are FastAPI except the Next.js frontend:
 
-```
- ┌─────────────────────────────────────────────────────────────────────────────┐
- │                         ENTERPRISE AI PLATFORM                              │
- │                                                                             │
- │  ┌─────────────────┐       ┌─────────────────┐       ┌──────────────────┐  │
- │  │   Next.js Web   │       │   Auth Service  │       │ Backend Service  │  │
- │  │    (Frontend)   │       │  (apps/auth)    │       │  (apps/backend)  │  │
- │  │    Port 3000    │       │    Port 8001    │       │    Port 8002     │  │
- │  └────────┬────────┘       └────────┬────────┘       └────────┬─────────┘  │
- │           │                         │                         │            │
- │           │ REST / JWT              │ DB Session / RLS        │ FastAPI    │
- │           ▼                         ▼                         ▼            │
- │  ┌───────────────────────────────────────────────────────────────────────┐  │
- │  │                     LLM Gateway (apps/llm_gateway)                    │  │
- │  │           LiteLLM Provider Router (OpenAI, Groq, Gemini)              │  │
- │  └──────────────────────────────────┬────────────────────────────────────┘  │
- │                                     │                                       │
- │                                     ▼                                       │
- │                  ┌─────────────────────────────────────┐                    │
- │                  │    Central Database (data/auth.db)   │                    │
- │                  │       SQLAlchemy 2.0 / SQLite       │                    │
- │                  └─────────────────────────────────────┘                    │
- └─────────────────────────────────────────────────────────────────────────────┘
+```text
+ ┌───────────────────────────────────────────────────────────────────────────────────────────┐
+ │                            ENTERPRISEAI PLATFORM — RUNTIME TOPOLOGY                       │
+ │                                                                                           │
+ │                        ┌──────────────────────────────────────────┐                       │
+ │                        │              BROWSER (Operator)          │                       │
+ │                        │        Next.js 15 UI   web :3000         │                       │
+ │                        └───────┬──────────────────────────┬───────┘                       │
+ │                                │ Bearer JWT               │ Bearer JWT                    │
+ │               ┌────────────────┴─────────┐  ┌──────────────┴────────────────┐             │
+ │               ▼                          │  ▼                               │             │
+ │  ┌─────────────────────┐                │  ┌────────────────────────────┐  │             │
+ │  │ AUTH SERVICE        │                │  │ BACKEND SERVICE            │  │             │
+ │  │ apps/auth   :8001   │                │  │ apps/backend       :8002   │  │             │
+ │  │ · login/refresh/JWKS│                │  │ · /vendor/resources/mcp/*  │  │             │
+ │  │ · tenants, users    │                │  │ · catalog / grants / vault │  │             │
+ │  │ · SSO (Google OIDC) │                │  │ · Universal MCP Engine ────┼──┼──┐          │
+ │  │ · audit events      │                │  └────────────────────────────┘  │  │          │
+ │  └──────────┬──────────┘                │                                  │  │          │
+ │             │     SQLAlchemy (async)    │                                  │  │          │
+ │             ▼                           ▼                                  │  ▼          │
+ │  ┌──────────────────────────────────────────────┐      MCP stdio subprocess │  ┌───────┐│
+ │  │ CENTRAL DATABASE                             │      (per server, own venv)│  │ REDIS ││
+ │  │ data/auth.db  SQLite (default)               │                            │  │ :6379 ││
+ │  │ or  db :5432  Postgres 16 (DATABASE_URL opt) │                            │  └───────┘│
+ │  │ tenants · users · workspaces · grants        │                            │           │
+ │  │ vendor_tools · vendor_mcp_servers · audit    │                            │           │
+ │  └──────────────────────────────────────────────┘                            │           │
+ │                                                                              ▼           │
+ │  ┌──────────────────────────────────────────────────────────────────────────────────┐    │
+ │  │  MCP SERVER SANDBOX (spawned by backend, one process per server)                 │    │
+ │  │  /tmp/mcp_repos/{owner}_{repo}  ← git clone --depth 1 (tarball fallback)         │    │
+ │  │  isolated venv via `uv run --directory <project>`  ·  npm install/build for Node │    │
+ │  │  sanitized env (no backend VIRTUAL_ENV/PYTHONPATH leak)                          │    │
+ │  └──────────────────────────────────────────────────────────────────────────────────┘    │
+ │                                                                                           │
+ │  ┌────────────────────────────┐        ┌─────────────────────────────────────────────┐   │
+ │  │ LLM GATEWAY  :4000         │        │ EXTERNAL MCP SERVERS                        │   │
+ │  │ apps/llm_gateway           │        │ · remote: streamable-HTTP / SSE endpoints   │   │
+ │  │ openai · groq · gemini ·   │        │ · local:  GitHub repos run as stdio procs   │   │
+ │  │ litellm router + embeddings│        │   (whatsapp-mcp, mcp-weather, …, any repo)  │   │
+ │  └─────────────┬──────────────┘        └─────────────────────────────────────────────┘   │
+ │                ▼                                                                          │
+ │        Redis :6379 (LiteLLM caching / rate limiting)                                      │
+ └───────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Microservice Roles
 
 | Component | Directory | Port | Primary Responsibility |
 | :--- | :--- | :---: | :--- |
-| **Frontend UI** | `web/` | `3000` | Next.js 15 App Router interface. Handles state management (`zustand`), form validation (`zod`), and protected dashboard routes. |
-| **Auth Service** | `apps/auth/` | `8001` | Manages User identities, Tenants, Workspaces, Argon2id passwords, OIDC/Google SSO, JWKS token issuing, and Audit Events. |
-| **Backend Service** | `apps/backend/` | `8002` | Vendor Resources Subsystem: MCP Servers (SSE/Stdio), REST Tool Ingestion, Vault encryption, Tenant Grants, and AI Compiler. |
-| **LLM Gateway** | `apps/llm_gateway/` | N/A | Provider abstraction for LiteLLM, Groq, Gemini, and OpenAI. Embeddings generation and structured prompt execution. |
-| **Central Database** | `data/auth.db` | N/A | Single SQLite/Postgres database housing all tenant, user, resource, grant, and audit tables. |
+| **Frontend UI** | `web/` | `3000` | Next.js 15 App Router interface. Zustand auth state (`stores/auth-store.ts`), silent JWT refresh interceptor (`lib/api.ts`), role-gated routes (`/vendor`, `/tenant`, `/user`). Talks directly to `:8001` (auth) and `:8002` (vendor resources). |
+| **Auth Service** | `apps/auth/` | `8001` | User identities, Tenants, Workspaces, Argon2id passwords, Google OIDC SSO, RS256 JWKS token issuing, audit events. Also mounts the vendor-resources router under `/api/v1/vendor/resources` (parity with backend). |
+| **Backend Service** | `apps/backend/` | `8002` | Vendor Resources subsystem: **Universal MCP Engine** (analyze → register → connect), REST tool ingestion, Vault (Fernet) encryption, tenant grants, catalog. Spawns MCP servers as sandboxed subprocesses. |
+| **LLM Gateway** | `apps/llm_gateway/` | `4000` | Unified provider abstraction (OpenAI, Groq, Gemini, LiteLLM router). Chat completion + embeddings (default embedding provider: Gemini). |
+| **Redis** | `redis:7-alpine` | `6379` | LiteLLM gateway caching / rate-limiting backend. |
+| **Central Database** | `data/auth.db` / `db` | 5432 opt | Single SQLAlchemy 2.0 async database — SQLite on the `./data` volume by default, Postgres 16 container via `DATABASE_URL`. Houses tenant, user, resource, grant, and audit tables shared by auth + backend. |
 
 ---
 
@@ -66,7 +91,7 @@ Tier 3: User & Workspace               ──►  Individual user inside tenant 
 | **`tenant_user`** | Single Tenant | Belongs to a tenant. Inherits all tools/MCP resources granted to their tenant ID by vendor admin. |
 | **`solo_user`** | Personal Account | Standalone account. Directly accesses all Global Vendor Resources for personal AI agent creation. |
 
-### Standard JWT Token Payload (`RS256` / `HS256`)
+### Standard JWT Token Payload (`RS256`)
 
 Every request to `apps/auth` or `apps/backend` carries a Bearer JWT:
 
@@ -86,7 +111,7 @@ Every request to `apps/auth` or `apps/backend` carries a Bearer JWT:
 * `sub` (Subject): User ID (`users.id`).
 * `tid` (Tenant ID): Tenant ID (`tenants.id`) — used for per-tenant Row-Level Security (RLS).
 * `wid` (Workspace ID): Active workspace ID (`workspaces.id`).
-* `role`: Active user role used by FastAPI `@require_roles(...)` guards.
+* `role`: Active user role used by FastAPI `require_roles(...)` guards.
 
 ---
 
@@ -161,19 +186,86 @@ Every request to `apps/auth` or `apps/backend` carries a Bearer JWT:
 
 1. **Auth Verification Guard**:
    - Reuses `src/api/deps.py` (`get_current_user`, `require_roles`) via absolute imports from `apps/auth`.
-   - Decodes JWT signature, extracts `tenant_id` and `role`.
+   - Decodes the RS256 JWT signature against the auth service's JWKS, extracts `tid` (tenant) and `role`.
+   - Vendor-admin-only guard on all management routes: `_admin = Depends(require_roles(Roles.VENDOR_ADMIN))`.
 
-2. **Resource Provisioning Flow (Vendor Admin)**:
-   - `POST /api/v1/vendor/resources/mcp` -> Connects to MCP Server via SSE/Stdio, auto-discovers tools via `mcp.initialize()`.
-   - `POST /api/v1/vendor/resources/tools` -> Ingests REST/OpenAPI schema. Encrypts sensitive keys via Vault driver (`core/vault.py`).
+2. **Vendor Admin API surface** (`/api/v1/vendor/resources`):
 
-3. **Tenant Resource Granting Flow**:
+   | Method & Path | Purpose |
+   | :--- | :--- |
+   | `POST /mcp/analyze-repo` | Analyze a GitHub repo **without registering** — detects transport, entry command, auth type, `env_vars`, and tool list. |
+   | `POST /mcp/detect` | Probe a URL/command for transport + auth type. |
+   | `POST /mcp` (201) | Register a server. Runs an **auto-connect** at registration time: persists the row, then `connect_mcp_server()` for live tool discovery. |
+   | `GET /mcp` | List registered MCP servers (vendor admin). |
+   | `POST /mcp/{id}/connect` | Re-test connection; returns transport + discovered tools (stored encrypted credentials merged with request credentials). |
+   | `POST /mcp/{id}/embed` | Generate/refresh vector embeddings for tool discovery. |
+   | `GET /catalog` | Tenant/solo-visible merged view of tools + MCP servers (scoped by grants / `is_global`). |
+   | `POST /tools` | Ingest REST/OpenAPI tools; sensitive keys encrypted via Vault (`core/vault.py`). |
+   | `POST /grants` | Grant a resource to a tenant (`tenant_resource_grants`). |
+   | `DELETE /mcp/{id}` | Remove a registered MCP server (204). |
+
+3. **Registration → Auto-Connect Flow** (`mcp_service.py`):
+   - `register_mcp_server()` persists the row first (so registration never fails because a server is briefly offline), then attempts the live connection; connect failures are logged and don't roll back the registration.
+
+4. **Tenant Resource Granting Flow**:
    - `POST /api/v1/vendor/resources/grants` -> Writes mapping to `tenant_resource_grants` table (`tenant_id`, `resource_id`).
    - Instantly grants access to all members belonging to that `tenant_id`.
 
 ---
 
-### D. AI Compiler & Catalog Execution Flow (`apps/llm_gateway` & `catalog_engine`)
+### D. Universal MCP Engine — Connection Pipeline (`services/mcp_client.py`)
+
+This is the vendor-agnostic engine that takes any MCP server — a URL or an arbitrary GitHub repo — from analysis to a live, tool-discovered connection:
+
+```text
+ ┌────────────────────────────────────────────────────────────────────────────────────┐
+ │                             MCP CONNECTION DECISION FLOW                           │
+ └────────────────────────────────────────────────────────────────────────────────────┘
+
+        connect_mcp_server(server_url, credentials, transport, auth_type,
+                           source_repo_url, env_vars)
+                                   │
+                ┌──────────────────┴───────────────────┐
+                ▼                                      ▼
+     transport == "stdio"                     remote (auto-detect default)
+                │                                      │
+                ▼                                      ▼
+ ┌──────────────────────────────────┐   ┌─────────────────────────────────────────┐
+ │ 1. SANITIZE ENV (_sanitize_stdio │   │ 1. BUILD AUTH HEADERS (_build_auth_     │
+ │    _env) — drop VIRTUAL_ENV,     │   │    headers) from credentials + auth_type│
+ │    PYTHONPATH/PYTHONHOME,        │   │    (none / api_key / bearer / basic /   │
+ │    .venv/* PATH entries          │   │    custom-header)                       │
+ │ 2. INJECT ENV (env_vars upper-   │   └────────────────────┬────────────────────────┘
+ │    cased, skip null/empty) then  │                        │
+ │    credentials (uppercase keys)  │                        ▼
+ │ 3. PREPARE REPO (_prepare_local_ │   ┌─────────────────────────────────────────┐
+ │    repo_stdio):                  │   │ 2. ATTEMPT HANDSHAKES IN ORDER          │
+ │    · cache hit w/ manifest →     │   │    · transport="sse"    → [sse]         │
+ │      reuse, NO re-clone          │   │    · transport="http"   → [streamable   │
+ │    · stale/partial cache →       │   │      _http, sse fallback]               │
+ │      rmtree + re-fetch           │   │ 3. MCP INITIALIZE handshake             │
+ │    · git clone --depth 1        │   │    → server_info, protocol_version,     │
+ │      (fallback: GitHub tarball) │   │      ListTools discovery                │
+ │    · Node: npm install + build   │   │ 4. RETURN {transport, bound_tools,      │
+ │    · Python: pick entry →        │   │    tools, server_info, auth_type}       │
+ │      uv run --directory <proj>   │   └─────────────────────────────────────────┘
+ │      (isolated venv, correct CWD)│
+ │ 4. SPAWN StdioServerParameters   │
+ │    (command, args, env, cwd)     │
+ │ 5. MCP INITIALIZE + ListTools    │
+ └──────────────────────────────────┘
+```
+
+**Stdio repo preparation details** (`_prepare_local_repo_stdio` → `_pick_local_entry`):
+
+- **Only clones when necessary** — a GitHub URL / `git+` command triggers a fetch; a self-resolving package runner (`npx -y @org/pkg`, `uvx …`, `pipx …`) never does; `source_repo_url` alone is treated as registration metadata.
+- **Repo cache** at `/tmp/mcp_repos/{owner}_{repo}` — reused as-is when a project manifest exists at the root **or any immediate subdirectory** (e.g. `lharries/whatsapp-mcp → whatsapp-mcp-server/`); stale/manifest-less leftovers are removed before re-clone; a failed clone cleans its partial dir before the tarball fallback (GitHub tarball, `main`→`master`, extracted with `filter="data"`).
+- **Entry resolution order** — Node: `dist|build/index.js` → `package.json.bin` → `main` → root `index.js`; Python: root `server.py|main.py|mcp_server.py|app.py` → `[tool.mcp.servers]` command → `[project.scripts]` console entry → **`uv run --directory <project> <script>`** (installs the server's own deps into an isolated venv and sets the correct CWD for nested project roots) → `__main__.py` via `runpy` → recursive `**/server.py` fallback.
+- **Credential/env injection happens after sanitization**, so tenant-provided `env_vars` and credentials always win over inherited process state.
+
+---
+
+### E. AI Compiler & Catalog Execution Flow (`apps/llm_gateway` & `catalog_engine`)
 
 ```
  ┌───────────────────────┐
@@ -252,9 +344,10 @@ Every request to `apps/auth` or `apps/backend` carries a Bearer JWT:
 
 ### B. The 3-Layer Universal Architecture (Source Entry ➔ Transport ➔ Auth)
 
-```
+```text
                          ┌─────────────────────────┐
                          │   LAYER 1: ENTRY SOURCE │
+                         │  (any MCP, any vendor)  │
                          └────────────┬────────────┘
                                       │
                      ┌────────────────┴────────────────┐
@@ -263,33 +356,33 @@ Every request to `apps/auth` or `apps/backend` carries a Bearer JWT:
         ┌──────────────────────────┐       ┌──────────────────────────┐
         │   OPTION 1: REMOTE MCP   │       │   OPTION 2: GITHUB MCP   │
         │      (URL Endpoint)      │       │          REPO            │
-        │ https://example.com/mcp  │       │ https://github.com/org/  │
-        └────────────┬─────────────┘       └────────────┬─────────────┘
-                     │                                  │
-                     ▼                                  ▼
-              ┌─────────────┐                    ┌─────────────┐
-              │  TRANSPORT  │                    │   ANALYZE   │
-              │  PROBING    │                    │    REPO     │
-              └──────┬──────┘                    └──────┬──────┘
-                     │                                  │
-              ┌──────┼─────────┐                        │
-              │      │         │                        ▼
-              ▼      ▼         ▼                 ┌─────────────┐
-           Stream   SSE      HTTP                │ LAYER 2:    │
-           able     Legacy                       │ TRANSPORT   │
-           HTTP                                  └──────┬──────┘
-              │                                         │
-              │                                ┌────────┴────────┐
-              │                                │                 │
-              │                                ▼                 ▼
+        │ https://example.com/mcp  │       │ POST /mcp/analyze-repo   │
+        └────────────┬─────────────┘       │  → clone/tarball cache   │
+                     │                     │  → parse entry & auth    │
+                     ▼                     │  → auto-connect probes   │
+              ┌─────────────┐              └────────────┬─────────────┘
+              │  TRANSPORT  │                           │
+              │  PROBING    │                           ▼
+              └──────┬──────┘                    ┌─────────────┐
+                     │                           │ LAYER 2:    │
+              ┌──────┼─────────┐                 │ TRANSPORT   │
+              │      │         │                 └──────┬──────┘
+              ▼      ▼         ▼                        │
+           Stream   SSE      HTTP              ┌────────┴────────┐
+           able     Legacy                     │                 │
+           HTTP                                ▼                 ▼
               │                              stdio           HTTP/SSE
-              │                                │                 │
+              │                          (isolated uv/npm       │
+              │                           sandbox under        │
+              │                           /tmp/mcp_repos)      │
               └──────────────┬─────────────────┴─────────────────┘
                              │
                              ▼
                     ┌──────────────────┐
                     │     LAYER 3:     │
                     │  AUTHENTICATION  │
+                    │ (resolved at     │
+                    │  connect time)   │
                     └────────┬─────────┘
                              │
        ┌──────────┬──────────┼──────────┬──────────┬──────────┐
@@ -300,51 +393,69 @@ Every request to `apps/auth` or `apps/backend` carries a Bearer JWT:
                               ▼
                      ┌─────────────────┐
                      │ ENV VARIABLES   │
-                     │ (mostly stdio)  │
+                     │ + {field} subst.│
+                     │ in stdio command│
                      └────────┬────────┘
                               │
                               ▼
                      ┌─────────────────┐
                      │ TEST CONNECTION │
+                     │ (auto at reg.,  │
+                     │  manual /connect)│
                      └────────┬────────┘
                               │
                               ▼
                      ┌─────────────────┐
                      │   MCP CONNECT   │
+                     │ tools discovered│
                      └─────────────────┘
 ```
-
 ---
 
 ### C. Testing Vendor Admin Capabilities & MCP Endpoints
 
 #### 1. Automated Pytest Verification Command
 ```bash
-# Run all Vendor Resource & MCP integration tests
+# Run all Vendor Resource & MCP integration tests (96 tests as of 2026-09)
 uv run pytest apps/backend/vendor_resources/tests/
 ```
 
-#### 2. Testing MCP Server Registration via cURL
+#### 2. Universal MCP Flow via cURL — Analyze → Register → Connect
 
 ```bash
-# Step 1: Login as Vendor Admin to get Access Token
+# Step 0: Login as Vendor Admin to get Access Token
 TOKEN=$(curl -s -X POST http://localhost:8001/api/v1/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"priya@enterpriseai.io","password":"VendorAdminPassword123!"}' \
   | jq -r '.access_token')
 
-# Step 2: Register a new Global MCP Server
+# Step 1: Analyze ANY GitHub repo (no registration — dry-run detection)
+curl -X POST http://localhost:8002/api/v1/vendor/resources/mcp/analyze-repo \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"repo_url": "https://github.com/lharries/whatsapp-mcp"}'
+# → returns detected transport (stdio), entry command, auth_type, env_vars, tools
+
+# Step 2: Register the MCP Server (auto-connects & discovers tools on 201)
 curl -X POST http://localhost:8002/api/v1/vendor/resources/mcp \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "Financial Services MCP",
-    "transport": "sse",
-    "server_url": "http://localhost:9090/sse",
+    "name": "WhatsApp MCP",
+    "transport": "stdio",
+    "server_url": "whatsapp-mcp-server/main.py",
+    "source_repo_url": "https://github.com/lharries/whatsapp-mcp",
     "is_global": true
   }'
+# → 201 Created; repo cached at /tmp/mcp_repos/lharries_whatsapp-mcp,
+#   spawned via `uv run --directory ... whatsapp-mcp` in an isolated venv
 
-# Step 3: Grant an MCP Server to a specific Tenant ID
+# Step 3: Re-test the connection explicitly (returns transport + tools)
+curl -X POST http://localhost:8002/api/v1/vendor/resources/mcp/<server_id>/connect \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" -d '{}'
+
+# Step 4: Grant an MCP Server to a specific Tenant ID
 curl -X POST http://localhost:8002/api/v1/vendor/resources/grants \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
@@ -354,12 +465,12 @@ curl -X POST http://localhost:8002/api/v1/vendor/resources/grants \
     "resource_id": "mcp_server_id_here"
   }'
 
-# Step 4: Test Tenant User Catalog Visibility
+# Step 5: Test Tenant User Catalog Visibility
 USER_TOKEN=$(curl -s -X POST http://localhost:8001/api/v1/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"bob@acme.com","password":"UserPassword123!"}' \
   | jq -r '.access_token')
 
-curl -X GET "http://localhost:8002/api/v1/vendor/resources/catalog?q=refund" \
+curl -X GET "http://localhost:8002/api/v1/vendor/resources/catalog?q=whatsapp" \
   -H "Authorization: Bearer $USER_TOKEN"
 ```
