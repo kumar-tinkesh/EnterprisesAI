@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from vendor_resources.services.mcp_client import _pick_local_entry
 from vendor_resources.services.repo_analyzer import (
     _best_python_entry,
@@ -96,7 +98,7 @@ def test_python_pyproject_console_script_via_uv(tmp_path, monkeypatch):
         lambda name: "/usr/local/bin/uv" if name == "uv" else None,
     )
     cmd = _pick_local_entry(tmp_path)
-    assert cmd == ["uv", "run", "--project", str(tmp_path), "mcp-weather"]
+    assert cmd == ["uv", "run", "--directory", str(tmp_path), "mcp-weather"]
 
 
 def test_python_pyproject_tool_mcp(tmp_path):
@@ -127,14 +129,15 @@ def test_python_main_module(tmp_path):
 
 def test_python_nested_subdir_entry(tmp_path):
     """Entry file in a nested subdirectory (e.g. whatsapp-mcp-server/) is found
-    and runs via uv run --project so its own deps install in isolation."""
+    and runs via uv run --directory so its own deps install in isolation and
+    the process CWD lands in the project dir."""
     (tmp_path / "whatsapp-mcp-server").mkdir()
     (tmp_path / "whatsapp-mcp-server" / "main.py").write_text("")
     (tmp_path / "whatsapp-mcp-server" / "pyproject.toml").write_text("[project]\nname = 'x'\n")
     cmd = _pick_local_entry(tmp_path)
     assert cmd[0] == "uv"
     assert cmd[1] == "run"
-    assert cmd[2] == "--project"
+    assert cmd[2] == "--directory"
     assert cmd[3].endswith("whatsapp-mcp-server")
     assert cmd[4] == "python"
     assert cmd[5] == "main.py"
@@ -174,3 +177,89 @@ def test_python_console_entry_code(tmp_path, monkeypatch):
 def test_nothing_found(tmp_path):
     """Empty dir → None."""
     assert _pick_local_entry(tmp_path) is None
+
+
+# ── _prepare_local_repo_stdio: stale cache handling ────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_prepare_reuses_cached_repo_with_nested_manifest(monkeypatch):
+    """A cached checkout whose manifest lives in a subdirectory (e.g.
+    lharries/whatsapp-mcp → whatsapp-mcp-server/) must be REUSED — the old
+    code only recognized root manifests, so git clone re-ran and exited 128
+    ('destination path already exists')."""
+    import shutil as _shutil
+    import subprocess
+
+    import vendor_resources.services.mcp_client as mc
+
+    cache = Path("/tmp/mcp_repos/testowner_testrepo-nested")
+    _shutil.rmtree(cache, ignore_errors=True)
+    sub = cache / "whatsapp-mcp-server"
+    sub.mkdir(parents=True)
+    (sub / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    (sub / "main.py").write_text("")
+
+    clone_calls: list[list[str]] = []
+
+    def _fake_run(cmd, **kwargs):
+        clone_calls.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr("subprocess.run", _fake_run)
+    async def _no_tarball(owner, repo, dest):
+        raise AssertionError("tarball fallback must not run for a valid cache")
+
+    monkeypatch.setattr(mc, "_fetch_repo_tarball", _no_tarball)
+
+    cmd_bin, cmd_args, cwd = await mc._prepare_local_repo_stdio(
+        "main.py", "https://github.com/testowner/testrepo-nested"
+    )
+    _shutil.rmtree(cache, ignore_errors=True)
+    assert clone_calls == [], f"unexpected clone calls: {clone_calls}"
+    assert cwd == str(cache)
+    assert cmd_bin == "uv"
+    assert cmd_args[:3] == ["run", "--directory", str(sub)]
+
+
+@pytest.mark.asyncio
+async def test_prepare_removes_stale_cache_before_clone(monkeypatch):
+    """A leftover directory with NO manifest anywhere (root or subdir) is
+    stale — it must be rmtree'd so `git clone` into the same path does not
+    exit 128, then the clone proceeds."""
+    import shutil as _shutil
+    import subprocess
+
+    import vendor_resources.services.mcp_client as mc
+
+    cache = Path("/tmp/mcp_repos/testowner_testrepo-stale")
+    _shutil.rmtree(cache, ignore_errors=True)
+    (cache / "leftover-junk").mkdir(parents=True)
+    (cache / "leftover-junk" / "readme.md").write_text("junk")
+
+    def _fake_run(cmd, **kwargs):
+        # Emulate a real clone: create the destination, land a project the
+        # entry-picker resolves.
+        if cmd[:2] == ["git", "clone"]:
+            dest = Path(cmd[-1])
+            dest.mkdir(parents=True, exist_ok=True)
+            (dest / "package.json").write_text('{"main": "index.js"}')
+            (dest / "dist").mkdir()
+            (dest / "dist" / "index.js").write_text("// built output")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr("subprocess.run", _fake_run)
+    async def _no_tarball(owner, repo, dest):
+        raise AssertionError("tarball fallback must not run when clone succeeds")
+
+    monkeypatch.setattr(mc, "_fetch_repo_tarball", _no_tarball)
+
+    cmd_bin, cmd_args, cwd = await mc._prepare_local_repo_stdio(
+        "node index.js", "https://github.com/testowner/testrepo-stale"
+    )
+    _shutil.rmtree(cache, ignore_errors=True)
+    assert cwd == str(cache)
+    assert not (cache / "leftover-junk").exists() if cache.exists() else True
+    # The entry-picker (not the raw command) determines what runs.
+    assert cmd_bin == "node"
+    assert cmd_args == ["dist/index.js"]

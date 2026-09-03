@@ -256,10 +256,34 @@ async def _prepare_local_repo_stdio(
             if match:
                 owner, repo = match.groups()
                 tmp_dir = Path("/tmp/mcp_repos") / f"{owner}_{repo}"
-                tmp_dir.mkdir(parents=True, exist_ok=True)
+
+                def _has_manifest() -> bool:
+                    """True when the cached checkout contains a project
+                    manifest at the root OR in an immediate subdirectory
+                    (e.g. lharries/whatsapp-mcp → whatsapp-mcp-server/)."""
+                    if not tmp_dir.is_dir():
+                        return False
+                    if (tmp_dir / "package.json").exists() or (tmp_dir / "pyproject.toml").exists():
+                        return True
+                    try:
+                        return any(
+                            (child / "package.json").exists()
+                            or (child / "pyproject.toml").exists()
+                            for child in tmp_dir.iterdir()
+                            if child.is_dir() and not child.name.startswith(".")
+                        )
+                    except OSError:
+                        return False
+
+                if tmp_dir.exists() and not _has_manifest():
+                    # Stale/partial cache (e.g. leftover dir from a failed
+                    # clone or a manifest-less layout) — `git clone` into a
+                    # non-empty directory exits 128, so clear it first.
+                    logger.info("removing stale repo cache %s", tmp_dir)
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
 
                 # Fetch the repo if not already cached locally.
-                if not (tmp_dir / "package.json").exists() and not (tmp_dir / "pyproject.toml").exists():
+                if not _has_manifest():
                     try:
                         subprocess.run(
                             ["git", "clone", "--depth", "1", git_url, str(tmp_dir)],
@@ -273,6 +297,8 @@ async def _prepare_local_repo_stdio(
                             git_url,
                             clone_exc,
                         )
+                        # A partial clone left behind would break extraction.
+                        shutil.rmtree(tmp_dir, ignore_errors=True)
                         await _fetch_repo_tarball(owner, repo, tmp_dir)
 
                 # Install dependencies & build if Node.js project
@@ -363,34 +389,6 @@ def _best_python_entry(project_dir, pdata: dict | None) -> str | None:
     except Exception:
         pass
     return None
-    """Build a ``python -c`` snippet that runs a console-script entry.
-
-    ``entry`` is the ``[project.scripts]`` value — ``mod:obj`` or
-    ``mod:obj.attr`` (e.g. ``mcp_weather.weather:mcp.run``). Not a
-    ``python -m`` target: the object is imported and then called, mirroring
-    the generated console-script wrapper. ``None`` when the module cannot be
-    located in the repo (root or ``src/`` layout).
-    """
-    mod, _, obj_path = entry.partition(":")
-    obj_path = obj_path.strip().strip("()")
-    mod = mod.strip()
-    if not mod or not obj_path:
-        return None
-    base = _python_module_base(root, mod)
-    if base is None:
-        return None
-    code = (
-        "import importlib, sys; "
-        f"sys.path.insert(0, {str(base)!r}); "
-        f"_o = importlib.import_module({mod!r}); "
-    )
-    o = "_o"
-    for attr in obj_path.split("."):
-        attr = attr.strip()
-        if attr:
-            code += f"{o} = getattr({o}, {attr!r}, None); "
-    code += f"{o}()"
-    return code
 
 
 def _pick_local_entry(tmp_dir) -> list[str] | None:
@@ -406,7 +404,7 @@ def _pick_local_entry(tmp_dir) -> list[str] | None:
       4. root ``server.py`` / ``main.py`` / ``mcp_server.py`` / ``app.py``
       5. ``pyproject.toml`` ``[tool.mcp.servers]`` declared command
       6. ``pyproject.toml`` ``[project.scripts]`` console entry →
-         ``uv run --project <repo> <name>`` (auto-installs deps), else a
+         ``uv run --directory <project> <name>`` (auto-installs deps), else a
          ``python -c`` invocation of the declared ``module:obj.attr()``
       7. package ``__main__.py`` (flat or ``src/``) via ``runpy``
       8. recursive ``**/server.py`` / ``**/main.py`` (skips tool dirs)
@@ -468,9 +466,11 @@ def _pick_local_entry(tmp_dir) -> list[str] | None:
             pdata = None
 
     # If we have a pyproject.toml and uv is available, run the entry via
-    # `uv run --project` so the server's own deps (e.g. mcp 1.x / FastMCP)
+    # `uv run --directory` so the server's own deps (e.g. mcp 1.x / FastMCP)
     # are installed in isolation instead of using the backend's system
-    # Python (which may ship an incompatible mcp version).
+    # Python (which may ship an incompatible mcp version). ``--directory``
+    # (not ``--project``) also changes the process CWD into the project —
+    # required for entry files resolved relative to a nested project root.
     if pdata and shutil.which("uv"):
         scripts = (
             (pdata.get("project") or {}).get("scripts")
@@ -479,10 +479,10 @@ def _pick_local_entry(tmp_dir) -> list[str] | None:
         )
         if scripts:
             name = next(iter(scripts.keys()))
-            return ["uv", "run", "--project", str(project_dir), str(name)]
+            return ["uv", "run", "--directory", str(project_dir), str(name)]
         entry = _best_python_entry(project_dir, pdata)
         if entry:
-            return ["uv", "run", "--project", str(project_dir), "python", entry]
+            return ["uv", "run", "--directory", str(project_dir), "python", entry]
 
     # No uv available — best-effort fallbacks using the system Python.
     if pdata:
