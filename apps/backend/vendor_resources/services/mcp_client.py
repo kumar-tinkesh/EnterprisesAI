@@ -571,6 +571,27 @@ async def _fetch_repo_tarball(owner: str, repo: str, dest_dir) -> None:
         shutil.copytree(extracted, dest_dir, dirs_exist_ok=True)
 
 
+def _sanitize_stdio_env(env: dict[str, str]) -> dict[str, str]:
+    """Drop backend-virtualenv state that must not leak into spawned servers.
+
+    The backend itself runs under ``uv run``, so ``os.environ`` carries
+    ``VIRTUAL_ENV`` (uv then warns "does not match the project environment
+    path" for every spawned server) and potentially ``PYTHON*`` variables
+    whose paths could shadow the server's own dependencies. Venv ``bin``
+    entries on ``PATH`` are dropped too; system paths (and ``uv`` itself)
+    remain resolvable.
+    """
+    from pathlib import Path
+
+    stray_keys = {"VIRTUAL_ENV", "PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP", "PYTHONUSERBASE"}
+    cleaned = {k: v for k, v in env.items() if k not in stray_keys}
+    path = cleaned.get("PATH")
+    if path:
+        kept = [p for p in path.split(os.pathsep) if p and ".venv" not in Path(p).parts]
+        cleaned["PATH"] = os.pathsep.join(kept)
+    return cleaned
+
+
 async def _connect_stdio(
     command: str,
     credentials: dict[str, str] | None,
@@ -581,7 +602,7 @@ async def _connect_stdio(
     ``env_vars`` as environment variables and substitute ``{field}``
     placeholders in the command with credential values
     (e.g. ``npx -y x/y-mcp --token {api_key}``)."""
-    env = {**os.environ}
+    env = _sanitize_stdio_env({**os.environ})
     if isinstance(env_vars, dict):
         # Skip empty values and JSON "null" strings persisted by the UI.
         env.update(

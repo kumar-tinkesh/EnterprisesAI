@@ -179,6 +179,28 @@ def test_nothing_found(tmp_path):
     assert _pick_local_entry(tmp_path) is None
 
 
+def test_sanitize_stdio_env_drops_backend_venv_state():
+    """Spawned servers must not inherit the backend's venv state: uv would
+    warn (VIRTUAL_ENV mismatch) and stray PYTHON* vars could shadow the
+    server's own dependencies."""
+    from vendor_resources.services.mcp_client import _sanitize_stdio_env
+
+    env = {
+        "VIRTUAL_ENV": "/app/.venv",
+        "PYTHONPATH": "/app/.venv/lib/site-packages",
+        "PYTHONHOME": "/usr",
+        "PATH": "/app/.venv/bin:/usr/local/bin:/usr/bin:/bin",
+        "KEEP_ME": "yes",
+    }
+    cleaned = _sanitize_stdio_env(env)
+    assert "VIRTUAL_ENV" not in cleaned
+    assert "PYTHONPATH" not in cleaned
+    assert "PYTHONHOME" not in cleaned
+    assert cleaned["KEEP_ME"] == "yes"
+    assert ".venv" not in cleaned["PATH"]
+    assert "/usr/local/bin:/usr/bin:/bin" == cleaned["PATH"]
+
+
 # ── _prepare_local_repo_stdio: stale cache handling ────────────────────────
 
 
