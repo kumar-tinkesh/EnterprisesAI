@@ -339,6 +339,60 @@ def _python_console_entry_code(root, entry: str) -> str | None:
     return code
 
 
+def _best_python_entry(project_dir, pdata: dict | None) -> str | None:
+    """Pick the most likely Python entry file inside ``project_dir``.
+
+    Honors an explicit ``[tool.mcp]`` marker, otherwise chooses the first
+    matching common entry name actually present on disk.
+    """
+    pyproject_text = ""
+    try:
+        pyproject_text = (project_dir / "pyproject.toml").read_text(encoding="utf-8")
+    except Exception:
+        pyproject_text = ""
+    if "[tool.mcp]" in pyproject_text and "server" in pyproject_text:
+        return "server.py"
+
+    common = ("main.py", "server.py", "app.py", "cli.py", "mcp_server.py", "__main__.py")
+    for name in common:
+        if (project_dir / name).exists():
+            return name
+    try:
+        for f in sorted(project_dir.glob("*.py")):
+            return f.name
+    except Exception:
+        pass
+    return None
+    """Build a ``python -c`` snippet that runs a console-script entry.
+
+    ``entry`` is the ``[project.scripts]`` value — ``mod:obj`` or
+    ``mod:obj.attr`` (e.g. ``mcp_weather.weather:mcp.run``). Not a
+    ``python -m`` target: the object is imported and then called, mirroring
+    the generated console-script wrapper. ``None`` when the module cannot be
+    located in the repo (root or ``src/`` layout).
+    """
+    mod, _, obj_path = entry.partition(":")
+    obj_path = obj_path.strip().strip("()")
+    mod = mod.strip()
+    if not mod or not obj_path:
+        return None
+    base = _python_module_base(root, mod)
+    if base is None:
+        return None
+    code = (
+        "import importlib, sys; "
+        f"sys.path.insert(0, {str(base)!r}); "
+        f"_o = importlib.import_module({mod!r}); "
+    )
+    o = "_o"
+    for attr in obj_path.split("."):
+        attr = attr.strip()
+        if attr:
+            code += f"{o} = getattr({o}, {attr!r}, None); "
+    code += f"{o}()"
+    return code
+
+
 def _pick_local_entry(tmp_dir) -> list[str] | None:
     """Heuristically pick the most likely MCP entry command from a clone.
 
@@ -390,7 +444,20 @@ def _pick_local_entry(tmp_dir) -> list[str] | None:
             pass
 
     # ── Python ───────────────────────────────────────────────────────────
+    # Locate the project's pyproject.toml — it may live in a subdirectory
+    # (e.g. lharries/whatsapp-mcp keeps the server in whatsapp-mcp-server/).
     pyproject = root / "pyproject.toml"
+    project_dir = root
+    if not pyproject.exists():
+        # Search immediate subdirectories for the primary project root.
+        for child in sorted(root.iterdir()):
+            if child.is_dir() and not child.name.startswith(".") and (
+                "__pycache__" not in child.parts
+            ):
+                if (child / "pyproject.toml").exists():
+                    pyproject = child / "pyproject.toml"
+                    project_dir = child
+                    break
     pdata: dict | None = None
     if pyproject.exists():
         try:
@@ -400,9 +467,35 @@ def _pick_local_entry(tmp_dir) -> list[str] | None:
         except Exception:
             pdata = None
 
-    for rel in ("server.py", "main.py", "mcp_server.py", "app.py"):
-        if (root / rel).exists():
-            return ["python", rel]
+    # If we have a pyproject.toml and uv is available, run the entry via
+    # `uv run --project` so the server's own deps (e.g. mcp 1.x / FastMCP)
+    # are installed in isolation instead of using the backend's system
+    # Python (which may ship an incompatible mcp version).
+    if pdata and shutil.which("uv"):
+        scripts = (
+            (pdata.get("project") or {}).get("scripts")
+            or (pdata.get("project") or {}).get("gui-scripts")
+            or {}
+        )
+        if scripts:
+            name = next(iter(scripts.keys()))
+            return ["uv", "run", "--project", str(project_dir), str(name)]
+        entry = _best_python_entry(project_dir, pdata)
+        if entry:
+            return ["uv", "run", "--project", str(project_dir), "python", entry]
+
+    # No uv available — best-effort fallbacks using the system Python.
+    if pdata:
+        scripts = (
+            (pdata.get("project") or {}).get("scripts")
+            or (pdata.get("project") or {}).get("gui-scripts")
+            or {}
+        )
+        if scripts:
+            entry = next(iter(scripts.values()))
+            code = _python_console_entry_code(project_dir, entry)
+            if code:
+                return ["python", "-c", code]
 
     # [tool.mcp.servers] declared command — highest-authority Python signal.
     if pdata:
@@ -413,23 +506,10 @@ def _pick_local_entry(tmp_dir) -> list[str] | None:
             if cmd:
                 return [cmd] + list(srv.get("args") or [])[:2]
 
-    # [project.scripts] console entry (e.g. "mcp-weather" =
-    # "mcp_weather.weather:mcp.run"). NOT a `python -m` module — prefer
-    # `uv run --project <repo> <name>` (auto-installs deps), fall back to a
-    # `python -c` call importing the exact object (works when deps exist).
-    if pdata:
-        scripts = (
-            (pdata.get("project") or {}).get("scripts")
-            or (pdata.get("project") or {}).get("gui-scripts")
-            or {}
-        )
-        if scripts:
-            name, entry = next(iter(scripts.items()))
-            if shutil.which("uv"):
-                return ["uv", "run", "--project", str(root), str(name)]
-            code = _python_console_entry_code(root, entry)
-            if code:
-                return ["python", "-c", code]
+    # No uv / no pyproject — fall back to running with the system Python.
+    for rel in ("server.py", "main.py", "mcp_server.py", "app.py"):
+        if (root / rel).exists():
+            return ["python", rel]
 
     # __main__.py inside a package dir (flat or src/) — run via runpy so the
     # package resolves without PYTHONPATH plumbing.

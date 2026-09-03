@@ -126,10 +126,27 @@ def test_python_main_module(tmp_path):
 
 
 def test_python_nested_subdir_entry(tmp_path):
-    """Entry file in a nested subdirectory (e.g. whatsapp-mcp-server/) is found."""
+    """Entry file in a nested subdirectory (e.g. whatsapp-mcp-server/) is found
+    and runs via uv run --project so its own deps install in isolation."""
     (tmp_path / "whatsapp-mcp-server").mkdir()
     (tmp_path / "whatsapp-mcp-server" / "main.py").write_text("")
     (tmp_path / "whatsapp-mcp-server" / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    cmd = _pick_local_entry(tmp_path)
+    assert cmd[0] == "uv"
+    assert cmd[1] == "run"
+    assert cmd[2] == "--project"
+    assert cmd[3].endswith("whatsapp-mcp-server")
+    assert cmd[4] == "python"
+    assert cmd[5] == "main.py"
+
+
+def test_python_nested_subdir_no_pyproject(tmp_path, monkeypatch):
+    """Without a pyproject.toml the nested entry falls back to system python."""
+    (tmp_path / "whatsapp-mcp-server").mkdir()
+    (tmp_path / "whatsapp-mcp-server" / "main.py").write_text("")
+    monkeypatch.setattr(
+        "vendor_resources.services.mcp_client.shutil.which", lambda _: None
+    )
     cmd = _pick_local_entry(tmp_path)
     assert cmd == ["python", "whatsapp-mcp-server/main.py"]
 
