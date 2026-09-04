@@ -590,6 +590,15 @@ function ConnectCredentialModal({
   // check instead of `||` (an empty array is truthy in JS and would block
   // the fallback). Env keys that already have a stored value are injected
   // automatically at connect time, so only the empty ones are asked for.
+  const labelsMap: Record<string, string> = {};
+  if (Array.isArray((server.auth_config as any)?.credential_fields)) {
+    for (const f of (server.auth_config as any).credential_fields as any[]) {
+      if (f && typeof f === "object" && f.name) {
+        labelsMap[f.name] = f.label || f.name;
+      }
+    }
+  }
+
   const detectedFields: string[] = Array.isArray(
     (server.auth_config as any)?.credential_fields
   )
@@ -654,10 +663,10 @@ function ConnectCredentialModal({
                 Required Credentials{isStdio ? " (passed as environment variables)" : ""}
               </label>
               {credentialFields.map((field) => (
-                <Field key={field} label={field}>
+                <Field key={field} label={labelsMap[field] || field}>
                   <Input
                     type="password"
-                    placeholder={`Enter ${field}`}
+                    placeholder={`Enter ${labelsMap[field] || field}`}
                     value={customCreds[field] || ""}
                     onChange={(e) => setCustomCreds({ ...customCreds, [field]: e.target.value })}
                   />

@@ -366,6 +366,11 @@ async def resolve_auth(
         **{k: v for k, v in (credentials or {}).items() if v},
     }
 
+    if "GITHUB_TOKEN" in merged and "GITHUB_PERSONAL_ACCESS_TOKEN" not in merged:
+        merged["GITHUB_PERSONAL_ACCESS_TOKEN"] = merged["GITHUB_TOKEN"]
+    elif "GITHUB_PERSONAL_ACCESS_TOKEN" in merged and "GITHUB_TOKEN" not in merged:
+        merged["GITHUB_TOKEN"] = merged["GITHUB_PERSONAL_ACCESS_TOKEN"]
+
     auth_type = ((auth_config or {}).get("auth_type") or "none").lower()
 
     if auth_type in ("none", "env"):

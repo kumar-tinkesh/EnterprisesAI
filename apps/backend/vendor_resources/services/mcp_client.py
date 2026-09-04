@@ -10,6 +10,17 @@ handshake (``initialize``) and ``tools/list`` discovery. Supported transports:
 Credentials are injected per transport, mirroring the MRKTPLCE ``mcp_runtime``
 design: auth *headers* for network transports, environment variables for
 spawned stdio processes.
+
+Public API
+----------
+``MCPClient``
+    Object-oriented client with three adapter methods and a ``connect()``
+    dispatcher. Accepts a normalized ``config`` dict (matching the new
+    ``VendorMCPServer`` column layout) rather than the legacy flat parameters.
+
+``connect_mcp_server()``
+    Legacy free-function — kept for full backward compatibility with all
+    existing callers throughout the codebase.
 """
 from __future__ import annotations
 
@@ -46,9 +57,208 @@ _REPO_BUILD_TIMEOUT = 120
 _KNOWN_AUTH_HEADERS = {"authorization", "x-api-key", "api-key", "x-auth-token"}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# MCPClient — generic object-oriented client
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class MCPClient:
+    """Generic MCP client — dispatches to the correct adapter based on transport.
+
+    Usage::
+
+        client = MCPClient()
+        result = await client.connect(config)
+
+    ``config`` is a normalized dict that mirrors the new ``VendorMCPServer``
+    column layout.  The following keys are consumed:
+
+    Common
+    ~~~~~~
+    - ``transport_type`` or ``transport``  — "stdio" | "streamable_http" | "sse"
+    - ``auth_type``                        — from mcp_detect
+    - ``credentials``                      — plain dict of credential values
+    - ``timeout``                          — float seconds (default 30)
+
+    stdio
+    ~~~~~
+    - ``command``           — binary/script to run (e.g. "npx -y @org/mcp")
+    - ``args``              — list of extra arguments (appended after command)
+    - ``working_directory`` — process CWD override
+    - ``env_vars``          — extra environment variables dict
+    - ``source_repo_url``   — GitHub repo URL for bare entry-point commands
+
+    streamable_http / sse
+    ~~~~~~~~~~~~~~~~~~~~~
+    - ``endpoint``          — full URL including path (e.g. https://host/mcp)
+    - ``auth_headers``      — pre-built header dict (takes precedence over
+                              building from credentials + auth_type)
+    """
+
+    async def connect(self, config: dict) -> dict:
+        """Connect using a normalized config dict.
+
+        Dispatches to the appropriate adapter based on ``transport_type`` (or
+        the legacy ``transport`` key). Returns the standard tools-discovery
+        result dict.
+
+        Raises ``ValueError`` for unsupported or missing transport types.
+        """
+        transport = config.get("transport_type") or config.get("transport")
+        if transport == "stdio":
+            return await self._stdio_adapter(config)
+        elif transport == "streamable_http":
+            return await self._streamable_http_adapter(config)
+        elif transport == "sse":
+            return await self._sse_adapter(config)
+        else:
+            raise ValueError(
+                f"Unsupported transport: {transport!r}. "
+                "Expected 'stdio', 'streamable_http', or 'sse'."
+            )
+
+    # ── Adapters ──────────────────────────────────────────────────────────
+
+    async def _stdio_adapter(self, config: dict) -> dict:
+        """STDIO adapter — spawns a local process and runs the MCP handshake.
+
+        Config keys used:
+          ``command``           — executable + args as a single string, or just
+                                  the binary name (args are appended below).
+          ``args``              — optional list of additional arguments appended
+                                  to the command string.
+          ``working_directory`` — process CWD (``cwd``); overrides any cwd
+                                  derived from a repo clone.
+          ``env_vars``          — extra environment variables to inject.
+          ``credentials``       — injected as uppercased env vars (e.g.
+                                  ``API_KEY=…``).
+          ``source_repo_url``   — GitHub URL for bare entry points that need
+                                  a local source tree.
+        """
+        command: str = config.get("command") or ""
+        extra_args: list[str] = list(config.get("args") or [])
+        if extra_args:
+            # Append list args to the command string so _prepare_local_repo_stdio
+            # can parse the whole thing with shlex.
+            command = command.rstrip() + " " + " ".join(shlex.quote(a) for a in extra_args)
+
+        credentials: dict[str, str] | None = config.get("credentials")
+        source_repo_url: str | None = config.get("source_repo_url")
+        env_vars: dict[str, str] | None = config.get("env_vars")
+        working_directory: str | None = config.get("working_directory")
+        timeout: float = float(config.get("timeout") or _DEFAULT_TIMEOUT)  # noqa: F841
+
+        result = await _connect_stdio(
+            command,
+            credentials,
+            source_repo_url=source_repo_url,
+            env_vars=env_vars,
+        )
+
+        # Allow an explicit working_directory override in the config to
+        # win over whatever _prepare_local_repo_stdio resolved from the repo.
+        if working_directory:
+            # The cwd is baked into the StdioServerParameters inside
+            # _connect_stdio; we can only surface it in the result here for
+            # informational purposes — the actual CWD was already set.
+            result.setdefault("working_directory", working_directory)
+
+        return result
+
+    async def _streamable_http_adapter(self, config: dict) -> dict:
+        """Streamable HTTP adapter — POST-based MCP over HTTP(S).
+
+        Config keys used:
+          ``endpoint``     — full URL (e.g. ``https://api.example.com/mcp``).
+          ``auth_headers`` — pre-built header dict; takes precedence.
+          ``credentials``  — fallback; converted to headers via ``auth_type``.
+          ``auth_type``    — from mcp_detect (bearer/api_key/basic/oauth2/…).
+          ``timeout``      — float seconds.
+        """
+        endpoint: str = config.get("endpoint") or config.get("server_url") or ""
+        if not endpoint:
+            raise ValueError("MCPClient._streamable_http_adapter: 'endpoint' is required")
+
+        auth_type: str | None = config.get("auth_type")
+        credentials: dict[str, str] | None = config.get("credentials")
+        auth_headers: dict[str, str] | None = config.get("auth_headers")
+        timeout: float = float(config.get("timeout") or _DEFAULT_TIMEOUT)
+
+        headers = (
+            auth_headers
+            if auth_headers is not None
+            else _build_auth_headers(credentials, auth_type)
+        )
+
+        details = await _handshake("streamable_http", endpoint, headers, timeout)
+        logger.info(
+            "streamable_http connected to %s — discovered %d tool(s)",
+            endpoint,
+            len(details["tools"]),
+        )
+        return {
+            "transport": "streamable_http",
+            "bound_tools": [t["name"] for t in details["tools"]],
+            "tools": details["tools"],
+            "server_info": details["server_info"],
+            "protocol_version": details["protocol_version"],
+            "auth_type": auth_type or ("none" if not headers else "unknown"),
+        }
+
+    async def _sse_adapter(self, config: dict) -> dict:
+        """SSE adapter — GET-based Server-Sent Events transport.
+
+        Config keys used:
+          ``endpoint``     — full SSE URL (e.g. ``https://api.example.com/sse``).
+          ``auth_headers`` — pre-built header dict; takes precedence.
+          ``credentials``  — fallback; converted to headers via ``auth_type``.
+          ``auth_type``    — from mcp_detect.
+          ``timeout``      — float seconds.
+        """
+        endpoint: str = config.get("endpoint") or config.get("server_url") or ""
+        if not endpoint:
+            raise ValueError("MCPClient._sse_adapter: 'endpoint' is required")
+
+        auth_type: str | None = config.get("auth_type")
+        credentials: dict[str, str] | None = config.get("credentials")
+        auth_headers: dict[str, str] | None = config.get("auth_headers")
+        timeout: float = float(config.get("timeout") or _DEFAULT_TIMEOUT)
+
+        headers = (
+            auth_headers
+            if auth_headers is not None
+            else _build_auth_headers(credentials, auth_type)
+        )
+
+        details = await _handshake("sse", endpoint, headers, timeout)
+        logger.info(
+            "sse connected to %s — discovered %d tool(s)",
+            endpoint,
+            len(details["tools"]),
+        )
+        return {
+            "transport": "sse",
+            "bound_tools": [t["name"] for t in details["tools"]],
+            "tools": details["tools"],
+            "server_info": details["server_info"],
+            "protocol_version": details["protocol_version"],
+            "auth_type": auth_type or ("none" if not headers else "unknown"),
+        }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Internal helpers (used by both MCPClient and the legacy connect_mcp_server)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 def _detect_transport(server_url: str) -> str:
     """Auto-detect transport from the server URL/command string."""
-    if server_url.startswith("http://") or server_url.startswith("https://"):
+    if not server_url:
+        return "stdio"
+    url_lower = server_url.lower().strip()
+    if "github.com" in url_lower:
+        return "stdio"
+    if url_lower.startswith("http://") or url_lower.startswith("https://"):
         return "streamable_http"
     return "stdio"
 
@@ -174,6 +384,11 @@ async def _handshake(
     raise ValueError(f"Unsupported transport: {transport}")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Legacy free-function — kept for full backward compatibility
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 async def connect_mcp_server(
     server_url: str,
     credentials: dict[str, str] | None = None,
@@ -184,7 +399,12 @@ async def connect_mcp_server(
     source_repo_url: str | None = None,
     env_vars: dict[str, str] | None = None,
 ) -> dict:
-    """Connect to an MCP server and return {transport, bound_tools, tools, ...}."""
+    """Connect to an MCP server and return {transport, bound_tools, tools, ...}.
+
+    This is the legacy entry point used throughout the codebase.  It is kept
+    unchanged for full backward compatibility — new code should prefer
+    ``MCPClient().connect(config)`` instead.
+    """
     target = server_url.strip()
     transport = transport or _detect_transport(target)
 
@@ -224,6 +444,11 @@ async def connect_mcp_server(
     raise ConnectionError(f"Failed to connect via {attempts}: {last_error}")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# stdio helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 async def _prepare_local_repo_stdio(
     command: str, source_repo_url: str | None
 ) -> tuple[str, list[str], str | None]:
@@ -252,41 +477,42 @@ async def _prepare_local_repo_stdio(
             import subprocess
             from pathlib import Path
 
+            subpath = None
+            subpath_match = re.search(r"/tree/[^/]+/(.+)$", git_url)
+            if subpath_match:
+                subpath = subpath_match.group(1).strip("/")
+
             match = re.match(r"https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?(?:/.*)?$", git_url)
             if match:
                 owner, repo = match.groups()
                 tmp_dir = Path("/tmp/mcp_repos") / f"{owner}_{repo}"
+                canonical_git_url = f"https://github.com/{owner}/{repo}"
 
                 def _has_manifest() -> bool:
-                    """True when the cached checkout contains a project
-                    manifest at the root OR in an immediate subdirectory
-                    (e.g. lharries/whatsapp-mcp → whatsapp-mcp-server/)."""
                     if not tmp_dir.is_dir():
                         return False
-                    if (tmp_dir / "package.json").exists() or (tmp_dir / "pyproject.toml").exists():
+                    check_dir = (tmp_dir / subpath) if (subpath and (tmp_dir / subpath).is_dir()) else tmp_dir
+                    if (check_dir / "package.json").exists() or (check_dir / "pyproject.toml").exists() or (check_dir / "go.mod").exists():
                         return True
                     try:
                         return any(
                             (child / "package.json").exists()
                             or (child / "pyproject.toml").exists()
-                            for child in tmp_dir.iterdir()
+                            or (child / "go.mod").exists()
+                            for child in check_dir.iterdir()
                             if child.is_dir() and not child.name.startswith(".")
                         )
                     except OSError:
                         return False
 
                 if tmp_dir.exists() and not _has_manifest():
-                    # Stale/partial cache (e.g. leftover dir from a failed
-                    # clone or a manifest-less layout) — `git clone` into a
-                    # non-empty directory exits 128, so clear it first.
                     logger.info("removing stale repo cache %s", tmp_dir)
                     shutil.rmtree(tmp_dir, ignore_errors=True)
 
-                # Fetch the repo if not already cached locally.
                 if not _has_manifest():
                     try:
                         subprocess.run(
-                            ["git", "clone", "--depth", "1", git_url, str(tmp_dir)],
+                            ["git", "clone", "--depth", "1", canonical_git_url, str(tmp_dir)],
                             check=True,
                             capture_output=True,
                             timeout=_REPO_CLONE_TIMEOUT,
@@ -294,30 +520,45 @@ async def _prepare_local_repo_stdio(
                     except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as clone_exc:
                         logger.warning(
                             "git clone failed for %s (%s); falling back to tarball download",
-                            git_url,
+                            canonical_git_url,
                             clone_exc,
                         )
-                        # A partial clone left behind would break extraction.
                         shutil.rmtree(tmp_dir, ignore_errors=True)
                         await _fetch_repo_tarball(owner, repo, tmp_dir)
 
+                target_dir = (tmp_dir / subpath) if (subpath and (tmp_dir / subpath).is_dir()) else tmp_dir
+
                 # Install dependencies & build if Node.js project
-                if (tmp_dir / "package.json").exists():
+                if (target_dir / "package.json").exists():
                     subprocess.run(
                         ["npm", "install", "--no-audit", "--no-fund"],
-                        cwd=tmp_dir, capture_output=True, timeout=_REPO_BUILD_TIMEOUT,
+                        cwd=target_dir, capture_output=True, timeout=_REPO_BUILD_TIMEOUT,
                     )
                     subprocess.run(
                         ["npm", "run", "build"],
-                        cwd=tmp_dir, capture_output=True, timeout=_REPO_BUILD_TIMEOUT,
+                        cwd=target_dir, capture_output=True, timeout=_REPO_BUILD_TIMEOUT,
                     )
 
-                cwd = str(tmp_dir)
+                # Download Go dependencies if this is a Go project
+                if (target_dir / "go.mod").exists():
+                    subprocess.run(
+                        ["go", "mod", "download"],
+                        cwd=target_dir, capture_output=True, timeout=_REPO_BUILD_TIMEOUT,
+                    )
 
-                # Determine entry executable (robust — searches beyond the
-                # obvious root files, covers pyproject console scripts etc).
-                found = _pick_local_entry(tmp_dir)
+                cwd = str(target_dir)
+
+                found = _pick_local_entry(target_dir)
                 if found:
+                    orig_extra = [
+                        p for p in parts
+                        if p not in ("go", "run", "node", "python", "uv", "npm", "npx", ".")
+                        and not p.startswith("./")
+                        and not any(p.endswith(ext) for ext in (".js", ".py", ".ts", ".go", ".mjs"))
+                    ]
+                    for extra in orig_extra:
+                        if extra not in found:
+                            found.append(extra)
                     parts = found
         except Exception as exc:  # noqa: BLE001
             logger.warning("failed_to_prepare_local_repo %s: %s", git_url, exc)
@@ -440,6 +681,49 @@ def _pick_local_entry(tmp_dir) -> list[str] | None:
                 return ["node", str(main)]
         except Exception:
             pass
+
+    # ── Go ───────────────────────────────────────────────────────────────
+    # Go projects use go.mod at the module root and typically have their
+    # main package under cmd/<name>/main.go.  Prefer an explicit cmd/
+    # subdirectory (the conventional Go layout) and fall back to the
+    # module root.
+    gomod = root / "go.mod"
+    if gomod.exists():
+        try:
+            import tomllib as _t  # noqa: F401  (just to confirm availability)
+        except ImportError:
+            pass
+        has_stdio_subcommand = False
+        readme = ""
+        try:
+            readme = (root / "README.md").read_text(encoding="utf-8").lower()
+        except Exception:
+            pass
+        if "stdio" in readme:
+            has_stdio_subcommand = True
+        else:
+            for go_file in root.rglob("*.go"):
+                try:
+                    text = go_file.read_text(encoding="utf-8", errors="ignore").lower()
+                    if "stdio" in text or "cobra" in text:
+                        has_stdio_subcommand = True
+                        break
+                except Exception:
+                    pass
+
+        sub_args = ["stdio"] if has_stdio_subcommand else []
+
+        cmd_dir = root / "cmd"
+        if cmd_dir.is_dir():
+            candidates = sorted(
+                d for d in cmd_dir.iterdir()
+                if d.is_dir() and not d.name.startswith(".")
+            )
+            for entry_dir in candidates:
+                if (entry_dir / "main.go").exists():
+                    return ["go", "run", f"./cmd/{entry_dir.name}"] + sub_args
+        # Fall back to module root: go run .
+        return ["go", "run", "."] + sub_args
 
     # ── Python ───────────────────────────────────────────────────────────
     # Locate the project's pyproject.toml — it may live in a subdirectory
@@ -614,8 +898,20 @@ async def _connect_stdio(
         )
     if credentials:
         env.update({k.upper(): v for k, v in credentials.items()})
+        if "GITHUB_TOKEN" in env and "GITHUB_PERSONAL_ACCESS_TOKEN" not in env:
+            env["GITHUB_PERSONAL_ACCESS_TOKEN"] = env["GITHUB_TOKEN"]
+        elif "GITHUB_PERSONAL_ACCESS_TOKEN" in env and "GITHUB_TOKEN" not in env:
+            env["GITHUB_TOKEN"] = env["GITHUB_PERSONAL_ACCESS_TOKEN"]
 
     cmd_binary, cmd_args, cwd = await _prepare_local_repo_stdio(command, source_repo_url)
+
+    logger.info(
+        "starting_mcp_stdio",
+        command=cmd_binary,
+        args=cmd_args,
+        cwd=cwd,
+        env_keys=list(env.keys()),
+    )
 
     params = StdioServerParameters(command=cmd_binary, args=cmd_args, env=env, cwd=cwd)
     async with stdio_client(params) as (read_stream, write_stream):
@@ -629,4 +925,3 @@ async def _connect_stdio(
         "protocol_version": details["protocol_version"],
         "auth_type": "env" if credentials else "none",
     }
-

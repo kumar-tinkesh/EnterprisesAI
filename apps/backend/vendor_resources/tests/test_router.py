@@ -12,6 +12,17 @@ BASE = "/api/v1/vendor/resources"
 
 
 def _mcp_payload(name="finance.getInvoice", is_global=False):
+    """New format: AddMCPServerRequest with source_url."""
+    return {
+        "name": name,
+        "description": "Retrieve a vendor invoice via MCP.",
+        "source_url": "https://mcp.example.com/invoice",
+        "is_global": is_global,
+    }
+
+
+def _mcp_payload_legacy(name="finance.getInvoice", is_global=False):
+    """Legacy format: ConnectMCPServerRequest for /mcp/legacy."""
     return {
         "name": name,
         "description": "Retrieve a vendor invoice via MCP.",
@@ -47,6 +58,7 @@ async def test_create_mcp_as_vendor_admin(admin_client):
     body = res.json()
     assert body["name"] == "mcp.alpha"
     assert body["is_global"] is True
+    assert body["status"] == "UNCONNECTED"
     assert "id" in body and len(body["id"]) == 36
 
 

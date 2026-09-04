@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 ResourceType = Literal["mcp", "datasource"]
 HttpMethod = Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
@@ -44,8 +44,73 @@ class AnalyzeRepoResponse(BaseModel):
     hints: list[str] = Field(default_factory=list, description="Analysis hints and warnings")
 
 
+class AddMCPServerRequest(BaseModel):
+    """Unified request to add an MCP server from either a Remote MCP URL or a GitHub/Source repository URL.
+
+    Step 1: Register only — analyzes source, detects transport/runtime/auth,
+    saves normalized config. Does NOT attempt connection if credentials are missing.
+    """
+
+    name: str = Field(min_length=2, max_length=255)
+    description: str = Field(default="", max_length=4000)
+    # source_url is the primary field, but we accept server_url and source_repo_url as fallbacks
+    source_url: str | None = Field(default=None, max_length=512, description="Remote MCP endpoint URL (https://...) OR GitHub/source repo URL")
+    # Accept server_url as alias for backward compatibility with old frontend
+    server_url: str | None = Field(None, max_length=512)
+    # Source repository URL (GitHub) - used when server_url is a command not a URL
+    source_repo_url: str | None = Field(None, max_length=512)
+    is_global: bool = False
+    # Optional: override detected source_type ('github' | 'remote' | 'local')
+    source_type: str | None = Field(None, pattern="^(github|remote|local)$")
+    # Optional: for GitHub monorepos, subpath to the MCP server (e.g. 'src/filesystem')
+    source_subpath: str | None = Field(None, max_length=512)
+    # Optional: branch/tag for GitHub repos
+    source_branch: str | None = Field(default="main", max_length=255)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _resolve_source_url(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+
+        # 1. Extract raw value from source_url, server_url, or source_repo_url
+        v = data.get("source_url") or data.get("server_url")
+        if not v and data.get("source_repo_url"):
+            v = data.get("source_repo_url")
+
+        # 2. If v is a dict or object (e.g. {"url": "..."}, extract url property if present)
+        if isinstance(v, dict):
+            v = v.get("url") or v.get("source_url") or v.get("href")
+
+        # Clean up dict values if sent in server_url or source_repo_url or source_url
+        if isinstance(data.get("source_url"), dict):
+            data["source_url"] = str(v) if v else None
+        if isinstance(data.get("server_url"), dict):
+            data["server_url"] = str(v) if v else None
+        if isinstance(data.get("source_repo_url"), dict):
+            data["source_repo_url"] = str(v) if v else None
+
+        # 3. If v is not a URL (e.g., npx command in server_url), check source_repo_url
+        if v and isinstance(v, str) and not (v.startswith("http://") or v.startswith("https://")):
+            repo = data.get("source_repo_url")
+            if repo and isinstance(repo, str):
+                v = repo
+
+        if v is not None:
+            data["source_url"] = str(v).strip()
+
+        return data
+
+    @field_validator("source_url", mode="after")
+    @classmethod
+    def _require_source_url(cls, v: str | None) -> str:
+        if not v or not isinstance(v, str) or not v.strip():
+            raise ValueError("Either source_url, server_url, or source_repo_url must be provided as a valid non-empty string URL")
+        return v.strip()
+
+
 class ConnectMCPServerRequest(BaseModel):
-    """Payload to register a new MCP server.
+    """Payload to register a new MCP server (legacy — kept for backward compat).
 
     Transport, bound tools, and the required credential type are
     auto-detected by probing/connecting to the server.
@@ -126,6 +191,7 @@ class MCPServerResponse(BaseModel):
     id: str
     name: str
     description: str
+    status: str
     transport: str
     server_url: str
     bound_tools: list
@@ -135,10 +201,50 @@ class MCPServerResponse(BaseModel):
     env_vars: dict | None = None
     created_at: datetime
     updated_at: datetime
+    # New normalized config fields (Section 19)
+    source_type: str | None = None
+    source_repo: str | None = None
+    source_branch: str | None = None
+    source_subpath: str | None = None
+    transport_type: str | None = None
+    transport_confidence: float | None = None
+    transport_evidence: list[dict] | None = None
+    runtime_type: str | None = None
+    command: str | None = None
+    args: list[str] | None = None
+    working_directory: str | None = None
+    endpoint: str | None = None
+    auth_type: str | None = None
+    auth_schema: dict | None = None
+
+
+class AddMCPServerResponse(BaseModel):
+    """Result of Step 1: server registered with normalized config, status=UNCONNECTED."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    description: str
+    status: str = "UNCONNECTED"
+    is_global: bool = False
+    source_type: str | None = None
+    transport_type: str | None = None
+    transport_confidence: float | None = None
+    transport_evidence: list[dict] | None = None
+    runtime_type: str | None = None
+    command: str | None = None
+    args: list[str] | None = None
+    working_directory: str | None = None
+    endpoint: str | None = None
+    auth_type: str | None = None
+    auth_schema: dict | None = None
+    created_at: datetime
+    updated_at: datetime
 
 
 class ConnectMCPServerResponse(BaseModel):
-    """Result of a connect-test: discovered transport, auth and tools."""
+    """Result of Step 2: test connection and discover tools."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -148,6 +254,7 @@ class ConnectMCPServerResponse(BaseModel):
     auth_type: str = "none"
     server_info: dict[str, Any] | None = None
     protocol_version: str | None = None
+    status: str = "VERIFIED"
 
 
 class GrantTenantResourceRequest(BaseModel):

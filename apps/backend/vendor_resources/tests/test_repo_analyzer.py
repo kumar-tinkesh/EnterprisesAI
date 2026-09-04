@@ -222,16 +222,18 @@ class TestAnalyzeRepo:
     async def test_analyze_github_repo_returns_valid_response(self):
         """Analyze GitHub repo should return valid AnalyzeRepoResponse."""
         # We mock the analyze_repo internals since it does network/git operations
-        with patch("vendor_resources.services.repo_analyzer._analyze_github_repo") as mock_analyze:
+        with patch("vendor_resources.services.repo_analyzer._analyze_github_repo_normalized") as mock_analyze:
             mock_analyze.return_value = MagicMock(
-                detected=True,
-                transport="stdio",
-                runtime="node",
-                suggested_command="npx -y mcp-server",
-                remote_endpoint=None,
-                required_env_vars=["GITHUB_TOKEN"],
-                auth_type="bearer",
-                hints=["GitHub repo analyzed"],
+                to_analyze_repo_response=lambda: MagicMock(
+                    detected=True,
+                    transport="stdio",
+                    runtime="node",
+                    suggested_command="npx -y mcp-server",
+                    remote_endpoint=None,
+                    required_env_vars=["GITHUB_TOKEN"],
+                    auth_type="bearer",
+                    hints=["GitHub repo analyzed"],
+                )
             )
             
             result = await analyze_repo("https://github.com/org/mcp-server")
@@ -246,16 +248,18 @@ class TestAnalyzeRepo:
     @pytest.mark.asyncio
     async def test_analyze_remote_http_returns_valid_response(self):
         """Analyze remote HTTP endpoint should return valid response."""
-        with patch("vendor_resources.services.repo_analyzer._analyze_remote_http") as mock_analyze:
+        with patch("vendor_resources.services.repo_analyzer._analyze_remote_http_normalized") as mock_analyze:
             mock_analyze.return_value = MagicMock(
-                detected=True,
-                transport="streamable_http",
-                runtime="remote",
-                suggested_command=None,
-                remote_endpoint="https://api.example.com/mcp",
-                required_env_vars=["API_KEY"],
-                auth_type="api_key",
-                hints=["Remote HTTP endpoint probed"],
+                to_analyze_repo_response=lambda: MagicMock(
+                    detected=True,
+                    transport="streamable_http",
+                    runtime="remote",
+                    suggested_command=None,
+                    remote_endpoint="https://api.example.com/mcp",
+                    required_env_vars=["API_KEY"],
+                    auth_type="api_key",
+                    hints=["Remote HTTP endpoint probed"],
+                )
             )
             
             result = await analyze_repo("https://api.example.com/mcp")
@@ -269,16 +273,18 @@ class TestAnalyzeRepo:
     @pytest.mark.asyncio
     async def test_analyze_local_path_returns_valid_response(self):
         """Analyze local path should return valid response."""
-        with patch("vendor_resources.services.repo_analyzer._analyze_local_path") as mock_analyze:
+        with patch("vendor_resources.services.repo_analyzer._analyze_local_path_normalized") as mock_analyze:
             mock_analyze.return_value = MagicMock(
-                detected=True,
-                transport="stdio",
-                runtime="python",
-                suggested_command="python server.py",
-                remote_endpoint=None,
-                required_env_vars=["OPENAI_API_KEY"],
-                auth_type="api_key",
-                hints=["Local directory analyzed"],
+                to_analyze_repo_response=lambda: MagicMock(
+                    detected=True,
+                    transport="stdio",
+                    runtime="python",
+                    suggested_command="python server.py",
+                    remote_endpoint=None,
+                    required_env_vars=["OPENAI_API_KEY"],
+                    auth_type="api_key",
+                    hints=["Local directory analyzed"],
+                )
             )
             
             result = await analyze_repo("/local/path/to/mcp")
@@ -287,6 +293,23 @@ class TestAnalyzeRepo:
             assert result.transport == "stdio"
             assert result.runtime == "python"
             assert result.suggested_command == "python server.py"
+
+    def test_detect_source_type(self):
+        from vendor_resources.services.repo_analyzer import detect_source_type
+        assert detect_source_type("https://github.com/org/repo") == "github"
+        assert detect_source_type("https://api.github.com/mcp") == "github"
+        assert detect_source_type("https://mcp.example.com/sse") == "remote"
+        assert detect_source_type("/local/path") == "local"
+        with pytest.raises(ValueError):
+            detect_source_type(None)
+
+    @pytest.mark.asyncio
+    async def test_analyze_repo_normalized_raises_on_invalid_type(self):
+        from vendor_resources.services.repo_analyzer import analyze_repo_normalized
+        with pytest.raises(ValueError, match="source_url must be a non-empty string"):
+            await analyze_repo_normalized(None)
+        with pytest.raises(ValueError, match="source_url must be a non-empty string"):
+            await analyze_repo_normalized("")
 
 
 if __name__ == "__main__":

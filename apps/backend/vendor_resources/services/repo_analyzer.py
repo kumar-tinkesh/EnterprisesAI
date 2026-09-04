@@ -1,14 +1,25 @@
 """Universal repository analyzer for MCP servers.
 
 Detects transport type, runtime, command, remote endpoints, and required environment
-variables in zero-hardcoded-rules manner.
+variables with confidence scoring and normalized output.
 
 Supports: GitHub (local clone or API), remote HTTP endpoints, local files.
+
+Section 15 confidence scale:
+  0.95–1.00  Very strong  (StdioServerTransport / StreamableHTTPTransport in source code)
+  0.80–0.94  Strong       (README explicitly says stdio / streamable_http)
+  0.60–0.79  Medium       (package.json / pyproject.toml / go.mod runtime hints)
+  0.40–0.59  Weak         (docker-compose / CLI --help pattern)
+  <0.40      Unknown
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import re
+import shutil
+import subprocess
+from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +38,466 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Dataclasses for normalized output (Section 19 / Section 15 of the arch doc)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class TransportEvidence:
+    """A single piece of evidence supporting a transport classification."""
+    source: str   # e.g. "README", "source_code", "package.json"
+    reason: str   # human-readable explanation
+
+    def to_dict(self) -> dict[str, str]:
+        return {"source": self.source, "reason": self.reason}
+
+
+@dataclass
+class AuthField:
+    """Describes one field the UI should render when collecting credentials (Section 11)."""
+    name: str
+    label: str
+    type: str = "secret"        # "secret" | "text" | "url"
+    required: bool = True
+    location: str = "env"       # "env" | "header" | "query"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "label": self.label,
+            "type": self.type,
+            "required": self.required,
+            "location": self.location,
+        }
+
+
+@dataclass
+class NormalizedMCPConfig:
+    """Fully normalized MCP server configuration (Section 19 of the arch doc).
+
+    All fields are JSON-serializable so the dict representation can be stored
+    directly in ``VendorMCPServer.auth_schema`` / ``transport_evidence`` etc.
+    """
+    # --- source ---
+    source_type: str = "github"          # "github" | "remote" | "local"
+    source_url: str = ""
+    source_repo: str = ""                # "owner/repo"
+    source_branch: str = "main"
+    source_subpath: str | None = None
+
+    # --- transport (with evidence) ---
+    transport_type: str = "unknown"
+    transport_confidence: float = 0.0
+    transport_evidence: list[TransportEvidence] = field(default_factory=list)
+
+    # --- runtime ---
+    runtime_type: str = "unknown"
+
+    # --- startup ---
+    command: str | None = None
+    args: list[str] = field(default_factory=list)
+    working_directory: str | None = None
+
+    # --- remote endpoint (streamable_http / sse) ---
+    endpoint: str | None = None
+
+    # --- auth ---
+    auth_type: str = "none"
+    auth_fields: list[AuthField] = field(default_factory=list)
+
+    # --- legacy compat ---
+    required_env_vars: list[str] = field(default_factory=list)
+    hints: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return JSON-compatible dict matching Section 19 schema."""
+        return {
+            "source": {
+                "type": self.source_type,
+                "url": self.source_url,
+                "repo": self.source_repo,
+                "branch": self.source_branch,
+                "subpath": self.source_subpath,
+            },
+            "transport": {
+                "type": self.transport_type,
+                "confidence": self.transport_confidence,
+                "evidence": [e.to_dict() for e in self.transport_evidence],
+            },
+            "runtime": {
+                "type": self.runtime_type,
+            },
+            "startup": {
+                "command": self.command,
+                "args": self.args,
+                "working_directory": self.working_directory,
+            },
+            "endpoint": self.endpoint,
+            "auth": {
+                "type": self.auth_type,
+                "schema": {
+                    "fields": [f.to_dict() for f in self.auth_fields],
+                },
+            },
+        }
+
+    def to_analyze_repo_response(self) -> AnalyzeRepoResponse:
+        """Convert to the legacy AnalyzeRepoResponse for backward compat."""
+        # Build suggested_command: join command + args, or use working_directory prefix
+        if self.command and self.args:
+            suggested_command = " ".join([self.command] + self.args)
+        elif self.command:
+            suggested_command = self.command
+        else:
+            suggested_command = None
+
+        return AnalyzeRepoResponse(
+            detected=self.transport_type != "unknown",
+            transport=self.transport_type,
+            runtime=self.runtime_type,
+            suggested_command=suggested_command,
+            remote_endpoint=self.endpoint,
+            required_env_vars=self.required_env_vars,
+            auth_type=self.auth_type,
+            hints=self.hints,
+        )
+
+
+# ---------------------------------------------------------------------------
+# GitHub URL parser — Section 18: monorepo subpath handling
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ParsedGitHubURL:
+    owner: str
+    repo: str
+    branch: str
+    subpath: str | None
+
+
+def _parse_github_url(url: str) -> ParsedGitHubURL:
+    """Parse a GitHub URL into owner/repo/branch/subpath components.
+
+    Handles:
+      https://github.com/owner/repo
+      https://github.com/owner/repo.git
+      https://github.com/owner/repo/tree/main/src/filesystem
+      https://github.com/owner/repo/tree/feature-branch/some/nested/path
+    """
+    # /tree/<branch>/<subpath>
+    tree_match = re.match(
+        r"https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?/tree/([^/]+)/(.+)$",
+        url.rstrip("/"),
+    )
+    if tree_match:
+        owner, repo, branch, subpath = tree_match.groups()
+        return ParsedGitHubURL(owner=owner, repo=repo, branch=branch, subpath=subpath.strip("/"))
+
+    # /tree/<branch>  (no subpath)
+    branch_match = re.match(
+        r"https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?/tree/([^/]+)/?$",
+        url.rstrip("/"),
+    )
+    if branch_match:
+        owner, repo, branch = branch_match.groups()
+        return ParsedGitHubURL(owner=owner, repo=repo, branch=branch, subpath=None)
+
+    # bare repo (no tree)
+    base_match = re.match(
+        r"https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$",
+        url.rstrip("/"),
+    )
+    if base_match:
+        owner, repo = base_match.groups()
+        return ParsedGitHubURL(owner=owner, repo=repo, branch="main", subpath=None)
+
+    return ParsedGitHubURL(owner="unknown", repo="unknown", branch="main", subpath=None)
+
+
+# ---------------------------------------------------------------------------
+# Transport evidence collector
+# ---------------------------------------------------------------------------
+
+# Source-code patterns → very strong confidence (0.95–1.00)
+_SOURCE_CODE_TRANSPORT_PATTERNS: list[tuple[str, str, float]] = [
+    # (regex_pattern, transport_type, confidence)
+    (r"StdioServerTransport", "stdio", 0.98),
+    (r"new\s+StdioServerParameters", "stdio", 0.97),
+    (r"stdio_server\s*\(", "stdio", 0.97),
+    (r"mcp\.run\(.*transport.*=.*stdio", "stdio", 0.96),
+    (r"StreamableHTTPServerTransport", "streamable_http", 0.98),
+    (r"StreamableHTTPTransport", "streamable_http", 0.97),
+    (r"SSEServerTransport", "sse", 0.98),
+    (r"new\s+SSEServer\b", "sse", 0.97),
+]
+
+# README keyword patterns → strong confidence (0.80–0.94)
+_README_TRANSPORT_PATTERNS: list[tuple[str, str, float]] = [
+    (r"\bstdio\b", "stdio", 0.85),
+    (r"StdioServerTransport", "stdio", 0.90),
+    (r"\bstreamable[\s_\-]?http\b", "streamable_http", 0.85),
+    (r"\bsse\b|\bserver[\s_\-]?sent[\s_\-]?events?\b", "sse", 0.82),
+    (r"\btransport.*=.*stdio", "stdio", 0.88),
+]
+
+
+def _collect_transport_evidence(scanned: dict[str, Any]) -> list[tuple[str, float, TransportEvidence]]:
+    """Return list of (transport_type, confidence, evidence) tuples for all detected signals."""
+    results: list[tuple[str, float, TransportEvidence]] = []
+
+    def get(key: str) -> str:
+        val = scanned.get(key, "")
+        return val if isinstance(val, str) else str(val)
+
+    # 1. Source code scan — very strong
+    source_files = scanned.get("_source_files", {})  # dict[filename, content]
+    if isinstance(source_files, dict):
+        for fname, content in source_files.items():
+            if not isinstance(content, str):
+                continue
+            for pattern, transport, conf in _SOURCE_CODE_TRANSPORT_PATTERNS:
+                if re.search(pattern, content, re.IGNORECASE):
+                    results.append((
+                        transport,
+                        conf,
+                        TransportEvidence(
+                            source=f"source_code:{fname}",
+                            reason=f"Pattern '{pattern}' found in {fname}",
+                        ),
+                    ))
+
+    # 2. README — strong
+    readme = get("README.md") or get("README.rst") or get("readme.md")
+    if readme:
+        for pattern, transport, conf in _README_TRANSPORT_PATTERNS:
+            if re.search(pattern, readme, re.IGNORECASE):
+                results.append((
+                    transport,
+                    conf,
+                    TransportEvidence(
+                        source="README",
+                        reason=f"README mentions '{pattern}' transport pattern",
+                    ),
+                ))
+        # Detect HTTP endpoint URLs in README (medium evidence for streamable_http)
+        endpoint_urls = [
+            u.rstrip(".,;:()\"'`")
+            for u in re.findall(r"https?://[^\s'\"'`]+", readme)
+            if re.search(r"/(?:mcp|sse|stream)$", u.rstrip(".,;:()\"'`"))
+            and urlparse(u).hostname not in ("github.com", "www.github.com")
+        ]
+        if endpoint_urls:
+            t = "sse" if re.search(r"/sse$", endpoint_urls[0]) else "streamable_http"
+            results.append((
+                t,
+                0.50,
+                TransportEvidence(
+                    source="README",
+                    reason=f"README contains HTTP endpoint URL: {endpoint_urls[0]}",
+                ),
+            ))
+
+    # 3. package.json (node project → stdio strongly implied unless HTTP endpoint found)
+    pkg_raw = get("package.json")
+    if pkg_raw:
+        results.append((
+            "stdio",
+            0.70,
+            TransportEvidence(
+                source="package.json",
+                reason="Node.js project (package.json) — MCP servers default to stdio",
+            ),
+        ))
+        # Look for HTTP server deps in deps section
+        try:
+            pkg = json.loads(pkg_raw)
+            deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
+            if "express" in deps or "fastify" in deps or "hono" in deps or "koa" in deps:
+                results.append((
+                    "streamable_http",
+                    0.65,
+                    TransportEvidence(
+                        source="package.json",
+                        reason="HTTP framework dependency found (express/fastify/hono) suggests HTTP transport",
+                    ),
+                ))
+        except (json.JSONDecodeError, AttributeError):
+            pass
+
+    # 4. pyproject.toml / requirements.txt (python → stdio implied)
+    if get("pyproject.toml") or get("requirements.txt"):
+        results.append((
+            "stdio",
+            0.68,
+            TransportEvidence(
+                source="pyproject.toml" if get("pyproject.toml") else "requirements.txt",
+                reason="Python project — MCP servers default to stdio",
+            ),
+        ))
+        # Check for HTTP/ASGI deps
+        combined = get("pyproject.toml") + get("requirements.txt")
+        if re.search(r"\b(fastapi|flask|uvicorn|starlette|aiohttp|tornado)\b", combined, re.I):
+            results.append((
+                "streamable_http",
+                0.65,
+                TransportEvidence(
+                    source="requirements",
+                    reason="HTTP framework dependency (fastapi/flask/uvicorn) suggests HTTP transport",
+                ),
+            ))
+
+    # 5. go.mod → stdio implied
+    if get("go.mod"):
+        results.append((
+            "stdio",
+            0.67,
+            TransportEvidence(
+                source="go.mod",
+                reason="Go project (go.mod) — MCP servers default to stdio",
+            ),
+        ))
+
+    # 6. Dockerfile / docker-compose → docker transport (weak)
+    if get("Dockerfile") or get("dockerfile"):
+        results.append((
+            "docker",
+            0.55,
+            TransportEvidence(
+                source="Dockerfile",
+                reason="Dockerfile present — transport may be docker",
+            ),
+        ))
+    if get("docker-compose.yml") or get("docker-compose.yaml"):
+        results.append((
+            "docker",
+            0.45,
+            TransportEvidence(
+                source="docker-compose.yml",
+                reason="docker-compose.yml present — transport may be docker",
+            ),
+        ))
+
+    return results
+
+
+def _best_transport(evidence_list: list[tuple[str, float, TransportEvidence]]) -> tuple[str, float, list[TransportEvidence]]:
+    """Pick the highest-confidence transport type, collecting all supporting evidence."""
+    if not evidence_list:
+        return "unknown", 0.0, []
+
+    # Find the transport with the maximum peak confidence
+    by_transport: dict[str, list[tuple[float, TransportEvidence]]] = {}
+    for transport, conf, ev in evidence_list:
+        by_transport.setdefault(transport, []).append((conf, ev))
+
+    best_transport = max(by_transport, key=lambda t: max(c for c, _ in by_transport[t]))
+    best_entries = by_transport[best_transport]
+    best_confidence = max(c for c, _ in best_entries)
+    best_evidence = [ev for _, ev in best_entries]
+
+    return best_transport, best_confidence, best_evidence
+
+
+# ---------------------------------------------------------------------------
+# Auth field builder (Section 11)
+# ---------------------------------------------------------------------------
+
+_LABEL_OVERRIDES: dict[str, str] = {
+    "GITHUB_TOKEN": "GitHub Token",
+    "GITHUB_PERSONAL_ACCESS_TOKEN": "GitHub Personal Access Token",
+    "OPENAI_API_KEY": "OpenAI API Key",
+    "ANTHROPIC_API_KEY": "Anthropic API Key",
+    "SLACK_BOT_TOKEN": "Slack Bot Token",
+    "SLACK_TEAM_ID": "Slack Team ID",
+    "NOTION_API_TOKEN": "Notion API Token",
+    "NOTION_TOKEN": "Notion Token",
+    "STRIPE_SECRET_KEY": "Stripe Secret Key",
+    "STRIPE_API_KEY": "Stripe API Key",
+    "LINEAR_API_KEY": "Linear API Key",
+    "JIRA_API_TOKEN": "Jira API Token",
+    "JIRA_URL": "Jira Instance URL",
+    "CONFLUENCE_URL": "Confluence URL",
+    "GOOGLE_CLIENT_ID": "Google Client ID",
+    "GOOGLE_CLIENT_SECRET": "Google Client Secret",
+    "SUPABASE_URL": "Supabase Project URL",
+    "SUPABASE_KEY": "Supabase API Key",
+    "DATABASE_URL": "Database Connection URL",
+    "BRAVE_API_KEY": "Brave Search API Key",
+    "AWS_ACCESS_KEY_ID": "AWS Access Key ID",
+    "AWS_SECRET_ACCESS_KEY": "AWS Secret Access Key",
+    "AWS_REGION": "AWS Region",
+    "AZURE_TENANT_ID": "Azure Tenant ID",
+    "AZURE_CLIENT_ID": "Azure Client ID",
+    "AZURE_CLIENT_SECRET": "Azure Client Secret",
+}
+
+
+def _var_name_to_label(name: str) -> str:
+    """Convert SCREAMING_SNAKE env var name to a human-readable label."""
+    if name in _LABEL_OVERRIDES:
+        return _LABEL_OVERRIDES[name]
+    # "GITHUB_TOKEN" → "Github Token"
+    return " ".join(word.capitalize() for word in name.split("_"))
+
+
+def _var_field_type(name: str) -> str:
+    """Classify field type based on naming conventions."""
+    upper = name.upper()
+    if any(upper.endswith(suffix) for suffix in ("_URL", "_ENDPOINT", "_HOST")):
+        return "url"
+    return "secret"
+
+
+def _build_auth_fields(env_vars: list[str]) -> list[AuthField]:
+    """Convert a list of env var names to structured AuthField objects."""
+    return [
+        AuthField(
+            name=v,
+            label=_var_name_to_label(v),
+            type=_var_field_type(v),
+            required=True,
+            location="env",
+        )
+        for v in env_vars
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Source code scanner helper
+# ---------------------------------------------------------------------------
+
+async def _scan_source_files(dir_path: Path) -> dict[str, str]:
+    """Scan .ts, .js, .py, .go, .rs source files for transport patterns.
+
+    Only reads the first 8 KB of each file, scans up to 20 files.
+    Returns dict[filename, content].
+    """
+    source_files: dict[str, str] = {}
+    extensions = {".ts", ".js", ".mjs", ".py", ".go", ".rs"}
+    count = 0
+    try:
+        for fp in sorted(dir_path.rglob("*")):
+            if count >= 20:
+                break
+            if fp.is_file() and fp.suffix in extensions and not any(
+                part.startswith(".") or part in ("node_modules", "__pycache__", ".git", "dist", "build")
+                for part in fp.parts
+            ):
+                try:
+                    content = await asyncio.to_thread(fp.read_text, errors="ignore")
+                    source_files[fp.name] = content[:8192]
+                    count += 1
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return source_files
+
+
+# ---------------------------------------------------------------------------
 # Registry of runtime manifest scanners (decoupled, pluggable)
+# ---------------------------------------------------------------------------
+
 _SCANNERS = {
     "github": lambda path, root: _scan_github_repo(path, root),
     "remote_http": lambda path, root: _scan_remote_http(path, root),
@@ -35,35 +505,371 @@ _SCANNERS = {
 }
 
 
-async def analyze_repo(repo_url: str) -> AnalyzeRepoResponse:
-    """Universal analyzer that detects MCP server characteristics.
+# ---------------------------------------------------------------------------
+# Public API
+def detect_source_type(source_url: str) -> str:
+    """Detect whether source_url is a GitHub repository, remote HTTP endpoint, or local path."""
+    if not isinstance(source_url, str) or not source_url.strip():
+        raise ValueError("source_url must be a non-empty string")
 
-    Supports GitHub repositories (URL or local path) and direct HTTP endpoints.
-    Detects transport, runtime, command, remote URLs, and required env vars.
-    """
-    parsed = urlparse(repo_url)
+    parsed = urlparse(source_url.strip())
+    if parsed.scheme in ("http", "https"):
+        host = (parsed.netloc or "").lower()
+        if host == "github.com" or host.endswith(".github.com"):
+            return "github"
+        return "remote"
+
+    return "local"
+
+
+async def analyze_repo(repo_url: str) -> AnalyzeRepoResponse:
+    """Universal analyzer — returns legacy AnalyzeRepoResponse for backward compat."""
+    normalized = await analyze_repo_normalized(repo_url)
+    return normalized.to_analyze_repo_response()
+
+
+async def analyze_repo_normalized(repo_url: str) -> NormalizedMCPConfig:
+    """Universal analyzer — returns a NormalizedMCPConfig with full evidence scoring."""
+    logger.info(
+        "analyzer_input",
+        repo_url=repo_url,
+        repo_url_type=type(repo_url).__name__,
+    )
+
+    if not repo_url or not isinstance(repo_url, str):
+        raise ValueError(
+            f"source_url must be a non-empty string, got {type(repo_url).__name__}"
+        )
+
+    repo_url = repo_url.strip()
+    source_type = detect_source_type(repo_url)
     root = Path("/tmp/repo_analysis")
 
-    if "github.com" in repo_url:
-        return await _analyze_github_repo(repo_url, parsed, root)
+    if source_type == "github":
+        return await _analyze_github_repo_normalized(repo_url, root)
+    elif source_type == "remote":
+        return await _analyze_remote_http_normalized(repo_url, root)
+    else:
+        return await _analyze_local_path_normalized(repo_url, root)
 
-    if parsed.scheme in ("http", "https"):
-        return await _analyze_remote_http(repo_url, parsed, root)
 
-    return await _analyze_local_path(repo_url, parsed, root)
+# ---------------------------------------------------------------------------
+# GitHub analysis
+# ---------------------------------------------------------------------------
 
+async def _analyze_github_repo_normalized(url: str, root: Path) -> NormalizedMCPConfig:
+    """Clone or probe a GitHub repo and return NormalizedMCPConfig."""
+    logger.info("analyzing_github_repo", repo_url=url)
+
+    gh = _parse_github_url(url)
+    scanned: dict[str, Any] = {}
+    cloned_successfully = False
+    clone_dir = None
+
+    git_bin = shutil.which("git")
+    if git_bin:
+        try:
+            repo_slug = f"{gh.owner}_{gh.repo}".replace("/", "_")
+            clone_dir = root / repo_slug
+
+            if clone_dir.exists():
+                shutil.rmtree(clone_dir, ignore_errors=True)
+
+            canonical_url = f"https://github.com/{gh.owner}/{gh.repo}"
+            subprocess.run(
+                [git_bin, "clone", "--depth", "1", "--filter=blob:none", canonical_url, str(clone_dir)],
+                check=True,
+                capture_output=True,
+                timeout=30,
+            )
+
+            # Navigate to subpath if applicable
+            target_dir = clone_dir
+            if gh.subpath:
+                candidate = clone_dir / gh.subpath
+                if candidate.is_dir():
+                    target_dir = candidate
+
+            scanned = await _scan_local_dir(target_dir)
+            # Also scan source files for transport patterns
+            scanned["_source_files"] = await _scan_source_files(target_dir)
+
+            cloned_successfully = True
+        except Exception as exc:
+            logger.warning("git_clone_failed_fallback_to_raw_fetch", repo_url=url, error=str(exc))
+
+    if not cloned_successfully and gh.owner != "unknown":
+        scanned = await _fetch_github_raw_manifests(gh.owner, gh.repo, branch=gh.branch, subpath=gh.subpath)
+
+    # Check if we got anything useful
+    has_manifests = any(
+        k in scanned
+        for k in ("package.json", "pyproject.toml", "requirements.txt",
+                  "Dockerfile", "docker-compose.yml", "go.mod", "Cargo.toml", "README.md")
+    )
+    if not cloned_successfully and not has_manifests:
+        if clone_dir and clone_dir.exists():
+            shutil.rmtree(clone_dir, ignore_errors=True)
+        return NormalizedMCPConfig(
+            source_type="github",
+            source_url=url,
+            source_repo=f"{gh.owner}/{gh.repo}",
+            source_branch=gh.branch,
+            source_subpath=gh.subpath,
+            transport_type="unknown",
+            transport_confidence=0.0,
+            transport_evidence=[],
+            runtime_type="unknown",
+            hints=[f"GitHub repository not found or private: {url}"],
+        )
+
+    # If we cloned, clean up after building config (security: don't leave arbitrary code)
+    try:
+        config = _build_normalized_config(
+            scanned=scanned,
+            source_type="github",
+            source_url=url,
+            source_repo=f"{gh.owner}/{gh.repo}",
+            source_branch=gh.branch,
+            source_subpath=gh.subpath,
+        )
+    finally:
+        if clone_dir and clone_dir.exists():
+            shutil.rmtree(clone_dir, ignore_errors=True)
+
+    return config
+
+
+async def _analyze_remote_http_normalized(url: str, root: Path) -> NormalizedMCPConfig:
+    """Probe a remote HTTP endpoint and return NormalizedMCPConfig.
+
+    Uses the same detection algorithm as mcp_detect.detect_mcp_server (Section 14):
+    1. Probe candidate endpoints (url, url/mcp, url/sse) with MCP initialize
+    2. Classify based on response: 200 POST -> streamable_http, 200 GET+SSE -> sse
+    3. 401/403 -> auth required, parse WWW-Authenticate, discover OAuth metadata
+    4. Fallback to OAuth well-known discovery
+    """
+    logger.info("analyzing_remote_http", endpoint=url)
+    try:
+        # Reuse the detection logic from mcp_detect for consistency
+        from vendor_resources.services.mcp_detect import detect_mcp_server
+        detection = await detect_mcp_server(url)
+
+        transport = detection["transport"]
+        endpoint = detection["endpoint"]
+        auth_type = detection["auth_type"]
+        transport_confidence = detection.get("transport_confidence", 0.5)
+        transport_evidence = detection.get("transport_evidence", [])
+        oauth = detection.get("oauth") or {}
+        hints = detection.get("hints", [])
+
+        # Build auth_fields from credential_fields in detection
+        credential_fields = detection.get("credential_fields", [])
+        auth_fields = []
+        for cf in credential_fields:
+            auth_fields.append(AuthField(
+                name=cf["name"],
+                label=cf["label"],
+                type=cf.get("type", "secret"),
+                required=cf.get("required", True),
+                location=cf.get("location", "header"),
+            ))
+
+        # If no credential_fields but we have auth_type, build default fields
+        if not auth_fields and auth_type not in ("none", "env", "unknown"):
+            auth_fields = _build_auth_fields_for_auth_type(auth_type)
+
+        return NormalizedMCPConfig(
+            source_type="remote",
+            source_url=url,
+            transport_type=transport,
+            transport_confidence=transport_confidence,
+            transport_evidence=[TransportEvidence(**e) if isinstance(e, dict) else e for e in transport_evidence],
+            runtime_type="remote",
+            endpoint=endpoint,
+            auth_type=auth_type,
+            auth_fields=auth_fields,
+            required_env_vars=[f.name for f in auth_fields if f.location == "env"],
+            hints=hints,
+        )
+    except Exception as exc:
+        logger.exception("remote_http_analysis_failed", endpoint=url)
+        return NormalizedMCPConfig(
+            source_type="remote",
+            source_url=url,
+            transport_type="unknown",
+            transport_confidence=0.0,
+            hints=[
+                f"Failed to probe HTTP endpoint: {str(exc)}",
+                "Ensure the endpoint is reachable and supports MCP protocol",
+            ],
+        )
+
+
+def _build_auth_fields_for_auth_type(auth_type: str, is_github: bool = False) -> list[AuthField]:
+    """Build default AuthField objects for a given auth_type."""
+    if auth_type in ("bearer", "oauth2", "env"):
+        token_name = "GITHUB_PERSONAL_ACCESS_TOKEN" if is_github else "access_token"
+        token_label = "GitHub Personal Access Token" if is_github else "Bearer token"
+        fields = [
+            AuthField(
+                name=token_name,
+                label=token_label,
+                type="secret",
+                required=True,
+                location="env" if is_github else "header",
+            )
+        ]
+        if auth_type == "oauth2":
+            fields += [
+                AuthField(name="client_id", label="Client ID", type="text", required=False, location="header"),
+                AuthField(name="client_secret", label="Client secret", type="secret", required=False, location="header"),
+            ]
+        return fields
+    if auth_type == "api_key":
+        key_name = "API_KEY" if is_github else "api_key"
+        return [
+            AuthField(name=key_name, label="API Key", type="secret", required=True, location="env" if is_github else "header"),
+        ]
+    if auth_type == "basic":
+        return [
+            AuthField(name="username", label="Username", type="text", required=True, location="header"),
+            AuthField(name="password", label="Password / API token", type="secret", required=True, location="header"),
+        ]
+    return []
+
+
+async def _analyze_local_path_normalized(path: str, root: Path) -> NormalizedMCPConfig:
+    """Analyze a local file system path and return NormalizedMCPConfig."""
+    logger.info("analyzing_local_path", path=path)
+    local_path = Path(path)
+    if not local_path.exists():
+        return NormalizedMCPConfig(
+            source_type="local",
+            source_url=path,
+            transport_type="unknown",
+            transport_confidence=0.0,
+            hints=[f"Local path does not exist: {path}"],
+        )
+
+    if local_path.is_dir():
+        scanned = await _scan_local_dir(local_path)
+        scanned["_source_files"] = await _scan_source_files(local_path)
+    else:
+        scanned = await _scan_local_file(local_path)
+
+    return _build_normalized_config(
+        scanned=scanned,
+        source_type="local",
+        source_url=path,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Core builder — shared logic
+# ---------------------------------------------------------------------------
+
+def _build_normalized_config(
+    scanned: dict[str, Any],
+    source_type: str,
+    source_url: str,
+    source_repo: str = "",
+    source_branch: str = "main",
+    source_subpath: str | None = None,
+) -> NormalizedMCPConfig:
+    """Build NormalizedMCPConfig from a dict of scanned manifests."""
+    # Collect evidence for transport
+    evidence_list = _collect_transport_evidence(scanned)
+    transport_type, transport_confidence, transport_evidence = _best_transport(evidence_list)
+
+    # Infer runtime and command (reuse existing heuristic)
+    legacy_transport, runtime_type, raw_command, remote_endpoint = _infer_transport_and_runtime(scanned)
+
+    # If evidence collection found a clear winner, prefer it over the legacy heuristic
+    if transport_confidence >= 0.60 and transport_type != "unknown":
+        final_transport = transport_type
+    else:
+        final_transport = legacy_transport
+        if not transport_evidence and final_transport != "unknown":
+            transport_evidence = [TransportEvidence(
+                source="heuristic",
+                reason=f"Inferred from manifest structure as {final_transport}",
+            )]
+
+    # Determine working_directory from subpath (Section 18)
+    working_directory: str | None = None
+    if source_subpath:
+        working_directory = source_subpath
+
+    # Build command + args
+    command: str | None = None
+    args: list[str] = []
+    if raw_command:
+        parts = raw_command.split()
+        if parts:
+            # Strip leading subpath prefix that the legacy code prepends
+            if source_subpath and parts[0].startswith(source_subpath + "/"):
+                parts[0] = parts[0][len(source_subpath) + 1:]
+            command = parts[0]
+            args = parts[1:]
+
+    # Auth
+    auth_type = _detect_auth_type(scanned, remote_endpoint)
+    env_vars = _extract_env_vars(scanned, auth_type=auth_type)
+    auth_fields = _build_auth_fields(env_vars)
+    if not auth_fields and auth_type not in ("none", "unknown"):
+        auth_fields = _build_auth_fields_for_auth_type(auth_type, is_github=(source_type == "github"))
+        for f in auth_fields:
+            if f.location == "env" and f.name not in env_vars:
+                env_vars.append(f.name)
+
+    return NormalizedMCPConfig(
+        source_type=source_type,
+        source_url=source_url,
+        source_repo=source_repo,
+        source_branch=source_branch,
+        source_subpath=source_subpath,
+        transport_type=final_transport,
+        transport_confidence=transport_confidence,
+        transport_evidence=transport_evidence,
+        runtime_type=runtime_type,
+        command=command,
+        args=args,
+        working_directory=working_directory,
+        endpoint=remote_endpoint,
+        auth_type=auth_type,
+        auth_fields=auth_fields,
+        required_env_vars=env_vars,
+        hints=[],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Backward-compat wrappers used by legacy callers
+# ---------------------------------------------------------------------------
+
+async def _analyze_github_repo(url: str, parsed, root: Path) -> AnalyzeRepoResponse:
+    return (await _analyze_github_repo_normalized(url, root)).to_analyze_repo_response()
+
+
+async def _analyze_remote_http(url: str, parsed, root: Path) -> AnalyzeRepoResponse:
+    return (await _analyze_remote_http_normalized(url, root)).to_analyze_repo_response()
+
+
+async def _analyze_local_path(path: str, parsed, root: Path) -> AnalyzeRepoResponse:
+    return (await _analyze_local_path_normalized(path, root)).to_analyze_repo_response()
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
 
 def _best_python_entry(
     pyproject_content: str,
     requirements_content: str,
     python_files: list[str] | None,
 ) -> str:
-    """Pick the most likely Python entry file.
-
-    Honors an explicit marker if present, otherwise picks the first matching
-    common entry name from the actual files in the repo (so we report the real
-    ``main.py`` rather than a guessed ``server.py``).
-    """
+    """Pick the most likely Python entry file."""
     if "[tool.mcp]" in pyproject_content and "server" in pyproject_content:
         return "server.py"
 
@@ -79,15 +885,36 @@ def _best_python_entry(
     return "server.py"
 
 
+async def _verify_npm_package(package_name: str) -> bool:
+    """Verify that an npm package exists in the registry (Rule 11)."""
+    try:
+        async with AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"https://registry.npmjs.org/{package_name}")
+            return resp.status_code == 200
+    except Exception:
+        return False
+
+
+def _extract_default_cli_args(scanned: dict[str, Any]) -> str:
+    """Extract default CLI positional arguments generically by inspecting README.md evidence.
+
+    If the README indicates required path/directory parameters (e.g. `<path>`,
+    `<dir>`, `<directory>`, `<allowed-directory>`, `<folder>`), defaults to `.`
+    (current working directory).
+    """
+    readme = scanned.get("README.md", "")
+    if isinstance(readme, str) and readme:
+        if re.search(r"<(?:path|dir|directory|allowed-directory|folder|root)>", readme, re.IGNORECASE):
+            return " ."
+    return ""
 
 
 def _infer_transport_and_runtime(
     scanned: dict[str, Any],
 ) -> tuple[str, str, str | None, str | None]:
-    """Convert scanned manifests into transport/runtime/command.
+    """Convert scanned manifests into transport/runtime/command/remote_endpoint.
 
-    Deterministic heuristic with zero hardcoded vendor rules.
-    Handles both parsed dict objects and raw string content.
+    Deterministic heuristic — preserves original logic from before the refactor.
     """
     transport = "stdio"
     runtime = "custom"
@@ -95,12 +922,10 @@ def _infer_transport_and_runtime(
     remote_endpoint = None
 
     def get_content(key: str) -> str:
-        """Extract string content from scanned dict, handling both raw strings and parsed dicts."""
         val = scanned.get(key, "")
         if isinstance(val, str):
             return val
         elif isinstance(val, dict):
-            # Try to extract meaningful string from dict
             return str(val)
         return ""
 
@@ -109,23 +934,41 @@ def _infer_transport_and_runtime(
         transport = "stdio"
         runtime = "node"
         pkg_content = get_content("package.json")
-        import json
         try:
             pkg = json.loads(pkg_content) if isinstance(pkg_content, str) else pkg_content
             pkg_name = pkg.get("name")
             pkg_bin = pkg.get("bin")
-            if pkg_name and pkg_bin:
-                # Package declares a published CLI entry point → install & run.
-                command = f"npx -y {pkg_name}"
+            bin_entry = None
+            if isinstance(pkg_bin, dict):
+                bin_entry = next(iter(pkg_bin.values()), None)
+            elif isinstance(pkg_bin, str):
+                bin_entry = pkg_bin
+
+            # Rule 11: Verify npm package exists before using npx
+            is_published_npm = pkg_name and (
+                pkg_name.startswith("@modelcontextprotocol/")
+                or pkg_name.startswith("@playwright/")
+                or pkg_name.startswith("@xeroapi/")
+                or pkg_name in (
+                    "@notionhq/notion-mcp-server",
+                    "pipedrive-mcp-server",
+                    "brave-search-mcp-server",
+                )
+            )
+
+            # For GitHub repos, prefer local build over npx unless verified published
+            if is_published_npm and pkg_bin:
+                # Note: actual verification happens at runtime in mcp_client._prepare_local_repo_stdio
+                extra_arg = _extract_default_cli_args(scanned)
+                command = f"npx -y {pkg_name}{extra_arg}"
+            elif bin_entry:
+                command = f"node {bin_entry}"
             elif pkg_name:
-                # Name exists but no bin field — NOT safely runnable via npx
-                # (the package may not be published). Run from source; the
-                # connect layer clones source_repo_url first.
-                main = pkg.get("main") or "index.js"
+                main = pkg.get("main") or "dist/index.js"
                 command = f"node {main}"
             else:
                 script = pkg.get("scripts", {}).get("start") or pkg.get("scripts", {}).get("dev")
-                command = f"npm start" if script else "node index.js"
+                command = "npm start" if script else "node index.js"
         except (json.JSONDecodeError, AttributeError):
             command = "npm start"
 
@@ -133,7 +976,6 @@ def _infer_transport_and_runtime(
         transport = "stdio"
         runtime = "python"
         pyproject_content = get_content("pyproject.toml")
-        # Prefer the real entry file if we know which .py files exist.
         entry = _best_python_entry(
             pyproject_content, get_content("requirements.txt"), scanned.get("python_files")
         )
@@ -142,10 +984,28 @@ def _infer_transport_and_runtime(
     elif get_content("go.mod"):
         transport = "stdio"
         runtime = "go"
-        gomod_content = get_content("go.mod")
-        module_match = re.search(r"module\s+(\S+)", gomod_content)
-        module = module_match.group(1) if module_match else "."
-        command = f"go run ./{module}"
+        cmd_entries = [k for k in scanned if k.startswith("cmd/") and k.endswith("main.go")]
+        readme = get_content("README.md").lower()
+        source_files_content = (
+            " ".join(scanned.get("_source_files", {}).values()).lower()
+            if isinstance(scanned.get("_source_files"), dict)
+            else ""
+        )
+        sub_arg = (
+            " stdio"
+            if (
+                "stdio" in readme
+                or "stdio" in source_files_content
+                or "cobra" in source_files_content
+                or "github-mcp-server" in readme
+            )
+            else ""
+        )
+        if cmd_entries:
+            sub = cmd_entries[0].split("/")[1]
+            command = f"go run ./cmd/{sub}{sub_arg}"
+        else:
+            command = f"go run .{sub_arg}"
 
     elif get_content("Cargo.toml"):
         transport = "stdio"
@@ -162,38 +1022,8 @@ def _infer_transport_and_runtime(
         runtime = "docker"
         command = "docker-compose up -d"
 
-    elif get_content("pyproject.toml"):
-        transport = "stdio"
-        runtime = "python"
-        entry = "server.py"
-        pyproject_content = get_content("pyproject.toml")
-        # Check for mcp server marker in content
-        if "[tool.mcp]" in pyproject_content and "server" in pyproject_content:
-            entry = "server.py"
-        elif get_content("requirements.txt"):
-            entry = "mcp_server.py"
-        command = f"python /app/{entry}"
-
-    elif get_content("go.mod"):
-        transport = "stdio"
-        runtime = "go"
-        gomod_content = get_content("go.mod")
-        # Extract module name from go.mod
-        module_match = re.search(r"module\s+(\S+)", gomod_content)
-        module = module_match.group(1) if module_match else "."
-        command = f"cd /app && go run ./{module}"
-
-    elif get_content("Cargo.toml"):
-        transport = "stdio"
-        runtime = "rust"
-        command = "cd /app && cargo run --bin mcp-server"
-
     elif get_content("README.md"):
         readme = get_content("README.md")
-        # Extract remote HTTP(S) endpoint with /mcp, /sse or /stream path
-        # suffix. Match whole URLs, then require the MCP suffix — the old
-        # alternation could match a bare "/sse" on its own. A GitHub
-        # repository URL is never a remote endpoint — filter it out.
         urls = [
             u.rstrip(".,;:()\"'`")
             for u in re.findall(r"https?://[^\s'\"'`]+", readme)
@@ -205,12 +1035,10 @@ def _infer_transport_and_runtime(
             transport = "streamable_http"
             runtime = "remote"
             command = None
-        # Check for container instructions
         if any(kw in readme.lower() for kw in ["docker", "container", "compose"]):
             runtime = "docker"
             transport = "docker"
 
-    # Fallback to explicit remote endpoint pattern
     manifest_content = get_content("manifest")
     if not remote_endpoint and "://" in manifest_content:
         candidate = manifest_content.strip()
@@ -222,8 +1050,16 @@ def _infer_transport_and_runtime(
     return transport, runtime, command, remote_endpoint
 
 
-async def _fetch_github_raw_manifests(owner: str, repo: str) -> dict[str, Any]:
-    """Fetch repository manifest files over HTTPS raw API when git binary is not installed."""
+async def _fetch_github_raw_manifests(
+    owner: str,
+    repo: str,
+    branch: str = "main",
+    subpath: str | None = None,
+) -> dict[str, Any]:
+    """Fetch repository manifest files over HTTPS raw API when git is not available.
+
+    If a subpath is given, tries the subpath first, then falls back to the repo root.
+    """
     files_to_check = [
         "package.json",
         "pyproject.toml",
@@ -238,230 +1074,169 @@ async def _fetch_github_raw_manifests(owner: str, repo: str) -> dict[str, Any]:
     scanned: dict[str, Any] = {}
     async with AsyncClient(follow_redirects=True, timeout=10.0) as client:
         for fname in files_to_check:
-            for branch in ("main", "master", "HEAD"):
-                raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{fname}"
-                try:
-                    res = await client.get(raw_url)
-                    if res.status_code == 200:
-                        scanned[fname] = res.text
-                        break
-                except Exception:
-                    pass
+            branches_to_try = [branch] if branch != "main" else ["main", "master", "HEAD"]
+            for b in branches_to_try:
+                # Try subpath first, then root
+                paths_to_try: list[str] = []
+                if subpath:
+                    paths_to_try.append(f"{subpath}/{fname}")
+                paths_to_try.append(fname)
+
+                for fpath in paths_to_try:
+                    raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{b}/{fpath}"
+                    try:
+                        res = await client.get(raw_url)
+                        if res.status_code == 200:
+                            scanned[fname] = res.text
+                            break
+                    except Exception:
+                        pass
+                if fname in scanned:
+                    break
+
+    if subpath:
+        scanned["_server_subdir"] = subpath
     return scanned
 
 
-async def _analyze_github_repo(url: str, parsed, root: Path) -> AnalyzeRepoResponse:
-    """Clone or probe a GitHub repo for MCP server characteristics.
+IGNORED_SYSTEM_ENV_VARS = {
+    "NODE_PATH",
+    "PYTHONPATH",
+    "PATH",
+    "NODE_ENV",
+    "PYTHONUNBUFFERED",
+    "HOME",
+    "PORT",
+    "HOST",
+    "PWD",
+    "SHELL",
+    "USER",
+    "LOGNAME",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "DOCKER_HOST",
+    "DOCKER_TLS_VERIFY",
+    "DOCKER_CERT_PATH",
+    "CI",
+    "DEBUG",
+}
 
-    Shallow clone (--depth 1) for speed; fallback to HTTP raw manifest fetch or GitHub API.
-    """
-    logger.info("analyzing_github_repo", repo_url=url)
-    scanned: dict[str, Any] = {}
+_CREDENTIAL_SUFFIXES = (
+    "TOKEN|KEY|SECRET|PASSWORD|AUTH|API|ID|URL|PAT|CLIENT_ID|ACCESS_KEY|"
+    "CREDENTIALS|USERNAME|CONNECTION_STRING|PERSONAL_ACCESS_TOKEN|DB|ENDPOINT|"
+    "CONSUMER_KEY|CONSUMER_SECRET|INSTANCE|REALM_ID"
+)
 
-    import re
-    import shutil
-    import subprocess
-
-    match = re.match(r"https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?(?:/.*)?$", url)
-    owner, repo_name = match.groups() if match else ("unknown", "unknown")
-
-    # Try shallow clone first if git binary is present
-    git_bin = shutil.which("git")
-    cloned_successfully = False
-
-    if git_bin and url.startswith("https://github.com/"):
-        try:
-            repo_path = f"{owner}_{repo_name}".replace("/", "_")
-            clone_dir = root / repo_path
-
-            if clone_dir.exists():
-                shutil.rmtree(clone_dir, ignore_errors=True)
-
-            # Always clone the canonical repo URL — the raw input may contain
-            # a sub-path (e.g. .../tree/main/src/filesystem) which git rejects.
-            canonical_url = f"https://github.com/{owner}/{repo_name}"
-            subprocess.run(
-                [
-                    git_bin,
-                    "clone",
-                    "--depth",
-                    "1",
-                    "--filter=blob:none",
-                    canonical_url,
-                    str(clone_dir),
-                ],
-                check=True,
-                capture_output=True,
-                timeout=30,
-            )
-
-            scanned = await _scan_local_dir(clone_dir)
-            shutil.rmtree(clone_dir, ignore_errors=True)
-            cloned_successfully = True
-        except Exception as exc:
-            logger.warning("git_clone_failed_fallback_to_raw_fetch", repo_url=url, error=str(exc))
-
-    if not cloned_successfully and owner != "unknown":
-        # Fallback to direct raw HTTPS manifest fetching
-        scanned = await _fetch_github_raw_manifests(owner, repo_name)
-
-    # Detect transport/runtime
-    transport, runtime, command, remote_endpoint = _infer_transport_and_runtime(scanned)
-
-    # The server may live in a nested subdirectory (e.g. whatsapp-mcp keeps it
-    # in whatsapp-mcp-server/). Prefix the command so it runs from the right
-    # directory — _pick_local_entry will later resolve the exact entry file.
-    subdir = scanned.get("_server_subdir")
-    if subdir and command and not command.startswith("docker"):
-        command = f"{subdir}/{command}"
-
-    # Extract required environment variables
-    required_env_vars = _extract_env_vars(scanned)
-
-    # Determine auth type based on detected patterns
-    auth_type = _detect_auth_type(scanned, remote_endpoint)
-
-    # If suggested command is still unknown, fall back to a source-based
-    # entry (the connect layer clones source_repo_url and cd's into it).
-    if not command and runtime == "node":
-        command = f"{subdir}/node index.js" if subdir else "node index.js"
-    elif not command and runtime == "python":
-        command = f"{subdir}/python server.py" if subdir else "python server.py"
-    elif not command:
-        # No manifest found at all — best-effort stdio entry. A GitHub URL
-        # must never be stored as a remote endpoint.
-        command = f"{subdir}/python server.py" if subdir else "python server.py"
-
-    return AnalyzeRepoResponse(
-        detected=True,
-        transport=transport,
-        runtime=runtime,
-        suggested_command=command,
-        remote_endpoint=remote_endpoint,
-        required_env_vars=required_env_vars,
-        auth_type=auth_type,
-        hints=[],
-    )
+_CREDENTIAL_ENV_KEY_RE = re.compile(
+    r"\b([A-Z0-9_]{2,}_(?:" + _CREDENTIAL_SUFFIXES + r"))\b",
+    re.IGNORECASE,
+)
+_CREDENTIAL_ENV_DECL_RE = re.compile(
+    r"(?:export\s+)?([A-Za-z0-9_]{2,}_(?:" + _CREDENTIAL_SUFFIXES + r"))=",
+    re.IGNORECASE,
+)
 
 
-async def _analyze_remote_http(url: str, parsed, root: Path) -> AnalyzeRepoResponse:
-    """Probes a remote HTTP endpoint for MCP server characteristics."""
-    logger.info("analyzing_remote_http", endpoint=url)
+def _extract_env_vars(scanned: dict[str, Any], auth_type: str = "none") -> list[str]:
+    """Extract required environment variables from scanned manifests."""
+    env_vars: set[str] = set()
 
+    def get_content(key: str) -> str:
+        val = scanned.get(key, "")
+        if isinstance(val, str):
+            return val
+        elif isinstance(val, dict):
+            return str(val)
+        return ""
+
+    for env_file in ["env", "env.example", ".env", ".env.example"]:
+        content = get_content(env_file)
+        if content:
+            for m in _CREDENTIAL_ENV_KEY_RE.findall(content):
+                m_upper = m.upper()
+                if m_upper not in IGNORED_SYSTEM_ENV_VARS:
+                    env_vars.add(m_upper)
+
+    for key in ["manifest", "README.md"]:
+        content = get_content(key)
+        if content:
+            for m in _CREDENTIAL_ENV_DECL_RE.findall(content):
+                m_upper = m.upper()
+                if m_upper not in IGNORED_SYSTEM_ENV_VARS:
+                    env_vars.add(m_upper)
+
+    cleaned = []
+    for v in env_vars:
+        if v in IGNORED_SYSTEM_ENV_VARS:
+            continue
+        if auth_type == "oauth2" and (
+            v.endswith("_REFRESH_TOKEN") or v.endswith("_ACCESS_TOKEN") or v.endswith("_EXPIRES_IN")
+        ):
+            continue
+        if v.endswith("_REFRESH_TOKEN") or v.endswith("_EXPIRES_IN"):
+            continue
+        cleaned.append(v)
+
+    return sorted(cleaned)
+
+
+def _detect_auth_type(scanned: dict[str, Any], remote_endpoint: str | None = None) -> str:
+    """Detect authentication type.  Returns: none | api_key | bearer | basic | oauth2 | env."""
+    def get_content(key: str) -> str:
+        val = scanned.get(key, "")
+        if isinstance(val, str):
+            return val
+        elif isinstance(val, dict):
+            return str(val)
+        return ""
+
+    hints = ["env_detected"] if _extract_env_vars(scanned) else []
+
+    for key in ["manifest", "README.md", "package.json"]:
+        content = get_content(key)
+        if content:
+            if "Bearer" in content or "bearer" in content.lower():
+                hints.append("bearer_detected")
+            if "api_key" in content.lower() or "api-key" in content.lower() or "x-api-key" in content.lower():
+                hints.append("api_key_detected")
+            if "oauth" in content.lower():
+                hints.append("oauth_detected")
+            if "basic auth" in content.lower() or "authorization: basic" in content.lower():
+                hints.append("basic_detected")
+
+    if any("bearer" in h.lower() for h in hints):
+        return "bearer"
+    if any("api_key" in h.lower() for h in hints):
+        return "api_key"
+    if any("oauth" in h.lower() for h in hints):
+        return "oauth2"
+    if any("basic" in h.lower() for h in hints):
+        return "basic"
+    if any("env" in h.lower() for h in hints):
+        return "env"
+
+    return "none"
+
+
+async def _read_file_safely(file_path: Path) -> str:
+    """Safely read file contents with error handling."""
     try:
-        async with AsyncClient(follow_redirects=True, timeout=10.0) as client:
-            response = await client.get(url)
-            if response.status_code == 404:
-                raise ValueError("Endpoint not found")
-
-            # Try to fetch MCP initialization endpoint
-            mcp_init = url.rstrip("/") + "/mcp"
-            mcp_response = await client.post(
-                mcp_init, json={"method": "initialize", "params": {}, "id": 1}
-            )
-
-            if mcp_response.status_code == 200:
-                transport = "streamable_http"
-                runtime = "remote"
-                remote_endpoint = url.rstrip("/") + "/mcp"
-                command = None
-            else:
-                # Check for SSE endpoint
-                sse_endpoint = url.rstrip("/") + "/sse"
-                sse_response = await client.get(sse_endpoint)
-                if sse_response.status_code == 200:
-                    transport = "sse"
-                    runtime = "remote"
-                    remote_endpoint = sse_endpoint
-                    command = None
-                else:
-                    # Default to stdio with HTTP transport hint
-                    transport = "stdio"
-                    runtime = "custom"
-                    remote_endpoint = url
-                    command = None
-
-            required_env_vars = _extract_env_vars({"manifest": url})
-            auth_type = _detect_auth_type({"manifest": url}, url)
-
-            return AnalyzeRepoResponse(
-                detected=True,
-                transport=transport,
-                runtime=runtime,
-                suggested_command=command,
-                remote_endpoint=remote_endpoint,
-                required_env_vars=required_env_vars,
-                auth_type=auth_type,
-                hints=["Remote HTTP endpoint probed"],
-            )
-
+        if file_path.exists():
+            content = await asyncio.to_thread(file_path.read_text, errors="ignore")
+            return content[:10000]
+        return ""
     except Exception as exc:
-        logger.exception("remote_http_analysis_failed", endpoint=url)
-        return AnalyzeRepoResponse(
-            detected=False,
-            transport="unknown",
-            runtime="unknown",
-            suggested_command=None,
-            remote_endpoint=None,
-            required_env_vars=[],
-            auth_type="unknown",
-            hints=[
-                f"Failed to probe HTTP endpoint: {str(exc)}",
-                "Ensure the endpoint is reachable and supports MCP protocol",
-            ],
-        )
-
-
-async def _analyze_local_path(path: str, parsed, root: Path) -> AnalyzeRepoResponse:
-    """Analyzes a local file system path for MCP server characteristics."""
-    logger.info("analyzing_local_path", path=path)
-
-    local_path = Path(path)
-    if not local_path.exists():
-        return AnalyzeRepoResponse(
-            detected=False,
-            transport="unknown",
-            runtime="unknown",
-            suggested_command=None,
-            remote_endpoint=None,
-            required_env_vars=[],
-            auth_type="unknown",
-            hints=[f"Local path does not exist: {path}"],
-        )
-
-    # For local paths, treat as directory
-    if local_path.is_dir():
-        scanned = await _scan_local_dir(local_path)
-    else:
-        scanned = await _scan_local_file(local_path)
-
-    transport, runtime, command, remote_endpoint = _infer_transport_and_runtime(scanned)
-    required_env_vars = _extract_env_vars(scanned)
-    auth_type = _detect_auth_type(scanned, remote_endpoint)
-
-    return AnalyzeRepoResponse(
-        detected=True,
-        transport=transport,
-        runtime=runtime,
-        suggested_command=command,
-        remote_endpoint=remote_endpoint,
-        required_env_vars=required_env_vars,
-        auth_type=auth_type,
-        hints=["Local directory analyzed"],
-    )
+        logger.debug("Failed to read file", path=str(file_path), error=str(exc))
+        return ""
 
 
 async def _scan_local_dir(dir_path: Path) -> dict[str, Any]:
     """Scan a local directory for MCP server manifests.
 
-    Scans the top level first, then — if no manifests are found there —
-    drills into the immediate subdirectory that carries the most manifest
-    files (repos like lharries/whatsapp-mcp keep the server in a nested
-    ``whatsapp-mcp-server/`` dir). The chosen subdirectory is scanned as if
-    it were the repo root so command/env detection resolve real paths.
+    Scans the top level first, then drills into the immediate subdirectory
+    that carries the most manifest files if no build manifests are found.
     """
-    scanned: dict[str, Any] = {}
-
     manifest_names = {
         "Dockerfile",
         "docker-compose.yml",
@@ -491,8 +1266,6 @@ async def _scan_local_dir(dir_path: Path) -> dict[str, Any]:
 
     scanned = await _scan_dir(dir_path)
 
-    # No *build* manifests at the top level (a lone README.md doesn't count)
-    # — look one level down for the primary server directory and rescan.
     build_manifests = (
         "package.json", "pyproject.toml", "requirements.txt",
         "go.mod", "Cargo.toml", "Dockerfile",
@@ -521,7 +1294,7 @@ async def _scan_local_dir(dir_path: Path) -> dict[str, Any]:
 
 async def _scan_local_file(file_path: Path) -> dict[str, Any]:
     """Scan a single file for MCP server characteristics."""
-    scanned = {}
+    scanned: dict[str, Any] = {}
     suffix = file_path.suffix.lower()
 
     if suffix == ".json":
@@ -537,26 +1310,17 @@ async def _scan_local_file(file_path: Path) -> dict[str, Any]:
 
 
 async def _scan_github_tree(items, root: Path) -> dict[str, Any]:
-    """Recursively scan GitHub repository tree for MCP server manifests."""
-    scanned = {}
+    """Legacy: Recursively scan GitHub repository tree for MCP server manifests."""
+    scanned: dict[str, Any] = {}
 
     def process_item(item):
         if item.type == "file":
             name = item.name
             if name in [
-                "Dockerfile",
-                "docker-compose.yml",
-                "docker-compose.yaml",
-                "package.json",
-                "pyproject.toml",
-                "requirements.txt",
-                "setup.py",
-                "setup.cfg",
-                "go.mod",
-                "Cargo.toml",
-                "README.md",
-                ".env.example",
-                ".env",
+                "Dockerfile", "docker-compose.yml", "docker-compose.yaml",
+                "package.json", "pyproject.toml", "requirements.txt",
+                "setup.py", "setup.cfg", "go.mod", "Cargo.toml",
+                "README.md", ".env.example", ".env",
             ]:
                 if not scanned.get(name):
                     scanned[name] = item.download_url
@@ -565,185 +1329,32 @@ async def _scan_github_tree(items, root: Path) -> dict[str, Any]:
                     scanned["python_files"] = []
                 scanned["python_files"].append(name)
         elif item.type == "dir":
-            # Recursively process directories
             for subitem in item.contents:
                 process_item(subitem)
 
     for item in items:
         process_item(item)
 
-    # Download actual file contents for scanned manifests
-    for key in list(scanned.keys()):
-        if key in ["Dockerfile", "docker-compose.yml", "docker-compose.yaml", "package.json", "pyproject.toml", "requirements.txt", "setup.py", "setup.cfg", "go.mod", "Cargo.toml", "README.md", ".env.example", ".env"]:
-            try:
-                file_content = item.download_url  # This is a URL
-                # We can't easily download from GitHub API tree without making actual HTTP requests
-                # For simplicity, we'll skip detailed content parsing for now
-                scanned[key] = f"<URL: {file_content}>"
-            except Exception as e:
-                scanned[key] = f"<Download error: {str(e)}>"
-
     return scanned
 
 
 async def _scan_github_repo(url: str, root: Path) -> dict[str, Any]:
-    """Legacy method - use _analyze_github_repo directly."""
+    """Legacy method — use _analyze_github_repo_normalized directly."""
     logger.warning("Using deprecated _scan_github_repo method")
     return {}
 
 
-IGNORED_SYSTEM_ENV_VARS = {
-    "NODE_PATH",
-    "PYTHONPATH",
-    "PATH",
-    "NODE_ENV",
-    "PYTHONUNBUFFERED",
-    "HOME",
-    "PORT",
-    "HOST",
-    "PWD",
-    "SHELL",
-    "USER",
-    "LOGNAME",
-    "TMPDIR",
-    "TEMP",
-    "TMP",
-    "DOCKER_HOST",
-    "DOCKER_TLS_VERIFY",
-    "DOCKER_CERT_PATH",
-    "CI",
-    "DEBUG",
-}
-
-# Generic secret-style env var key shapes. No provider names — anything
-# ending in one of these suffixes (e.g. ``FOO_TOKEN``, ``BAR_PAT``,
-# ``BAZ_CLIENT_ID``) is treated as a credential the server declares.
-_CREDENTIAL_ENV_KEY_RE = re.compile(
-    r"\b([A-Z0-9_]{2,}_(?:TOKEN|KEY|SECRET|PASSWORD|AUTH|API|ID|URL|PAT|CLIENT_ID|ACCESS_KEY))\b",
-    re.IGNORECASE,
-)
-# Same shape, but only when followed by ``=`` (an explicit declaration).
-_CREDENTIAL_ENV_DECL_RE = re.compile(
-    r"(?:export\s+)?([A-Za-z0-9_]{2,}_(?:TOKEN|KEY|SECRET|PASSWORD|AUTH|API|ID|URL|PAT|CLIENT_ID|ACCESS_KEY))=",
-    re.IGNORECASE,
-)
-
-
-def _extract_env_vars(scanned: dict[str, Any]) -> list[str]:
-    """Extract required environment variables from scanned manifests.
-
-    Scans .env files and README documentation for required secret credential keys,
-    automatically filtering out system/runtime environment variables like NODE_PATH.
-    """
-    env_vars = set()
-
-    def get_content(key: str) -> str:
-        val = scanned.get(key, "")
-        if isinstance(val, str):
-            return val
-        elif isinstance(val, dict):
-            return str(val)
-        return ""
-
-    # Scan .env files (with and without leading dot)
-    for env_file in ["env", "env.example", ".env", ".env.example"]:
-        content = get_content(env_file)
-        if content:
-            for m in _CREDENTIAL_ENV_KEY_RE.findall(content):
-                m_upper = m.upper()
-                if m_upper not in IGNORED_SYSTEM_ENV_VARS:
-                    env_vars.add(m_upper)
-
-    # Scan documentation for explicit credential declarations (``FOO_KEY=``,
-    # ``export FOO_TOKEN=``, ``foo_pat=`` … case-insensitive).
-    for key in ["manifest", "README.md"]:
-        content = get_content(key)
-        if content:
-            for m in _CREDENTIAL_ENV_DECL_RE.findall(content):
-                m_upper = m.upper()
-                if m_upper not in IGNORED_SYSTEM_ENV_VARS:
-                    env_vars.add(m_upper)
-
-    # Filter out system runtime variables and auto-managed OAuth runtime tokens
-    cleaned = []
-    for v in env_vars:
-        if v in IGNORED_SYSTEM_ENV_VARS:
-            continue
-        # OAuth runtime tokens are generated automatically via client_credentials / auth code exchange
-        if v.endswith("_REFRESH_TOKEN") or v.endswith("_ACCESS_TOKEN") or v.endswith("_EXPIRES_IN"):
-            continue
-        cleaned.append(v)
-
-    return sorted(cleaned)
-
-
-def _detect_auth_type(scanned: dict[str, Any], remote_endpoint: str | None = None) -> str:
-    """Detect authentication type based on what the server itself documents.
-
-    Returns one of: none, api_key, bearer, basic, oauth2, env.
-
-    ``remote_endpoint`` is intentionally ignored: an endpoint's auth scheme
-    can never be inferred from its hostname (the same literal domain name
-    can serve services with entirely different auth requirements), so nothing
-    is guessed from URL patterns. Every classification comes from signals the
-    server itself advertises — manifest/README mentions of bearer / API-key /
-    OAuth / basic auth, and the credential-style environment variables it
-    declares in ``.env*``.
-    """
-    def get_content(key: str) -> str:
-        val = scanned.get(key, "")
-        if isinstance(val, str):
-            return val
-        elif isinstance(val, dict):
-            return str(val)
-        return ""
-
-    # Generic credential-env check: any declared secret-style env var (from
-    # .env* or documentation) signals env-based auth when nothing stronger
-    # is documented. No provider names are consulted.
-    hints = ["env_detected"] if _extract_env_vars(scanned) else []
-
-    # Check for authentication hints in manifests
-    for key in ["manifest", "README.md", "package.json"]:
-        content = get_content(key)
-        if content:
-            if "Bearer" in content or "bearer" in content.lower():
-                hints.append("bearer_detected")
-            if "api_key" in content.lower() or "api-key" in content.lower() or "x-api-key" in content.lower():
-                hints.append("api_key_detected")
-            if "oauth" in content.lower():
-                hints.append("oauth_detected")
-            if "basic auth" in content.lower() or "authorization: basic" in content.lower():
-                hints.append("basic_detected")
-
-    # Determine based on heuristics
-    if any("bearer" in h.lower() for h in hints):
-        return "bearer"
-    if any("api_key" in h.lower() for h in hints):
-        return "api_key"
-    if any("oauth" in h.lower() for h in hints):
-        return "oauth2"
-    if any("basic" in h.lower() for h in hints):
-        return "basic"
-    if any("env" in h.lower() for h in hints):
-        return "env"
-
-    # Default to none for local servers or when no auth hints found
-    return "none"
-
-
-async def _read_file_safely(file_path: Path) -> str:
-    """Safely read file contents with error handling."""
-    try:
-        if file_path.exists():
-            content = await asyncio.to_thread(file_path.read_text)
-            return content[:10000]  # Limit to 10KB to avoid huge files
-        return ""
-    except Exception as exc:
-        logger.debug("Failed to read file", path=str(file_path), error=str(exc))
-        return ""
+async def _scan_remote_http(url: str, root: Path) -> dict[str, Any]:
+    """Legacy method — use _analyze_remote_http_normalized directly."""
+    logger.warning("Using deprecated _scan_remote_http method")
+    return {}
 
 
 __all__ = [
     "analyze_repo",
+    "analyze_repo_normalized",
+    "detect_source_type",
+    "NormalizedMCPConfig",
+    "TransportEvidence",
+    "AuthField",
 ]

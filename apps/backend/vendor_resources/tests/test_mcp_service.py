@@ -240,3 +240,60 @@ async def test_get_mcp_server(db):
 async def test_get_mcp_server_missing(db):
     found = await get_mcp_server(db, "nonexistent-id")
     assert found is None
+
+
+def test_add_mcp_server_request_resolves_sources():
+    from vendor_resources.schemas import AddMCPServerRequest
+
+    # 1. Direct source_url
+    req1 = AddMCPServerRequest(name="test1", source_url="https://github.com/github/github-mcp-server")
+    assert req1.source_url == "https://github.com/github/github-mcp-server"
+
+    # 2. Legacy server_url (from frontend)
+    req2 = AddMCPServerRequest(name="test2", server_url="https://github.com/github/github-mcp-server")
+    assert req2.source_url == "https://github.com/github/github-mcp-server"
+
+    # 3. server_url as npx command with source_repo_url
+    req3 = AddMCPServerRequest(
+        name="test3",
+        server_url="npx -y @modelcontextprotocol/server-everything",
+        source_repo_url="https://github.com/modelcontextprotocol/servers",
+    )
+    assert req3.source_url == "https://github.com/modelcontextprotocol/servers"
+
+    # 4. Dict/Object in server_url
+    req4 = AddMCPServerRequest.model_validate(
+        {"name": "test4", "server_url": {"url": "https://github.com/org/repo"}}
+    )
+    assert req4.source_url == "https://github.com/org/repo"
+
+
+@pytest.mark.asyncio
+async def test_mcp_connection_self_heals_go_stdio_args(db, monkeypatch):
+    """Ensure test_mcp_connection appends 'stdio' to server.args for Go/GitHub MCP servers if missing."""
+    import vendor_resources.services.mcp_service as ms
+
+    server = await _make_mcp(db, "github-mcp-server-test", is_global=True)
+    server.source_type = "github"
+    server.command = "go"
+    server.args = ["run", "."]
+    server.server_url = "https://github.com/github/github-mcp-server"
+
+    captured_config = {}
+
+    async def _fake_connect(self, config):
+        nonlocal captured_config
+        captured_config = config
+        return {
+            "transport": "stdio",
+            "bound_tools": ["tool1"],
+            "tools": [{"name": "tool1"}],
+            "auth_type": "env",
+        }
+
+    monkeypatch.setattr("vendor_resources.services.mcp_service.MCPClient.connect", _fake_connect)
+
+    res = await ms.test_mcp_connection(db, server=server)
+    assert res["status"] == "VERIFIED"
+    assert "stdio" in captured_config["args"]
+    assert captured_config["args"] == ["run", ".", "stdio"]

@@ -5,12 +5,15 @@ All routes reuse the Auth service's auth/RBAC dependencies via absolute imports
 code. The router is mounted by ``apps.backend.main`` under
 ``/api/v1/vendor/resources``.
 
-Routes (Phase 1):
-    POST   /mcp        vendor_admin  register an MCP server
-    GET    /mcp        vendor_admin  list all MCP servers
-    GET    /catalog    any user      access-filtered authorised catalog
-    POST   /grants     vendor_admin  grant a resource to a tenant
-    DELETE /{id}       vendor_admin  delete an MCP server (cascades grants)
+Routes:
+    POST   /mcp                    vendor_admin  Step 1: Add MCP server (analyze + register, UNCONNECTED)
+    POST   /mcp/{server_id}/test   vendor_admin  Step 2: Test connection & discover tools (VERIFIED)
+    GET    /mcp                    vendor_admin  List all MCP servers
+    GET    /catalog                any user      Access-filtered authorised catalog
+    POST   /grants                 vendor_admin  Grant a resource to a tenant
+    DELETE /{id}                   vendor_admin  Delete an MCP server (cascades grants)
+    POST   /mcp/detect             vendor_admin  Probe MCP URL for transport/auth (pre-add analysis)
+    POST   /mcp/analyze-repo       vendor_admin  Analyze GitHub repo/URL for MCP characteristics
 """
 from __future__ import annotations
 
@@ -24,12 +27,14 @@ from src.core.roles import Roles
 from src.db.session import get_db
 
 from vendor_resources.schemas import (
+    AddMCPServerRequest,
+    AddMCPServerResponse,
     AnalyzeRepoRequest,
     AnalyzeRepoResponse,
     CatalogEntry,
     CatalogResponse,
-    ConnectMCPServerRequest,
     ConnectCredentialsRequest,
+    ConnectMCPServerRequest,
     ConnectMCPServerResponse,
     GrantResponse,
     GrantTenantResourceRequest,
@@ -45,6 +50,8 @@ from vendor_resources.services.mcp_auth import McpAuthError
 from vendor_resources.services.mcp_client import connect_mcp_server
 from vendor_resources.services.mcp_detect import McpDetectError, detect_mcp_server
 from vendor_resources.services.mcp_service import (
+    add_mcp_server,
+    test_mcp_connection,
     connect_registered_server,
     create_mcp_server,
     delete_mcp_server,
@@ -63,17 +70,44 @@ _admin = Depends(require_roles(Roles.VENDOR_ADMIN))
 
 # ── MCP server management (admin) ────────────────────────────
 
-
+# Step 1: Add MCP Server (Register only — no connection)
 @router.post(
     "/mcp",
+    response_model=AddMCPServerResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_add_mcp_server(
+    payload: AddMCPServerRequest,
+    user: CurrentUser = _admin,
+    db: AsyncSession = Depends(get_db),
+):
+    """Step 1: Add an MCP server from a Remote MCP URL or GitHub/Source repository URL.
+
+    Analyzes the source, detects transport/runtime/auth, builds normalized config,
+    and saves the server with status=UNCONNECTED. Does NOT attempt connection
+    if credentials are missing (per architecture Rule 7).
+    """
+    server = await add_mcp_server(db, data=payload, actor_id=user.id)
+    await db.commit()
+    await db.refresh(server)
+    return server
+
+
+# Legacy endpoint (kept for backward compatibility)
+@router.post(
+    "/mcp/legacy",
     response_model=MCPServerResponse,
     status_code=status.HTTP_201_CREATED,
 )
-async def post_create_mcp_server(
+async def post_create_mcp_server_legacy(
     payload: ConnectMCPServerRequest,
     user: CurrentUser = _admin,
     db: AsyncSession = Depends(get_db),
 ):
+    """Legacy: Register an MCP server with optional immediate connection.
+
+    New code should use POST /mcp (Step 1) then POST /mcp/{id}/test (Step 2).
+    """
     server = await create_mcp_server(db, data=payload, actor_id=user.id)
     await db.commit()
     await db.refresh(server)
@@ -105,6 +139,74 @@ async def embed_mcp_server(
     return None
 
 
+# Step 2: Test Connection & Discover Tools
+@router.post(
+    "/mcp/{server_id}/test",
+    response_model=ConnectMCPServerResponse,
+)
+async def test_mcp_connection_endpoint(
+    server_id: str,
+    payload: ConnectCredentialsRequest | None = None,
+    user: CurrentUser = _admin,
+    db: AsyncSession = Depends(get_db),
+):
+    """Step 2: Test connection and discover tools for a registered MCP server.
+
+    User provides credentials via dynamic form (from server.auth_schema).
+    Connects via generic MCPClient, runs initialize + tools/list,
+    saves discovered tools, updates status to VERIFIED.
+    """
+    server = await get_mcp_server(db, server_id=server_id)
+    if server is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found"
+        )
+    if server.status == "VERIFIED":
+        # Already verified — return current tools
+        return ConnectMCPServerResponse(
+            transport=getattr(server, "transport", "stdio"),
+            bound_tools=server.bound_tools,
+            tools=[],  # Could fetch full tool details if needed
+            auth_type=server.auth_type or "none",
+            status="VERIFIED",
+        )
+    try:
+        creds = payload.credentials if payload is not None else None
+        result = await test_mcp_connection(
+            db, server=server, request_credentials=creds, tenant_id=user.id
+        )
+        await db.commit()  # persist any rotated OAuth tokens / dynamic registrations
+    except McpAuthError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Credential resolution failed: {exc}",
+        ) from exc
+    except Exception as exc:
+        await db.rollback()
+        logger.exception("Failed to test MCP server %s", server_id)
+
+        # Unpack BaseExceptionGroup (Python 3.11+) to extract root cause
+        err_msg = str(exc)
+        if isinstance(exc, BaseExceptionGroup):
+            sub_msgs = []
+            for sub in exc.exceptions:
+                if isinstance(sub, BaseExceptionGroup):
+                    sub_msgs.extend([str(s) for s in sub.exceptions])
+                else:
+                    sub_msgs.append(str(sub))
+            err_msg = " | ".join(sub_msgs)
+
+        if "Connection closed" in err_msg or "MCPError" in err_msg:
+            err_msg = "MCP server process exited (connection closed). Please verify primary credentials and server command."
+
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Connection failed: {err_msg}",
+        ) from exc
+    return ConnectMCPServerResponse(**result)
+
+
 @router.post("/mcp/detect", response_model=McpDetectResponse)
 async def detect_mcp_server_endpoint(
     payload: McpDetectRequest,
@@ -128,6 +230,7 @@ async def detect_mcp_server_endpoint(
     return result
 
 
+# Legacy connect endpoint (kept for backward compatibility)
 @router.post("/mcp/{server_id}/connect", response_model=ConnectMCPServerResponse)
 async def connect_mcp_server_endpoint(
     server_id: str,
@@ -135,13 +238,9 @@ async def connect_mcp_server_endpoint(
     user: CurrentUser = _admin,
     db: AsyncSession = Depends(get_db),
 ):
-    """Test connection and return discovered transport + tools.
+    """Legacy: Test connection and return discovered transport + tools.
 
-    Auth is resolved natively: stored encrypted credentials (vendor-level or
-    per-tenant) are merged with any credentials supplied in the request, then
-    ``mcp_auth`` builds the headers the server's detected auth type calls for
-    — including native OAuth2 token acquisition/refresh. Raw header maps are
-    still accepted for backward compatibility.
+    New code should use POST /mcp/{server_id}/test (Step 2).
     """
     server = await get_mcp_server(db, server_id=server_id)
     if server is None:
@@ -163,7 +262,7 @@ async def connect_mcp_server_endpoint(
     except Exception as exc:
         await db.rollback()
         logger.exception("Failed to connect MCP server %s", server_id)
-        
+
         # Unpack BaseExceptionGroup (Python 3.11+) to extract root cause
         err_msg = str(exc)
         if isinstance(exc, BaseExceptionGroup):

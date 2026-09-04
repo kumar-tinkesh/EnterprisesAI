@@ -195,17 +195,13 @@ Every request to `apps/auth` or `apps/backend` carries a Bearer JWT:
    | :--- | :--- |
    | `POST /mcp/analyze-repo` | Analyze a GitHub repo **without registering** — detects transport, entry command, auth type, `env_vars`, and tool list. |
    | `POST /mcp/detect` | Probe a URL/command for transport + auth type. |
-   | `POST /mcp` (201) | Register a server. Runs an **auto-connect** at registration time: persists the row, then `connect_mcp_server()` for live tool discovery. |
+   | `POST /mcp` (201) | Register an MCP server definition in DB — persists detected transport, entry command, and required credential fields without requiring credentials at creation time. |
    | `GET /mcp` | List registered MCP servers (vendor admin). |
-   | `POST /mcp/{id}/connect` | Re-test connection; returns transport + discovered tools (stored encrypted credentials merged with request credentials). |
-   | `POST /mcp/{id}/embed` | Generate/refresh vector embeddings for tool discovery. |
-   | `GET /catalog` | Tenant/solo-visible merged view of tools + MCP servers (scoped by grants / `is_global`). |
-   | `POST /tools` | Ingest REST/OpenAPI tools; sensitive keys encrypted via Vault (`core/vault.py`). |
-   | `POST /grants` | Grant a resource to a tenant (`tenant_resource_grants`). |
-   | `DELETE /mcp/{id}` | Remove a registered MCP server (204). |
+   | `POST /mcp/{id}/connect` | **Test Connection & Tool Discovery**: Accepts primary credentials, resolves auth via Fernet Vault / OAuth engine, spawns stdio/remote server, runs `mcp.initialize()` + `tools/list` discovery, and persists `bound_tools`. |
 
-3. **Registration → Auto-Connect Flow** (`mcp_service.py`):
-   - `register_mcp_server()` persists the row first (so registration never fails because a server is briefly offline), then attempts the live connection; connect failures are logged and don't roll back the registration.
+3. **Official 2-Step Registration → Test Connection Lifecycle**:
+   - **Step 1 (Register)**: `create_mcp_server()` persists the server definition and detected credential key names (`required_env_vars` / `auth_config`) so server registration is fast and never blocked by missing keys.
+   - **Step 2 (Test Connection & Discover Tools)**: `connect_registered_server()` is triggered when clicking **Test Connection** (Link icon). It prompts for primary credentials (`CLIENT_ID`, `NOTION_TOKEN`, etc.), encrypts keys into the Fernet Vault, spawns the stdio/remote process, discovers tools, and binds them to the server row.
 
 4. **Tenant Resource Granting Flow**:
    - `POST /api/v1/vendor/resources/grants` -> Writes mapping to `tenant_resource_grants` table (`tenant_id`, `resource_id`).
@@ -436,24 +432,29 @@ curl -X POST http://localhost:8002/api/v1/vendor/resources/mcp/analyze-repo \
   -d '{"repo_url": "https://github.com/lharries/whatsapp-mcp"}'
 # → returns detected transport (stdio), entry command, auth_type, env_vars, tools
 
-# Step 2: Register the MCP Server (auto-connects & discovers tools on 201)
+# Step 2: Register the MCP Server (creates server definition in DB)
 curl -X POST http://localhost:8002/api/v1/vendor/resources/mcp \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "WhatsApp MCP",
     "transport": "stdio",
-    "server_url": "whatsapp-mcp-server/main.py",
+    "server_url": "npx -y whatsapp-mcp",
     "source_repo_url": "https://github.com/lharries/whatsapp-mcp",
     "is_global": true
   }'
-# → 201 Created; repo cached at /tmp/mcp_repos/lharries_whatsapp-mcp,
-#   spawned via `uv run --directory ... whatsapp-mcp` in an isolated venv
+# → 201 Created; persists server row & detected auth_config
 
-# Step 3: Re-test the connection explicitly (returns transport + tools)
+# Step 3: Test Connection & Discover Tools (passes credentials, encrypts in vault, discovers tools)
 curl -X POST http://localhost:8002/api/v1/vendor/resources/mcp/<server_id>/connect \
   -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" -d '{}'
+  -H "Content-Type: application/json" \
+  -d '{
+    "credentials": {
+      "WHATSAPP_TOKEN": "secret_token_123"
+    }
+  }'
+# → 200 OK; returns discovered tools, protocol version, and binds tools to server row
 
 # Step 4: Grant an MCP Server to a specific Tenant ID
 curl -X POST http://localhost:8002/api/v1/vendor/resources/grants \
