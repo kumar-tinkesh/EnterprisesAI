@@ -2,8 +2,9 @@
 # EnterpriseAI — full local stack
 #
 #   docker compose up --build
-#     web  -> http://localhost:3000/auth
+#     web  -> http://localhost:3001/auth
 #     auth -> http://localhost:8001/docs
+#     backend -> http://localhost:8002/docs
 #
 # With PostgreSQL instead of SQLite:
 #   docker compose --profile postgres up --build
@@ -21,7 +22,10 @@ services:
     container_name: enterpriseai-auth
     restart: unless-stopped
     ports:
-      - "8001:8001"
+      - "${AUTH_PORT:-8001}:8001"
+    env_file:
+      - path: .env
+        required: false
     environment:
       ENV: production
       DEBUG: "false"
@@ -34,9 +38,10 @@ services:
       DATABASE_URL: ${AUTH_DATABASE_URL:-sqlite+aiosqlite:////data/auth.db}
       BACKEND_CORS_ORIGINS: '["http://localhost:3000","http://127.0.0.1:3000","http://localhost:3001","http://127.0.0.1:3001"]'
       # Override secrets via .env at the repo root or your shell.
+      CSRF_SECRET_KEY: ${CSRF_SECRET_KEY:-change-me-in-production}
       SSO_PROVIDER: ${SSO_PROVIDER:-google}
-      SSO_CLIENT_ID: ${SSO_CLIENT_ID}
-      SSO_CLIENT_SECRET: ${SSO_CLIENT_SECRET}
+      SSO_CLIENT_ID: ${SSO_CLIENT_ID:-}
+      SSO_CLIENT_SECRET: ${SSO_CLIENT_SECRET:-}
       SSO_DISCOVERY_URL: ${SSO_DISCOVERY_URL:-https://accounts.google.com/.well-known/openid-configuration}
       SSO_REDIRECT_URI: ${SSO_REDIRECT_URI:-http://localhost:3001/auth/callback}
     volumes:
@@ -67,7 +72,7 @@ services:
     container_name: enterpriseai-web
     restart: unless-stopped
     ports:
-      - "3001:3000"
+      - "${WEB_PORT:-3001}:3000"
     depends_on:
       auth:
         condition: service_healthy
@@ -78,7 +83,7 @@ services:
     container_name: enterpriseai-redis
     restart: unless-stopped
     ports:
-      - "6380:6379"
+      - "${REDIS_PORT:-6380}:6379"
     volumes:
       - redisdata:/data
     healthcheck:
@@ -96,7 +101,10 @@ services:
     container_name: enterpriseai-llm-gateway
     restart: unless-stopped
     ports:
-      - "4000:4000"
+      - "${LLM_GATEWAY_PORT:-4000}:4000"
+    env_file:
+      - path: .env
+        required: false
     environment:
       # Provider API keys — set in .env at repo root
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
@@ -139,7 +147,10 @@ services:
     container_name: enterpriseai-backend
     restart: unless-stopped
     ports:
-      - "8002:8002"
+      - "${BACKEND_PORT:-8002}:8002"
+    env_file:
+      - path: .env
+        required: false
     environment:
       ENV: production
       DEBUG: "false"
@@ -177,6 +188,8 @@ services:
     profiles: ["postgres"]
     container_name: enterpriseai-db
     restart: unless-stopped
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
     environment:
       POSTGRES_USER: auth
       POSTGRES_PASSWORD: auth

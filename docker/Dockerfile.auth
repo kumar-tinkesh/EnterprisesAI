@@ -28,7 +28,9 @@ ENV PATH="/app/.venv/bin:$PATH"
 COPY alembic.ini ./
 COPY apps ./apps
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh && mkdir -p /data /app/apps/auth/.keys
+RUN sed -i 's/\r$//' /usr/local/bin/entrypoint.sh \
+    && chmod +x /usr/local/bin/entrypoint.sh \
+    && mkdir -p /data /app/apps/auth/.keys
 
 # SQLite lives on a volume so data survives container restarts.
 ENV DATABASE_URL="sqlite+aiosqlite:////data/auth.db"
