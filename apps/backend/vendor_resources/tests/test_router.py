@@ -253,5 +253,18 @@ async def test_analyze_repo_invalid_url(admin_client):
     assert res.status_code in (200, 400)
 
 
+@pytest.mark.asyncio
+async def test_disconnect_mcp_server(admin_client):
+    """Disconnecting an MCP server should reset status to UNCONNECTED."""
+    created = await admin_client.post(f"{BASE}/mcp", json=_mcp_payload("mcp.disc"))
+    assert created.status_code == 201
+    server_id = created.json()["id"]
+
+    res = await admin_client.post(f"{BASE}/mcp/{server_id}/disconnect")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "UNCONNECTED"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

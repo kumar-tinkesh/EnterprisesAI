@@ -299,6 +299,8 @@ export interface VendorMCPServer {
   transport: string;
   server_url: string;
   source_repo_url?: string;
+  status?: string;
+  auth_type?: string;
   auth_config?: Record<string, any>;
   env_vars?: Record<string, string>;
   bound_tools: string[];
@@ -319,6 +321,10 @@ export interface ConnectMCPServerBody {
 export interface ConnectMCPServerResponse {
   transport: string;
   bound_tools: string[];
+  tools?: { name: string; description: string }[];
+  server_info?: Record<string, any>;
+  protocol_version?: string;
+  auth_type?: string;
 }
 
 export interface MCPServerEntry {
@@ -403,6 +409,8 @@ export const vendorApi = {
       method: "POST",
       body: JSON.stringify(credentials ? { credentials } : {}),
     }, token, BACKEND_API_URL),
+  disconnectMCPServer: (token: string, serverId: string) =>
+    request<VendorMCPServer>(`${VR}/mcp/${serverId}/disconnect`, { method: "POST" }, token, BACKEND_API_URL),
 
   // Analyze MCP Repository (vendor_admin)
   analyzeRepo: (token: string, repoUrl: string) =>

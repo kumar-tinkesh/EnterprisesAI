@@ -285,3 +285,40 @@ async def test_prepare_removes_stale_cache_before_clone(monkeypatch):
     # The entry-picker (not the raw command) determines what runs.
     assert cmd_bin == "node"
     assert cmd_args == ["dist/index.js"]
+
+
+@pytest.mark.asyncio
+async def test_connect_stdio_without_credentials(monkeypatch):
+    """Connecting a stdio server with no credentials must not raise UnboundLocalError for client_id."""
+    from contextlib import asynccontextmanager
+
+    import vendor_resources.services.mcp_client as mc
+
+    async def _mock_prepare(command, repo_url):
+        return "python", ["main.py"], "/tmp"
+
+    @asynccontextmanager
+    async def _mock_stdio_client(params):
+        yield ("read", "write")
+
+    async def _mock_session_details(read_stream, write_stream):
+        return {
+            "tools": [],
+            "server_info": {"name": "whatsapp-mcp", "version": "1.0"},
+            "protocol_version": "2024-11-05",
+        }
+
+    monkeypatch.setattr(mc, "_prepare_local_repo_stdio", _mock_prepare)
+    monkeypatch.setattr(mc, "stdio_client", _mock_stdio_client)
+    monkeypatch.setattr(mc, "_session_details", _mock_session_details)
+
+    config = {
+        "transport": "stdio",
+        "command": "python main.py",
+        "source_repo_url": "https://github.com/lharries/whatsapp-mcp",
+        "credentials": None,
+        "env": {},
+    }
+    client = mc.MCPClient()
+    result = await client.connect(config)
+    assert result["transport"] == "stdio"

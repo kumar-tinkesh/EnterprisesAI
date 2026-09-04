@@ -371,14 +371,15 @@ async def resolve_auth(
     elif "GITHUB_PERSONAL_ACCESS_TOKEN" in merged and "GITHUB_TOKEN" not in merged:
         merged["GITHUB_TOKEN"] = merged["GITHUB_PERSONAL_ACCESS_TOKEN"]
 
+    transport = ((auth_config or {}).get("transport") or "").lower()
     auth_type = ((auth_config or {}).get("auth_type") or "none").lower()
 
-    if auth_type in ("none", "env"):
+    if auth_type in ("none", "env", "device_pairing") or transport == "stdio":
         return {
             "headers": {},
             "credentials": merged,
             "auth_type": auth_type,
-            "token_source": None,
+            "token_source": "credentials" if merged else None,
         }
 
     if auth_type == "basic":

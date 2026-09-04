@@ -566,8 +566,17 @@ async def _analyze_github_repo_normalized(url: str, root: Path) -> NormalizedMCP
     cloned_successfully = False
     clone_dir = None
 
+    if gh.owner != "unknown":
+        scanned = await _fetch_github_raw_manifests(gh.owner, gh.repo, branch=gh.branch, subpath=gh.subpath)
+
+    has_manifests = any(
+        k in scanned
+        for k in ("package.json", "pyproject.toml", "requirements.txt",
+                  "Dockerfile", "docker-compose.yml", "go.mod", "Cargo.toml", "README.md")
+    )
+
     git_bin = shutil.which("git")
-    if git_bin:
+    if not has_manifests and git_bin:
         try:
             repo_slug = f"{gh.owner}_{gh.repo}".replace("/", "_")
             clone_dir = root / repo_slug
@@ -577,10 +586,10 @@ async def _analyze_github_repo_normalized(url: str, root: Path) -> NormalizedMCP
 
             canonical_url = f"https://github.com/{gh.owner}/{gh.repo}"
             subprocess.run(
-                [git_bin, "clone", "--depth", "1", "--filter=blob:none", canonical_url, str(clone_dir)],
+                [git_bin, "clone", "--depth", "1", canonical_url, str(clone_dir)],
                 check=True,
                 capture_output=True,
-                timeout=30,
+                timeout=10,
             )
 
             # Navigate to subpath if applicable
@@ -596,10 +605,7 @@ async def _analyze_github_repo_normalized(url: str, root: Path) -> NormalizedMCP
 
             cloned_successfully = True
         except Exception as exc:
-            logger.warning("git_clone_failed_fallback_to_raw_fetch", repo_url=url, error=str(exc))
-
-    if not cloned_successfully and gh.owner != "unknown":
-        scanned = await _fetch_github_raw_manifests(gh.owner, gh.repo, branch=gh.branch, subpath=gh.subpath)
+            logger.warning("git_clone_failed", repo_url=url, error=str(exc))
 
     # Check if we got anything useful
     has_manifests = any(
@@ -706,30 +712,29 @@ async def _analyze_remote_http_normalized(url: str, root: Path) -> NormalizedMCP
         )
 
 
-def _build_auth_fields_for_auth_type(auth_type: str, is_github: bool = False) -> list[AuthField]:
+def _build_auth_fields_for_auth_type(
+    auth_type: str, is_github: bool = False, source_url: str = ""
+) -> list[AuthField]:
     """Build default AuthField objects for a given auth_type."""
-    if auth_type in ("bearer", "oauth2", "env"):
-        token_name = "GITHUB_PERSONAL_ACCESS_TOKEN" if is_github else "access_token"
-        token_label = "GitHub Personal Access Token" if is_github else "Bearer token"
-        fields = [
+    if auth_type == "oauth2":
+        return [
+            AuthField(name="client_id", label="Client ID", type="text", required=True, location="env"),
+            AuthField(name="client_secret", label="Client Secret", type="secret", required=True, location="env"),
+        ]
+
+    if auth_type in ("bearer", "env"):
+        return [
             AuthField(
-                name=token_name,
-                label=token_label,
+                name="access_token",
+                label="Access Token / API Key",
                 type="secret",
                 required=True,
-                location="env" if is_github else "header",
+                location="header",
             )
         ]
-        if auth_type == "oauth2":
-            fields += [
-                AuthField(name="client_id", label="Client ID", type="text", required=False, location="header"),
-                AuthField(name="client_secret", label="Client secret", type="secret", required=False, location="header"),
-            ]
-        return fields
     if auth_type == "api_key":
-        key_name = "API_KEY" if is_github else "api_key"
         return [
-            AuthField(name=key_name, label="API Key", type="secret", required=True, location="env" if is_github else "header"),
+            AuthField(name="api_key", label="API Key", type="secret", required=True, location="header"),
         ]
     if auth_type == "basic":
         return [
@@ -816,12 +821,22 @@ def _build_normalized_config(
     # Auth
     auth_type = _detect_auth_type(scanned, remote_endpoint)
     env_vars = _extract_env_vars(scanned, auth_type=auth_type)
-    auth_fields = _build_auth_fields(env_vars)
-    if not auth_fields and auth_type not in ("none", "unknown"):
-        auth_fields = _build_auth_fields_for_auth_type(auth_type, is_github=(source_type == "github"))
-        for f in auth_fields:
-            if f.location == "env" and f.name not in env_vars:
-                env_vars.append(f.name)
+    if auth_type == "oauth2" or any(v.endswith("_OAUTH_CREDENTIALS") or v.endswith("_CREDENTIALS_JSON") for v in env_vars):
+        auth_type = "oauth2"
+        auth_fields = [
+            AuthField(name="client_id", label="Client ID", type="text", required=True, location="env"),
+            AuthField(name="client_secret", label="Client Secret", type="secret", required=True, location="env"),
+        ]
+        env_vars = ["client_id", "client_secret"]
+    else:
+        auth_fields = _build_auth_fields(env_vars)
+        if not auth_fields and auth_type not in ("none", "unknown"):
+            auth_fields = _build_auth_fields_for_auth_type(
+                auth_type, is_github=(source_type == "github"), source_url=source_url
+            )
+            for f in auth_fields:
+                if f.location == "env" and f.name not in env_vars:
+                    env_vars.append(f.name)
 
     return NormalizedMCPConfig(
         source_type=source_type,
@@ -979,7 +994,11 @@ def _infer_transport_and_runtime(
         entry = _best_python_entry(
             pyproject_content, get_content("requirements.txt"), scanned.get("python_files")
         )
-        command = f"python {entry}"
+        subdir = scanned.get("_server_subdir")
+        if subdir:
+            command = f"python {subdir}/{entry}"
+        else:
+            command = f"python {entry}"
 
     elif get_content("go.mod"):
         transport = "stdio"
@@ -1070,17 +1089,32 @@ async def _fetch_github_raw_manifests(
         "Cargo.toml",
         "README.md",
         ".env.example",
+        "main.py",
+        "server.py",
+        "app.py",
+        "mcp_server.py",
+        "index.js",
+        "index.ts",
     ]
+    candidate_subpaths: list[str] = []
+    if subpath:
+        candidate_subpaths.append(subpath)
+    candidate_subpaths.extend([
+        f"{repo}-mcp-server",
+        f"{repo}-server",
+        f"{repo}-mcp",
+        "mcp-server",
+        "server",
+    ])
+
     scanned: dict[str, Any] = {}
     async with AsyncClient(follow_redirects=True, timeout=10.0) as client:
         for fname in files_to_check:
             branches_to_try = [branch] if branch != "main" else ["main", "master", "HEAD"]
             for b in branches_to_try:
-                # Try subpath first, then root
-                paths_to_try: list[str] = []
-                if subpath:
-                    paths_to_try.append(f"{subpath}/{fname}")
-                paths_to_try.append(fname)
+                paths_to_try: list[str] = [fname]
+                for sub in candidate_subpaths:
+                    paths_to_try.append(f"{sub}/{fname}")
 
                 for fpath in paths_to_try:
                     raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{b}/{fpath}"
@@ -1088,13 +1122,17 @@ async def _fetch_github_raw_manifests(
                         res = await client.get(raw_url)
                         if res.status_code == 200:
                             scanned[fname] = res.text
+                            if fname.endswith(".py"):
+                                scanned.setdefault("python_files", []).append(fname)
+                            if "/" in fpath:
+                                scanned["_server_subdir"] = fpath.rsplit("/", 1)[0]
                             break
                     except Exception:
                         pass
                 if fname in scanned:
                     break
 
-    if subpath:
+    if subpath and "_server_subdir" not in scanned:
         scanned["_server_subdir"] = subpath
     return scanned
 
@@ -1150,7 +1188,11 @@ def _extract_env_vars(scanned: dict[str, Any], auth_type: str = "none") -> list[
             return str(val)
         return ""
 
-    for env_file in ["env", "env.example", ".env", ".env.example"]:
+    for env_file in [
+        "env", "env.example", ".env", ".env.example",
+        "Dockerfile", "docker-compose.yml", "docker-compose.yaml",
+        "server.json", "smithery.yaml",
+    ]:
         content = get_content(env_file)
         if content:
             for m in _CREDENTIAL_ENV_KEY_RE.findall(content):
@@ -1191,29 +1233,48 @@ def _detect_auth_type(scanned: dict[str, Any], remote_endpoint: str | None = Non
             return str(val)
         return ""
 
-    hints = ["env_detected"] if _extract_env_vars(scanned) else []
+    hints = []
+    env_vars = _extract_env_vars(scanned)
+    if env_vars:
+        hints.append("env_detected")
 
-    for key in ["manifest", "README.md", "package.json"]:
-        content = get_content(key)
-        if content:
-            if "Bearer" in content or "bearer" in content.lower():
-                hints.append("bearer_detected")
-            if "api_key" in content.lower() or "api-key" in content.lower() or "x-api-key" in content.lower():
-                hints.append("api_key_detected")
-            if "oauth" in content.lower():
-                hints.append("oauth_detected")
-            if "basic auth" in content.lower() or "authorization: basic" in content.lower():
-                hints.append("basic_detected")
+    # Check manifest (formal manifest) first
+    manifest_content = get_content("manifest")
+    if manifest_content:
+        mc = manifest_content.lower()
+        if "bearer" in mc:
+            hints.append("bearer_detected")
+        if "api_key" in mc or "api-key" in mc or "x-api-key" in mc:
+            hints.append("api_key_detected")
+        if "oauth" in mc:
+            hints.append("oauth_detected")
+        if "basic" in mc:
+            hints.append("basic_detected")
 
-    if any("bearer" in h.lower() for h in hints):
+    # Check README.md for explicit auth declarations
+    readme_content = get_content("README.md")
+    if readme_content:
+        rc = readme_content.lower()
+        if "authorization: bearer" in rc or "bearer token" in rc:
+            hints.append("bearer_detected")
+        if "x-api-key" in rc or "api_key:" in rc or "api-key:" in rc or "x-api-key:" in rc:
+            hints.append("api_key_detected")
+        if "oauth" in rc or "client_id" in rc or "google consent" in rc or "credentials.json" in rc:
+            hints.append("oauth_detected")
+        if any(kw in rc for kw in ("qr code", "scan qr", "scan the qr", "pairing code", "link a device", "linked devices")):
+            hints.append("device_pairing_detected")
+
+    if any("bearer" in h for h in hints):
         return "bearer"
-    if any("api_key" in h.lower() for h in hints):
+    if any("api_key" in h for h in hints):
         return "api_key"
-    if any("oauth" in h.lower() for h in hints):
+    if any("oauth" in h for h in hints):
         return "oauth2"
-    if any("basic" in h.lower() for h in hints):
+    if any("basic" in h for h in hints):
         return "basic"
-    if any("env" in h.lower() for h in hints):
+    if any("device_pairing" in h for h in hints):
+        return "device_pairing"
+    if any("env" in h for h in hints):
         return "env"
 
     return "none"

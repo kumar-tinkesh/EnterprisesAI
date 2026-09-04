@@ -233,22 +233,32 @@ async def test_mcp_connection(
     Resolves auth (stored + request credentials), connects via generic MCPClient,
     runs initialize + tools/list, saves discovered tools, updates status to VERIFIED.
     """
-    # Resolve auth (stored creds + request creds + OAuth flows)
-    auth = await mcp_auth.resolve_auth(
-        db,
-        server_id=str(server.id),
-        server_url=server.server_url,
-        auth_config=server.auth_config or {},
-        credentials=request_credentials,
-        tenant_id=tenant_id,
-        server_name=server.name,
-    )
-
     # Determine transport (with self-healing for GitHub repositories with local commands)
     transport = getattr(server, "transport", None)
     if server.source_type == "github" and server.command and transport in ("streamable_http", "sse", "unknown", None):
         transport = "stdio"
         server.transport = "stdio"
+
+    auth_config = dict(server.auth_config or {})
+    if server.transport:
+        auth_config["transport"] = server.transport
+
+    # Resolve auth (stored creds + request creds + OAuth flows)
+    try:
+        auth = await mcp_auth.resolve_auth(
+            db,
+            server_id=str(server.id),
+            server_url=server.server_url,
+            auth_config=auth_config,
+            credentials=request_credentials,
+            tenant_id=tenant_id,
+            server_name=server.name,
+        )
+    except mcp_auth.McpAuthError as exc:
+        logger.warning(
+            "Could not natively resolve credentials for %s: %s", server.server_url, exc
+        )
+        auth = {"headers": {}, "credentials": request_credentials or {}}
 
     # Self-healing for Go commands with invalid module path or missing stdio subcommand
     if server.command == "go" or getattr(server, "runtime_type", None) == "go":
@@ -359,6 +369,7 @@ async def delete_mcp_server(
     )
     await mcp_auth.delete_server_credentials(db, server_id=server_id)
     mcp_auth.clear_token_cache(server_id)
+    _cleanup_server_local_repo_cache(server)
     await db.delete(server)
     await db.flush()
     await log_audit_event(
@@ -453,11 +464,46 @@ async def connect_registered_server(
     )
 
 
+def _cleanup_server_local_repo_cache(server: VendorMCPServer) -> None:
+    """Clean up local repo clone cache (/tmp/mcp_repos/<owner_repo>) when disconnecting or deleting an MCP server."""
+    import re
+    import shutil
+    from pathlib import Path
+
+    url = getattr(server, "source_repo_url", None)
+    if not url or "github.com" not in url:
+        return
+
+    match = re.match(r"https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?(?:/.*)?$", url)
+    if match:
+        owner, repo = match.groups()
+        target = Path("/tmp/mcp_repos") / f"{owner}_{repo}"
+        if target.exists():
+            try:
+                shutil.rmtree(target, ignore_errors=True)
+            except Exception:
+                pass
+
+
+async def disconnect_mcp_server(
+    db: AsyncSession, *, server: VendorMCPServer, tenant_id: str | None = None
+) -> VendorMCPServer:
+    """Disconnect an MCP server: delete stored credentials, clear token cache, reset status to UNCONNECTED, and purge local repo cache."""
+    await mcp_auth.delete_server_credentials(db, server_id=str(server.id))
+    mcp_auth.clear_token_cache(str(server.id))
+    _cleanup_server_local_repo_cache(server)
+    server.status = "UNCONNECTED"
+    await db.flush()
+    await db.refresh(server)
+    return server
+
+
 __all__ = [
     "add_mcp_server",
     "test_mcp_connection",
     "create_mcp_server",
     "connect_registered_server",
+    "disconnect_mcp_server",
     "list_mcp_servers",
     "get_mcp_server",
     "delete_mcp_server",

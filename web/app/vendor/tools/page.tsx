@@ -12,6 +12,10 @@ import {
   Lock,
   Radio,
   Link,
+  Unlink,
+  Wrench,
+  CheckCircle2,
+  XCircle,
   Check,
   Search,
   Globe as GlobeIcon,
@@ -129,6 +133,11 @@ export default function VendorMCPPage() {
     },
   });
 
+  const disconnectMutation = useMutation({
+    mutationFn: (id: string) => vendorApi.disconnectMCPServer(accessToken, id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["vendor-mcp-servers"] }),
+  });
+
   const grantMutation = useMutation({
     mutationFn: (vals: { tenant_id: string; resource_id: string }) =>
       vendorApi.grantResource(accessToken, {
@@ -180,6 +189,7 @@ export default function VendorMCPPage() {
                 <tr>
                   <th className="px-4 py-3">Server</th>
                   <th className="px-4 py-3">Transport</th>
+                  <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3">Scope</th>
                   <th className="px-4 py-3">URL</th>
                   <th className="px-4 py-3 text-right">Actions</th>
@@ -196,6 +206,17 @@ export default function VendorMCPPage() {
                       <span className="inline-flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700">
                         {s.transport}
                       </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      {s.status === "VERIFIED" ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                          <CheckCircle2 className="h-3 w-3 text-emerald-600" /> Connected
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-500">
+                          <XCircle className="h-3 w-3 text-zinc-400" /> Unconnected
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       {s.is_global ? (
@@ -221,10 +242,46 @@ export default function VendorMCPPage() {
                             setShowConnectModal(true);
                           }}
                           className="p-1 text-zinc-400 hover:text-emerald-600 cursor-pointer"
-                          title="Test connection & discover tools"
+                          title="Test Connection & Discover Tools"
                           disabled={connectMutation.isPending}
                         >
                           <Link className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => {
+                            setToolsServer({
+                              id: s.id,
+                              name: s.name,
+                              response: s.bound_tools
+                                ? {
+                                    transport: s.transport,
+                                    bound_tools: s.bound_tools,
+                                    tools: (s.bound_tools || []).map((t) => ({ name: t, description: "" })),
+                                    server_info: {},
+                                    protocol_version: "2024-11-05",
+                                    auth_type: s.auth_type || "none",
+                                  }
+                                : null,
+                              error: s.bound_tools && s.bound_tools.length > 0 ? null : "No tools discovered yet. Click Connect to discover tools.",
+                            });
+                            setShowToolsModal(true);
+                          }}
+                          className="p-1 text-zinc-400 hover:text-amber-600 cursor-pointer"
+                          title="List Discovered Tools"
+                        >
+                          <Wrench className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (confirm(`Disconnect server "${s.name}"? This clears stored credentials.`)) {
+                              disconnectMutation.mutate(s.id);
+                            }
+                          }}
+                          className="p-1 text-zinc-400 hover:text-orange-600 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                          title="Disconnect Server"
+                          disabled={disconnectMutation.isPending || s.status === "UNCONNECTED"}
+                        >
+                          <Unlink className="h-4 w-4" />
                         </button>
                         <button
                           onClick={() => embedMutation.mutate(s.id)}

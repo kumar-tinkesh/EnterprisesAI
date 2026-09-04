@@ -466,9 +466,8 @@ async def _prepare_local_repo_stdio(
     git_url: str | None = None
     if "github.com" in command or command.startswith("git+"):
         git_url = command
-    elif source_repo_url and parts and parts[0] not in _PACKAGE_RUNNER_COMMANDS:
-        # Bare entry point (e.g. "node dist/index.js") — needs the repo
-        # checked out locally to be executable.
+    elif source_repo_url and (not parts or parts[0] not in _PACKAGE_RUNNER_COMMANDS):
+        # Bare entry point or empty command — needs the repo checked out locally to resolve executable/entry point.
         git_url = source_repo_url
 
     if git_url and ("github.com" in git_url or git_url.startswith("http")):
@@ -562,6 +561,11 @@ async def _prepare_local_repo_stdio(
                     parts = found
         except Exception as exc:  # noqa: BLE001
             logger.warning("failed_to_prepare_local_repo %s: %s", git_url, exc)
+
+    if not parts:
+        raise ValueError(
+            f"Invalid stdio command for {command!r}: unable to determine executable command or entry point."
+        )
 
     return parts[0], parts[1:], cwd
 
@@ -658,6 +662,25 @@ def _pick_local_entry(tmp_dir) -> list[str] | None:
 
     root = _P(tmp_dir)
 
+    # ── Monorepo sub-project check ──────────────────────────────────────
+    # If root itself has no manifest, but a subdirectory containing 'mcp' in its
+    # name has a manifest (pyproject.toml/package.json), evaluate that first.
+    if not (root / "package.json").exists() and not (root / "pyproject.toml").exists() and not (root / "go.mod").exists():
+        for child in sorted(root.iterdir()):
+            if child.is_dir() and not child.name.startswith(".") and "mcp" in child.name.lower():
+                if (child / "pyproject.toml").exists() or (child / "package.json").exists():
+                    sub_entry = _pick_local_entry(child)
+                    if sub_entry:
+                        if sub_entry[0] == "uv":
+                            return sub_entry
+                        res = []
+                        for idx, token in enumerate(sub_entry):
+                            if idx > 0 and not token.startswith("-") and (child / token).exists():
+                                res.append(str((child / token).relative_to(root)))
+                            else:
+                                res.append(token)
+                        return res
+
     # ── Node ─────────────────────────────────────────────────────────────
     for rel in ("dist/index.js", "build/index.js", "src/index.js", "index.js"):
         if (root / rel).exists():
@@ -683,16 +706,15 @@ def _pick_local_entry(tmp_dir) -> list[str] | None:
             pass
 
     # ── Go ───────────────────────────────────────────────────────────────
-    # Go projects use go.mod at the module root and typically have their
-    # main package under cmd/<name>/main.go.  Prefer an explicit cmd/
-    # subdirectory (the conventional Go layout) and fall back to the
-    # module root.
-    gomod = root / "go.mod"
-    if gomod.exists():
-        try:
-            import tomllib as _t  # noqa: F401  (just to confirm availability)
-        except ImportError:
-            pass
+    # Go projects use go.mod at the module root or in a subdirectory (e.g. whatsapp-bridge/).
+    # Prefer an explicit cmd/ subdirectory (the conventional Go layout) or the module path.
+    all_gomods = [root / "go.mod"] if (root / "go.mod").exists() else [
+        f for f in sorted(root.rglob("go.mod"))
+        if not any(part.startswith(".") or part in ("node_modules", "vendor", ".git") for part in f.relative_to(root).parts)
+    ]
+    if all_gomods:
+        gomod = all_gomods[0]
+        gdir = gomod.parent
         has_stdio_subcommand = False
         readme = ""
         try:
@@ -702,7 +724,7 @@ def _pick_local_entry(tmp_dir) -> list[str] | None:
         if "stdio" in readme:
             has_stdio_subcommand = True
         else:
-            for go_file in root.rglob("*.go"):
+            for go_file in gdir.rglob("*.go"):
                 try:
                     text = go_file.read_text(encoding="utf-8", errors="ignore").lower()
                     if "stdio" in text or "cobra" in text:
@@ -713,7 +735,7 @@ def _pick_local_entry(tmp_dir) -> list[str] | None:
 
         sub_args = ["stdio"] if has_stdio_subcommand else []
 
-        cmd_dir = root / "cmd"
+        cmd_dir = gdir / "cmd"
         if cmd_dir.is_dir():
             candidates = sorted(
                 d for d in cmd_dir.iterdir()
@@ -721,9 +743,11 @@ def _pick_local_entry(tmp_dir) -> list[str] | None:
             )
             for entry_dir in candidates:
                 if (entry_dir / "main.go").exists():
-                    return ["go", "run", f"./cmd/{entry_dir.name}"] + sub_args
-        # Fall back to module root: go run .
-        return ["go", "run", "."] + sub_args
+                    rel_sub = entry_dir.relative_to(root)
+                    return ["go", "run", f"./{rel_sub}"] + sub_args
+        rel_gdir = gdir.relative_to(root)
+        rel_str = f"./{rel_gdir}" if str(rel_gdir) != "." else "."
+        return ["go", "run", rel_str] + sub_args
 
     # ── Python ───────────────────────────────────────────────────────────
     # Locate the project's pyproject.toml — it may live in a subdirectory
@@ -903,7 +927,94 @@ async def _connect_stdio(
         elif "GITHUB_PERSONAL_ACCESS_TOKEN" in env and "GITHUB_TOKEN" not in env:
             env["GITHUB_TOKEN"] = env["GITHUB_PERSONAL_ACCESS_TOKEN"]
 
+    client_id = env.get("CLIENT_ID") or env.get("GOOGLE_CLIENT_ID") or env.get("GMAIL_CLIENT_ID") or env.get("OAUTH_CLIENT_ID")
+    client_secret = env.get("CLIENT_SECRET") or env.get("GOOGLE_CLIENT_SECRET") or env.get("GMAIL_CLIENT_SECRET") or env.get("OAUTH_CLIENT_SECRET")
+    refresh_token = env.get("REFRESH_TOKEN") or env.get("GOOGLE_REFRESH_TOKEN") or env.get("GMAIL_REFRESH_TOKEN")
+    access_token = env.get("ACCESS_TOKEN") or env.get("GOOGLE_ACCESS_TOKEN") or env.get("GMAIL_ACCESS_TOKEN")
+
+    # Inject universal uppercase env variable aliases so any standard server finds them
+    if client_id:
+        env.setdefault("CLIENT_ID", client_id)
+        env.setdefault("GOOGLE_CLIENT_ID", client_id)
+        env.setdefault("GMAIL_CLIENT_ID", client_id)
+        env.setdefault("OAUTH_CLIENT_ID", client_id)
+    if client_secret:
+        env.setdefault("CLIENT_SECRET", client_secret)
+        env.setdefault("GOOGLE_CLIENT_SECRET", client_secret)
+        env.setdefault("GMAIL_CLIENT_SECRET", client_secret)
+        env.setdefault("OAUTH_CLIENT_SECRET", client_secret)
+
     cmd_binary, cmd_args, cwd = await _prepare_local_repo_stdio(command, source_repo_url)
+
+    # Generic OAuth file provisioning: if OAuth credentials are provided for a stdio server,
+    # generate standard OAuth key/credential JSON files in both cwd and home config dirs,
+    # and map standard environment variable aliases to those file paths.
+    if client_id or client_secret or refresh_token or access_token:
+        import hashlib
+        import json
+        from pathlib import Path
+
+        oauth_json_data = {
+            "installed": {
+                "client_id": client_id or "",
+                "client_secret": client_secret or "",
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                "redirect_uris": ["http://localhost:3000/oauth2callback"],
+            },
+            "web": {
+                "client_id": client_id or "",
+                "client_secret": client_secret or "",
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                "redirect_uris": ["http://localhost:3000/oauth2callback"],
+            },
+        }
+
+        # Provision in server working directory (cwd)
+        cwd_path = Path(cwd) if cwd else Path.cwd()
+        cwd_oauth_file = cwd_path / "gcp-oauth.keys.json"
+        cwd_creds_file = cwd_path / "credentials.json"
+
+        if client_id and client_secret and not cwd_oauth_file.exists():
+            cwd_oauth_file.write_text(json.dumps(oauth_json_data, indent=2), encoding="utf-8")
+
+        if (refresh_token or access_token) and not cwd_creds_file.exists():
+            creds_data = {
+                "access_token": access_token or "placeholder_token",
+                "refresh_token": refresh_token or "",
+                "token_type": "Bearer",
+            }
+            cwd_creds_file.write_text(json.dumps(creds_data, indent=2), encoding="utf-8")
+
+        # Provision in standard user home config locations
+        home = Path.home()
+        for conf_dir in (home / ".gmail-mcp", home / ".config" / "google-drive-mcp", home / ".mcp"):
+            conf_dir.mkdir(parents=True, exist_ok=True)
+            o_file = conf_dir / "gcp-oauth.keys.json"
+            c_file = conf_dir / "credentials.json"
+            if client_id and client_secret and not o_file.exists():
+                o_file.write_text(json.dumps(oauth_json_data, indent=2), encoding="utf-8")
+            if (refresh_token or access_token) and not c_file.exists():
+                creds_data = {
+                    "access_token": access_token or "placeholder_token",
+                    "refresh_token": refresh_token or "",
+                    "token_type": "Bearer",
+                }
+                c_file.write_text(json.dumps(creds_data, indent=2), encoding="utf-8")
+
+        # Map standard environment variables to generated file paths
+        target_oauth_path = str(cwd_oauth_file if cwd_oauth_file.exists() else home / ".gmail-mcp" / "gcp-oauth.keys.json")
+        target_creds_path = str(cwd_creds_file if cwd_creds_file.exists() else home / ".gmail-mcp" / "credentials.json")
+
+        env.setdefault("GMAIL_OAUTH_PATH", target_oauth_path)
+        env.setdefault("GOOGLE_DRIVE_OAUTH_CREDENTIALS", target_oauth_path)
+        env.setdefault("OAUTH_KEYS_PATH", target_oauth_path)
+        env.setdefault("GCP_OAUTH_KEYS_PATH", target_oauth_path)
+        env.setdefault("GMAIL_CREDENTIALS_PATH", target_creds_path)
+        env.setdefault("CREDENTIALS_PATH", target_creds_path)
 
     logger.info(
         "starting_mcp_stdio",

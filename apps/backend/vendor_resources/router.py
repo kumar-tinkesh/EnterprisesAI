@@ -53,6 +53,7 @@ from vendor_resources.services.mcp_service import (
     add_mcp_server,
     test_mcp_connection,
     connect_registered_server,
+    disconnect_mcp_server,
     create_mcp_server,
     delete_mcp_server,
     get_mcp_server,
@@ -282,6 +283,24 @@ async def connect_mcp_server_endpoint(
             detail=f"Connection failed: {err_msg}",
         ) from exc
     return ConnectMCPServerResponse(**result)
+
+
+@router.post("/mcp/{server_id}/disconnect", response_model=MCPServerResponse)
+async def disconnect_mcp_server_endpoint(
+    server_id: str,
+    user: CurrentUser = _admin,
+    db: AsyncSession = Depends(get_db),
+):
+    """Disconnect an MCP server: reset status to UNCONNECTED and clear stored credentials."""
+    server = await get_mcp_server(db, server_id=server_id)
+    if server is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found"
+        )
+    updated = await disconnect_mcp_server(db, server=server)
+    await db.commit()
+    await db.refresh(updated)
+    return updated
 
 
 # ── Catalog (any authenticated user) ─────────────────────────────────
