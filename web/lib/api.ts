@@ -374,7 +374,7 @@ export interface Grant {
 }
 
 // Two-stage semantic tool search — GET /catalog/tools (see
-// apps/backend/vendor_resources/services/catalog_engine.get_relevant_tools_semantic).
+// apps/backend/user/services/catalog_engine.get_relevant_tools_semantic).
 // Selection only: no tool is ever called from this response.
 export interface ToolSearchResult {
   tool_id: string;
@@ -430,7 +430,7 @@ export const vendorApi = {
     }, token, BACKEND_API_URL),
   disconnectMCPServer: (token: string, serverId: string) =>
     request<VendorMCPServer>(`${VR}/mcp/${serverId}/disconnect`, { method: "POST" }, token, BACKEND_API_URL),
-  // "Connect via OAuth" bootstrap — see apps/backend/vendor_resources/services/oauth_flow.py
+  // "Connect via OAuth" bootstrap — see apps/backend/vendor/services/oauth_flow.py
   setMCPOAuthConfig: (token: string, serverId: string, body: OAuthConfigBody) =>
     request<VendorMCPServer>(`${VR}/mcp/${serverId}/oauth-config`, {
       method: "PATCH",

@@ -33,7 +33,7 @@ class BackendSettings(BaseSettings):
         ]
     )
     # Browser-reachable base URL for this service — used to build the one
-    # shared OAuth redirect_uri (see vendor_resources.services.oauth_flow)
+    # shared OAuth redirect_uri (see vendor.services.oauth_flow)
     # that every vendor-OAuth MCP server registers in its own provider
     # console. Override for a real deployment (must be HTTPS in production
     # per most providers' rules); localhost is fine for sandbox testing.

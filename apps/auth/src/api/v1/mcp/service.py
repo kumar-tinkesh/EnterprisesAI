@@ -13,13 +13,13 @@ from src.api.deps import CurrentUser
 from src.core.audit import log_audit_event
 from src.models.tenant import Tenant
 
-# Ensure vendor_resources is importable (same approach as main.py)
+# Ensure vendor.models is importable (same approach as main.py)
 ROOT = Path(__file__).resolve().parents[6]  # EnterpriseAI/ (file is at EnterpriseAI/apps/auth/src/api/v1/mcp/service.py)
 for _p in (ROOT, ROOT / "apps" / "auth", ROOT / "apps" / "backend"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from vendor_resources.models import VendorMCPServer, TenantResourceGrant  # noqa: E402
+from vendor.models import VendorMCPServer, TenantResourceGrant  # noqa: E402
 
 
 class McpServerService:

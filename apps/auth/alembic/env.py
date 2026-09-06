@@ -15,10 +15,10 @@ from src.models import *  # noqa: F401,F403  (register all tables)
 import sys
 from pathlib import Path
 
-# Register the Vendor Resources tables (apps/backend) on the same Base.metadata
+# Register the Vendor domain tables (apps/backend) on the same Base.metadata
 # so autogenerate sees them. IMPORTANT: import them under the SAME short module
-# name the apps use (``vendor_resources.models``, resolved via apps/backend on
-# sys.path). Importing them as ``apps.backend.vendor_resources.models`` would
+# name the apps use (``vendor.models``, resolved via apps/backend on
+# sys.path). Importing them as ``apps.backend.vendor.models`` would
 # load the file a *second* time under a different module name and re-define the
 # tables on the shared metadata → "Table 'vendor_mcp_servers' is already
 # defined for this MetaData instance".
@@ -28,7 +28,7 @@ for _p in (str(_ROOT), str(_ROOT / "apps" / "auth"), str(_ROOT / "apps" / "backe
         sys.path.insert(0, _p)
 
 try:  # pragma: no cover - import-time registration
-    import vendor_resources.models  # noqa: F401
+    import vendor.models  # noqa: F401
 except ImportError:
     pass
 

@@ -2,11 +2,13 @@
 
 Responsibilities:
   * Ensure the project root is on ``sys.path`` (absolute imports from any cwd).
-  * Register the vendor_resources ORM models on the shared ``Base.metadata`` so
+  * Register the vendor/user ORM models on the shared ``Base.metadata`` so
     the schema migration / ``create_all`` fallback sees them.
   * Bring the shared database schema to ``head`` (Alembic) on startup, falling
     back to ``create_db_tables()`` if Alembic is unavailable.
-  * Mount the vendor_resources router under ``/api/v1/vendor/resources``.
+  * Mount the vendor and user routers, both under ``/api/v1/vendor/resources``
+    (unchanged from before the vendor/user package split — see those routers'
+    docstrings for why the prefix stays shared).
 
 The backend reuses the Auth service's engine/session (``src.db.session``) and
 JWT guards (``src.api.deps``) — there is no second engine and no duplicate auth.
@@ -19,7 +21,7 @@ import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-# ── sys.path root injection (before any src.* / vendor_resources.* imports) ──
+# ── sys.path root injection (before any src.* / vendor.* / user.* imports) ──
 ROOT = Path(__file__).resolve().parents[2]  # EnterpriseAI/
 for _p in (ROOT, ROOT / "apps" / "auth", ROOT / "apps" / "backend"):
     if str(_p) not in sys.path:
@@ -31,7 +33,8 @@ from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from src.config import get_settings as get_auth_settings  # noqa: E402
 from src.db.session import create_db_tables  # noqa: E402
 
-from vendor_resources.router import router as vendor_resources_router  # noqa: E402
+from vendor.api.v1.router import router as vendor_router  # noqa: E402
+from user.api.v1.router import router as user_router  # noqa: E402
 
 from apps.backend.config import get_backend_settings  # noqa: E402
 
@@ -81,7 +84,12 @@ def create_app() -> FastAPI:
         return {"status": "ok", "service": "backend", "version": "0.1.0"}
 
     app.include_router(
-        vendor_resources_router,
+        vendor_router,
+        prefix=f"{_backend_settings.BACKEND_API_V1_PREFIX}/vendor/resources",
+        tags=["vendor-resources"],
+    )
+    app.include_router(
+        user_router,
         prefix=f"{_backend_settings.BACKEND_API_V1_PREFIX}/vendor/resources",
         tags=["vendor-resources"],
     )

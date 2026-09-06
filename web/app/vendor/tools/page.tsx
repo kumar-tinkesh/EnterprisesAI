@@ -701,7 +701,7 @@ function ConnectCredentialModal({
 
   // The provider redirects into a popup we open, which posts back here once
   // the admin finishes (or cancels) the consent screen — see
-  // apps/backend/vendor_resources/router.py::_oauth_result_html.
+  // apps/backend/vendor/api/v1/router.py::_oauth_result_html.
   useEffect(() => {
     function handleMessage(event: MessageEvent) {
       const data = event.data;

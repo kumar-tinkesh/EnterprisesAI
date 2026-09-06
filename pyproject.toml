@@ -29,6 +29,7 @@ dependencies = [
 dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    "import-linter>=2.5",
 ]
 
 [tool.uv]
@@ -36,8 +37,37 @@ package = false
 
 [tool.pytest.ini_options]
 minversion = "7.0"
-testpaths = ["apps/auth/tests", "apps/backend/vendor_resources/tests", "apps/llm_gateway/tests"]
+testpaths = ["apps/auth/tests", "apps/backend/vendor/tests", "apps/backend/user/tests", "apps/llm_gateway/tests"]
 python_files = ["test_*.py"]
 pythonpath = [".", "apps/auth", "apps/backend", "apps/llm_gateway"]
 asyncio_mode = "auto"
 filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.importlinter]
+root_packages = ["vendor", "user"]
+
+[[tool.importlinter.contracts]]
+name = "user must not import vendor's mutating/admin services"
+type = "forbidden"
+# Scoped to the non-test source tree: user.tests legitimately exercises
+# vendor.services.mcp_service (via the shared apps/backend fixtures) as
+# integration setup, which is not a production code dependency.
+source_modules = ["user.api", "user.services"]
+forbidden_modules = [
+    "vendor.services.mcp_service",
+    "vendor.services.mcp_client",
+    "vendor.services.mcp_detect",
+    "vendor.services.mcp_auth",
+    "vendor.services.repo_analyzer",
+    "vendor.services.oauth_flow",
+    "vendor.api",
+]
+
+[[tool.importlinter.contracts]]
+name = "vendor must never import from user"
+type = "forbidden"
+# Scoped to the non-test source tree: vendor.tests legitimately imports
+# user.services.catalog_engine to test access-filtering end to end, which
+# is not a production code dependency.
+source_modules = ["vendor.api", "vendor.services", "vendor.models"]
+forbidden_modules = ["user"]
