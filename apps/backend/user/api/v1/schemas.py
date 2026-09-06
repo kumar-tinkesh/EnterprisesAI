@@ -14,7 +14,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class CatalogEntry(BaseModel):
-    """An MCP server as seen by a consumer (never exposes secret refs)."""
+    """An MCP server as seen by a consumer (never exposes secret refs).
+
+    ``auth_type`` and ``credential_fields`` (names only — never values) let
+    the client render a "Connect" call to action and the right credential
+    form for it. ``connected`` reflects the *calling user's own* isolated
+    credential (see ``vendor.services.mcp_auth`` per-user rows) — never
+    whether some other user, or the vendor's own test account, has one."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -24,6 +30,9 @@ class CatalogEntry(BaseModel):
     transport: str
     server_url: str
     bound_tools: list
+    auth_type: str | None = None
+    credential_fields: list[str] = Field(default_factory=list)
+    connected: bool = False
 
 
 class CatalogResponse(BaseModel):
@@ -53,10 +62,18 @@ class ToolSearchResult(BaseModel):
 
 class ToolSearchResponse(BaseModel):
     """Two-stage semantic search results: relevant tools within the
-    caller's access-filtered, query-ranked top MCP servers."""
+    caller's access-filtered, query-ranked top MCP servers.
+
+    ``results`` only ever contains tools from servers the caller has
+    already connected their own credential for — a matching tool on an
+    unconnected server is never shown here. ``needs_connection_server_ids``
+    lists the (otherwise-matching) servers that were filtered out for
+    exactly that reason, so the client can offer a "Connect" call to
+    action for them instead of silently dropping them."""
 
     results: list[ToolSearchResult]
     count: int
+    needs_connection_server_ids: list[str] = Field(default_factory=list)
 
 
 class PlannedToolCall(BaseModel):
@@ -74,8 +91,12 @@ class PlannedToolCall(BaseModel):
 
 class ToolCallPlanResponse(BaseModel):
     """Result of ``GET /catalog/plan-tool-call``. ``plan`` is null when no
-    tool call could be produced; ``message`` then explains why."""
+    tool call could be produced; ``message`` then explains why.
+    ``needs_connection_server_id`` is set when the reason is specifically
+    that the caller hasn't connected their own credential for that server
+    yet — the client can use it to render a "Connect" call to action."""
 
     plan: PlannedToolCall | None
     candidates_considered: list[str]
     message: str | None = None
+    needs_connection_server_id: str | None = None

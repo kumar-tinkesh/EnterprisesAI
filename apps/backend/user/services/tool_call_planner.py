@@ -29,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.deps import CurrentUser
 
 from vendor.models import MCPTool, VendorMCPServer
-from user.services.catalog_engine import get_relevant_tools_semantic
+from user.services.catalog_engine import get_relevant_tools_semantic, has_user_credential
 from vendor.services.llm_gateway_client import get_gateway
 
 logger = logging.getLogger("user.tool_call_planner")
@@ -90,11 +90,14 @@ class ToolCallPlan:
 class ToolCallPlanResult:
     """Outcome of :func:`plan_tool_call`. ``plan`` is ``None`` when no tool
     call could be produced; ``message`` then explains why (no candidates,
-    chat LLM unavailable, or the model declined to call any tool)."""
+    chat LLM unavailable, the model declined to call any tool, or the
+    caller hasn't connected their own credential for the chosen tool's
+    server — see ``needs_connection_server_id``)."""
 
     plan: Optional[ToolCallPlan]
     candidates_considered: list[str]
     message: Optional[str] = None
+    needs_connection_server_id: Optional[str] = None
 
 
 async def plan_tool_call(
@@ -189,6 +192,21 @@ async def plan_tool_call(
             message=f"Model referenced an unknown tool ({call.name!r}).",
         )
     server, tool = match
+
+    # Gate on the *calling user's own* connection regardless of auth_type —
+    # even a "none"/no-auth server still needs the user to have clicked
+    # Connect at least once (proves the server actually starts/responds for
+    # them, and gives them their own isolated credential row). Do not
+    # special-case "none" here: a server registered without its auth_type
+    # filled in would otherwise silently skip this check entirely.
+    connected = await has_user_credential(db, server_id=server.id, user_id=user.id)
+    if not connected:
+        return ToolCallPlanResult(
+            plan=None,
+            candidates_considered=list(name_map),
+            message=f"Connect your {server.name} account before this tool can run.",
+            needs_connection_server_id=server.id,
+        )
 
     try:
         arguments = json.loads(call.arguments) if call.arguments else {}

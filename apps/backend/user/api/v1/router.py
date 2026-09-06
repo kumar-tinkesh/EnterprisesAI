@@ -36,9 +36,11 @@ from user.api.v1.schemas import (
     ToolSearchResult,
 )
 from user.services.catalog_engine import (
+    credential_field_names,
     get_authorized_vendor_catalog,
     get_authorized_vendor_catalog_semantic,
     get_relevant_tools_semantic,
+    get_user_connected_server_ids,
 )
 from user.services.tool_call_planner import plan_tool_call
 
@@ -66,7 +68,23 @@ async def get_catalog(
         )
     else:
         servers = await get_authorized_vendor_catalog(db, user=user)
-    entries = [CatalogEntry.model_validate(s) for s in servers]
+    connected_ids = await get_user_connected_server_ids(
+        db, server_ids=[s.id for s in servers], user_id=user.id
+    )
+    entries = [
+        CatalogEntry(
+            id=s.id,
+            name=s.name,
+            description=s.description,
+            transport=s.transport,
+            server_url=s.server_url,
+            bound_tools=s.bound_tools,
+            auth_type=s.auth_type,
+            credential_fields=credential_field_names(s),
+            connected=s.id in connected_ids,
+        )
+        for s in servers
+    ]
     return CatalogResponse(servers=entries, count=len(entries))
 
 
@@ -96,6 +114,13 @@ async def search_catalog_tools(
         top_k_servers=top_k_servers,
         top_k_tools=top_k_tools,
     )
+    connected_ids = await get_user_connected_server_ids(
+        db, server_ids=list({server.id for server, _tool, _score in matches}), user_id=user.id
+    )
+    # Only ever surface tools from servers the caller has connected their
+    # own credential for — a matching tool on an unconnected server is
+    # dropped from `results`, not shown, and its server id is reported
+    # separately so the client can offer "Connect" instead.
     results = [
         ToolSearchResult(
             tool_id=tool.id,
@@ -107,8 +132,16 @@ async def search_catalog_tools(
             score=score,
         )
         for server, tool, score in matches
+        if server.id in connected_ids
     ]
-    return ToolSearchResponse(results=results, count=len(results))
+    needs_connection_server_ids = sorted(
+        {server.id for server, _tool, _score in matches if server.id not in connected_ids}
+    )
+    return ToolSearchResponse(
+        results=results,
+        count=len(results),
+        needs_connection_server_ids=needs_connection_server_ids,
+    )
 
 
 @router.get("/catalog/plan-tool-call", response_model=ToolCallPlanResponse)
@@ -155,4 +188,5 @@ async def plan_tool_call_endpoint(
         plan=plan,
         candidates_considered=result.candidates_considered,
         message=result.message,
+        needs_connection_server_id=result.needs_connection_server_id,
     )

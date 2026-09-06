@@ -18,6 +18,8 @@ Routes:
     PATCH  /mcp/{id}/oauth-config      vendor_admin  Manually set OAuth authorize/token endpoints
     POST   /mcp/{id}/oauth/authorize  vendor_admin  Build the provider consent URL ("Connect via OAuth")
     GET    /mcp/oauth/callback        public         Provider redirects here after consent (state-scoped)
+    POST   /mcp/{id}/connect-as-user  any user      End-user self-service connect (own isolated credential)
+    POST   /mcp/{id}/disconnect-as-user  any user   End-user self-service disconnect (own isolated credential only)
 
 Read-only catalog/search/plan-tool-call routes for regular users live in
 ``user.api.v1.router`` instead.
@@ -35,7 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.backend.config import get_backend_settings
 
-from src.api.deps import CurrentUser, require_roles
+from src.api.deps import CurrentUser, get_current_user, require_roles
 from src.core.roles import Roles
 from src.db.session import get_db
 
@@ -65,8 +67,11 @@ from vendor.services.mcp_detect import McpDetectError, detect_mcp_server
 from vendor.services.mcp_service import (
     add_mcp_server,
     test_mcp_connection,
+    verify_user_credentials,
+    is_server_visible_to_user,
     connect_registered_server,
     disconnect_mcp_server,
+    disconnect_user_credential,
     create_mcp_server,
     delete_mcp_server,
     get_mcp_server,
@@ -306,6 +311,100 @@ async def connect_mcp_server_endpoint(
             detail=f"Connection failed: {err_msg}",
         ) from exc
     return ConnectMCPServerResponse(**result)
+
+
+@router.post("/mcp/{server_id}/connect-as-user", response_model=ConnectMCPServerResponse)
+async def connect_mcp_server_as_user_endpoint(
+    server_id: str,
+    payload: ConnectCredentialsRequest,
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """End-user self-service connect: store *this user's own* credentials for
+    an already vendor-verified server and prove they work.
+
+    Every user gets their own isolated credential row — even two users in
+    the same tenant never see or reuse each other's connection, and nobody
+    falls back to the vendor's test-account. Does not touch the shared tool
+    catalog (only the vendor's own ``POST /mcp/{id}/test`` does that) —
+    tools were already discovered once, by the vendor; this just proves the
+    calling user's own credentials work against them.
+    """
+    server = await get_mcp_server(db, server_id=server_id)
+    if server is None or not await is_server_visible_to_user(db, user=user, server=server):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found"
+        )
+    if server.status != "VERIFIED":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This server hasn't been verified by the vendor yet",
+        )
+    try:
+        result = await verify_user_credentials(
+            db,
+            server=server,
+            user_id=user.id,
+            tenant_id=user.tenant_id,
+            request_credentials=payload.credentials or {},
+        )
+        await db.commit()  # persist any rotated OAuth tokens / dynamic registrations
+    except McpAuthError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Credential resolution failed: {exc}",
+        ) from exc
+    except Exception as exc:
+        await db.rollback()
+        logger.exception(
+            "Failed to connect user %s to MCP server %s", user.id, server_id
+        )
+
+        # Unpack BaseExceptionGroup (Python 3.11+) to extract root cause
+        err_msg = str(exc)
+        if isinstance(exc, BaseExceptionGroup):
+            sub_msgs = []
+            for sub in exc.exceptions:
+                if isinstance(sub, BaseExceptionGroup):
+                    sub_msgs.extend([str(s) for s in sub.exceptions])
+                else:
+                    sub_msgs.append(str(sub))
+            err_msg = " | ".join(sub_msgs)
+
+        if "Connection closed" in err_msg or "MCPError" in err_msg:
+            err_msg = "MCP server process exited (connection closed). Please verify your credentials."
+
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Connection failed: {err_msg}",
+        ) from exc
+    return ConnectMCPServerResponse(
+        transport=result["transport"],
+        bound_tools=result["tool_names"],
+        tools=[],
+        auth_type=result.get("auth_type", "none"),
+        status="CONNECTED",
+    )
+
+
+@router.post("/mcp/{server_id}/disconnect-as-user", status_code=status.HTTP_204_NO_CONTENT)
+async def disconnect_mcp_server_as_user_endpoint(
+    server_id: str,
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """End-user self-service disconnect: remove only the calling user's own
+    isolated credential for a server. Never touches the shared tool catalog,
+    ``server.status``, or any other user's connection — that's exclusively
+    the vendor-admin ``POST /mcp/{id}/disconnect`` below."""
+    server = await get_mcp_server(db, server_id=server_id)
+    if server is None or not await is_server_visible_to_user(db, user=user, server=server):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found"
+        )
+    await disconnect_user_credential(db, server_id=server_id, user_id=user.id)
+    await db.commit()
 
 
 @router.post("/mcp/{server_id}/disconnect", response_model=MCPServerResponse)

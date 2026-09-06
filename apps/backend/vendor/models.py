@@ -37,6 +37,7 @@ from sqlalchemy import (
     JSON,
     String,
     Text,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -222,18 +223,44 @@ class VendorMCPServer(Base, TimestampMixin):
 # ---------------------------------------------------------------------------
 
 class VendorMCPCredential(Base, TimestampMixin):
-    """Encrypted credentials for an MCP server (vendor-level or per-tenant).
+    """Encrypted credentials for an MCP server (vendor-level, per-tenant, or
+    per-user).
 
     ``encrypted_credentials`` holds a Fernet-encrypted JSON blob of the
     credential fields (API keys, basic passwords, OAuth client secrets and
-    refresh tokens). ``tenant_id IS NULL`` marks vendor-level credentials;
-    a per-tenant row overrides the vendor-level fallback. Managed by
-    ``vendor.services.mcp_auth``.
+    refresh tokens).
+
+    Two distinct row "kinds" share this table, distinguished by ``user_id``:
+
+    * ``user_id IS NULL`` — a shared row (vendor-level when ``tenant_id`` is
+      also ``NULL``, or a tenant-wide fallback otherwise). This is the only
+      kind that existed before per-user isolation; ``ix_vmc_server_tenant_shared``
+      keeps it unique per ``(server_id, tenant_id)``, unchanged.
+    * ``user_id IS NOT NULL`` — a single end user's own credential for a
+      server, isolated from every other user (even within the same tenant).
+      ``ix_vmc_server_user`` keeps it unique per ``(server_id, user_id)``.
+
+    Managed by ``vendor.services.mcp_auth``.
     """
 
     __tablename__ = "vendor_mcp_credentials"
     __table_args__ = (
-        Index("ix_vmc_server_tenant", "server_id", "tenant_id", unique=True),
+        Index(
+            "ix_vmc_server_tenant_shared",
+            "server_id",
+            "tenant_id",
+            unique=True,
+            postgresql_where=text("user_id IS NULL"),
+            sqlite_where=text("user_id IS NULL"),
+        ),
+        Index(
+            "ix_vmc_server_user",
+            "server_id",
+            "user_id",
+            unique=True,
+            postgresql_where=text("user_id IS NOT NULL"),
+            sqlite_where=text("user_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
@@ -243,6 +270,7 @@ class VendorMCPCredential(Base, TimestampMixin):
         index=True,
     )
     tenant_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    user_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     encrypted_credentials: Mapped[str] = mapped_column(Text, nullable=False)
 
 

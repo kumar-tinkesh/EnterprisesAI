@@ -18,7 +18,9 @@ from typing import Optional
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.api.deps import CurrentUser
 from src.core.audit import log_audit_event
+from src.core.roles import Roles
 from src.models import Tenant
 
 from vendor.models import MCPTool, TenantResourceGrant, VendorMCPServer
@@ -225,18 +227,19 @@ async def create_mcp_server(
     return server
 
 
-async def test_mcp_connection(
+async def _resolve_and_build_config(
     db: AsyncSession,
     *,
     server: VendorMCPServer,
-    request_credentials: dict[str, str] | None = None,
-    tenant_id: str | None = None,
+    request_credentials: dict[str, str] | None,
+    tenant_id: str | None,
+    user_id: str | None = None,
 ) -> dict:
-    """Step 2: Test connection and discover tools for a registered MCP server.
-
-    Resolves auth (stored + request credentials), connects via generic MCPClient,
-    runs initialize + tools/list, saves discovered tools, updates status to VERIFIED.
-    """
+    """Shared by ``test_mcp_connection`` (vendor verification) and
+    ``verify_user_credentials`` (end-user connect): resolve auth, self-heal
+    known launch-config quirks, and build the config dict ``MCPClient.connect``
+    expects. ``user_id``, when given, scopes credential lookup/caching to
+    that user's own isolated row (see ``mcp_auth.resolve_auth``)."""
     # Determine transport (with self-healing for GitHub repositories with local commands)
     transport = getattr(server, "transport", None)
     if server.source_type == "github" and server.command and transport in ("streamable_http", "sse", "unknown", None):
@@ -256,6 +259,7 @@ async def test_mcp_connection(
             auth_config=auth_config,
             credentials=request_credentials,
             tenant_id=tenant_id,
+            user_id=user_id,
             server_name=server.name,
         )
     except mcp_auth.McpAuthError as exc:
@@ -310,6 +314,25 @@ async def test_mcp_connection(
             "endpoint": server.endpoint or server.server_url,
         })
 
+    return config
+
+
+async def test_mcp_connection(
+    db: AsyncSession,
+    *,
+    server: VendorMCPServer,
+    request_credentials: dict[str, str] | None = None,
+    tenant_id: str | None = None,
+) -> dict:
+    """Step 2: Test connection and discover tools for a registered MCP server.
+
+    Resolves auth (stored + request credentials), connects via generic MCPClient,
+    runs initialize + tools/list, saves discovered tools, updates status to VERIFIED.
+    """
+    config = await _resolve_and_build_config(
+        db, server=server, request_credentials=request_credentials, tenant_id=tenant_id
+    )
+
     # Connect via generic client
     client = MCPClient()
     result = await client.connect(config)
@@ -359,6 +382,85 @@ async def test_mcp_connection(
         "auth_type": result.get("auth_type", server.auth_type),
         "status": "VERIFIED",
     }
+
+
+async def verify_user_credentials(
+    db: AsyncSession,
+    *,
+    server: VendorMCPServer,
+    user_id: str,
+    tenant_id: str | None,
+    request_credentials: dict[str, str],
+) -> dict:
+    """End-user self-service connect: prove *this user's own* credentials
+    work against an already vendor-verified server, then store them scoped
+    to that user alone (isolated from every other user, even in the same
+    tenant, and never falling back to the vendor's test-account).
+
+    Deliberately does NOT touch ``MCPTool`` rows, ``server.status`` or
+    ``server.bound_tools`` — that shared tool catalog is exclusively owned
+    by the vendor's own ``test_mcp_connection()`` verification. This keeps a
+    real user's connect attempt from ever overwriting the tools every other
+    user relies on.
+    """
+    config = await _resolve_and_build_config(
+        db,
+        server=server,
+        request_credentials=request_credentials,
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
+
+    client = MCPClient()
+    result = await client.connect(config)
+
+    await mcp_auth.store_server_credentials(
+        db,
+        server_id=str(server.id),
+        credentials=request_credentials,
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
+
+    await log_audit_event(
+        db,
+        action="mcp_server.user_connect",
+        user_id=user_id,
+        resource=f"mcp_server:{server.id}",
+        detail=f"tools_discovered={len(result.get('tools', []))}",
+    )
+
+    return {
+        "transport": result["transport"],
+        "tool_names": [t["name"] for t in result.get("tools", [])],
+        "auth_type": result.get("auth_type", server.auth_type),
+    }
+
+
+async def is_server_visible_to_user(
+    db: AsyncSession, *, user: CurrentUser, server: VendorMCPServer
+) -> bool:
+    """Same access rule as ``user.services.catalog_engine.get_authorized_vendor_catalog``,
+    re-implemented here (rather than imported) because the vendor package
+    must never import from the user package (see the repo's import-linter
+    contracts) — this is the vendor-side owner of ``VendorMCPServer`` /
+    ``TenantResourceGrant``, so it can enforce the same rule locally."""
+    if user.role == Roles.VENDOR_ADMIN or server.is_global:
+        return True
+    if user.role == Roles.SOLO_USER:
+        return False
+    if not user.tenant_id:
+        return False
+    grant = (
+        await db.execute(
+            select(TenantResourceGrant.id).where(
+                TenantResourceGrant.tenant_id == user.tenant_id,
+                TenantResourceGrant.resource_type == "mcp",
+                TenantResourceGrant.resource_id == server.id,
+            )
+        )
+    ).scalars().first()
+    return grant is not None
 
 
 async def list_mcp_servers(db: AsyncSession) -> list[VendorMCPServer]:
@@ -518,12 +620,29 @@ async def disconnect_mcp_server(
     return server
 
 
+async def disconnect_user_credential(db: AsyncSession, *, server_id: str, user_id: str) -> None:
+    """End-user self-service disconnect: remove only *this user's own*
+    isolated credential row and its cached token.
+
+    Deliberately does NOT touch ``server.status``/``bound_tools`` or any
+    other user's credential — the shared tool catalog and every other
+    user's connection are owned by the vendor's own
+    ``disconnect_mcp_server()`` (vendor-admin only).
+    """
+    await mcp_auth.delete_user_credential(db, server_id=server_id, user_id=user_id)
+    mcp_auth.clear_token_cache(server_id, user_id=user_id)
+    await db.flush()
+
+
 __all__ = [
     "add_mcp_server",
     "test_mcp_connection",
+    "verify_user_credentials",
+    "is_server_visible_to_user",
     "create_mcp_server",
     "connect_registered_server",
     "disconnect_mcp_server",
+    "disconnect_user_credential",
     "list_mcp_servers",
     "get_mcp_server",
     "delete_mcp_server",

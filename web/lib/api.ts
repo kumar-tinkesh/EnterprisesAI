@@ -352,6 +352,9 @@ export interface MCPServerEntry {
   transport: string;
   server_url: string;
   bound_tools: string[];
+  auth_type?: string | null;
+  credential_fields?: string[];
+  connected?: boolean;
 }
 
 export interface CatalogResponse {
@@ -389,6 +392,9 @@ export interface ToolSearchResult {
 export interface ToolSearchResponse {
   results: ToolSearchResult[];
   count: number;
+  // Servers with a matching tool that were left out of `results` because
+  // the caller hasn't connected their own credential for them yet.
+  needs_connection_server_ids?: string[];
 }
 
 // GET /catalog/plan-tool-call — an LLM picks one tool from the search above
@@ -407,6 +413,9 @@ export interface ToolCallPlanResponse {
   plan: PlannedToolCall | null;
   candidates_considered: string[];
   message: string | null;
+  // Set when `message` is specifically "you haven't connected this server
+  // yet" — the client can use it to render a "Connect" call to action.
+  needs_connection_server_id?: string | null;
 }
 
 /** Client for the Vendor Resources / AI Compiler backend (port 8002). */
@@ -430,6 +439,21 @@ export const vendorApi = {
     }, token, BACKEND_API_URL),
   disconnectMCPServer: (token: string, serverId: string) =>
     request<VendorMCPServer>(`${VR}/mcp/${serverId}/disconnect`, { method: "POST" }, token, BACKEND_API_URL),
+  // End-user self-service connect — stores *this user's own* isolated
+  // credential for an already vendor-verified server (see
+  // apps/backend/vendor/api/v1/router.py::connect_mcp_server_as_user_endpoint).
+  connectMCPServerAsUser: (token: string, serverId: string, credentials?: Record<string, string> | null) =>
+    request<ConnectMCPServerResponse>(`${VR}/mcp/${serverId}/connect-as-user`, {
+      method: "POST",
+      body: JSON.stringify(credentials ? { credentials } : {}),
+    }, token, BACKEND_API_URL),
+  // End-user self-service disconnect — removes only *this user's own*
+  // isolated credential (see
+  // apps/backend/vendor/api/v1/router.py::disconnect_mcp_server_as_user_endpoint).
+  disconnectMCPServerAsUser: (token: string, serverId: string) =>
+    request<void>(`${VR}/mcp/${serverId}/disconnect-as-user`, {
+      method: "POST",
+    }, token, BACKEND_API_URL),
   // "Connect via OAuth" bootstrap — see apps/backend/vendor/services/oauth_flow.py
   setMCPOAuthConfig: (token: string, serverId: string, body: OAuthConfigBody) =>
     request<VendorMCPServer>(`${VR}/mcp/${serverId}/oauth-config`, {

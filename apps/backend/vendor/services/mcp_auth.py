@@ -108,38 +108,81 @@ async def store_server_credentials(
     server_id: str,
     credentials: dict[str, str],
     tenant_id: str | None = None,
+    user_id: str | None = None,
 ) -> None:
-    """Encrypt and upsert the credential set for a server (optionally per-tenant)."""
+    """Encrypt and upsert the credential set for a server.
+
+    ``user_id`` given → upserts that user's own isolated row (keyed on
+    ``server_id`` + ``user_id`` alone — a user belongs to at most one
+    tenant, so ``tenant_id`` doesn't need to disambiguate it, though it is
+    still stored for defense-in-depth). Otherwise, upserts the shared
+    vendor-level/tenant-fallback row (unchanged legacy behaviour).
+    """
     encrypted = encrypt_credentials(credentials)
-    row = (
-        await db.execute(
-            select(VendorMCPCredential).where(
-                VendorMCPCredential.server_id == server_id,
-                VendorMCPCredential.tenant_id == tenant_id,
-            )
-        )
-    ).scalars().first()
+    conditions = [VendorMCPCredential.server_id == server_id]
+    if user_id is not None:
+        conditions.append(VendorMCPCredential.user_id == user_id)
+    else:
+        conditions.append(VendorMCPCredential.user_id.is_(None))
+        conditions.append(VendorMCPCredential.tenant_id == tenant_id)
+    row = (await db.execute(select(VendorMCPCredential).where(*conditions))).scalars().first()
     if row is not None:
         row.encrypted_credentials = encrypted
+        if user_id is not None:
+            row.tenant_id = tenant_id
     else:
         db.add(
             VendorMCPCredential(
-                server_id=server_id, tenant_id=tenant_id, encrypted_credentials=encrypted
+                server_id=server_id,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                encrypted_credentials=encrypted,
             )
         )
     await db.flush()
 
 
 async def load_server_credentials(
-    db: AsyncSession, *, server_id: str, tenant_id: str | None = None
+    db: AsyncSession,
+    *,
+    server_id: str,
+    tenant_id: str | None = None,
+    user_id: str | None = None,
+    allow_shared_fallback: bool = False,
 ) -> dict[str, str]:
-    """Decrypt and return stored credentials; per-tenant rows override the
-    vendor-level (``tenant_id IS NULL``) fallback."""
+    """Decrypt and return stored credentials.
+
+    ``user_id`` given → looks up that user's own isolated row first. By
+    default (``allow_shared_fallback=False``) a user with no row of their
+    own gets nothing back — they must connect their own credentials, they
+    never silently inherit the vendor's test-account or a tenant-wide
+    fallback. Pass ``allow_shared_fallback=True`` to opt into the old
+    tenant/vendor-level lookup when no per-user row exists.
+
+    Without ``user_id`` (vendor-admin verification flow, unchanged):
+    per-tenant rows override the vendor-level (``tenant_id IS NULL``)
+    fallback, exactly as before.
+    """
+    if user_id is not None:
+        row = (
+            await db.execute(
+                select(VendorMCPCredential).where(
+                    VendorMCPCredential.server_id == server_id,
+                    VendorMCPCredential.user_id == user_id,
+                )
+            )
+        ).scalars().first()
+        if row is not None:
+            return decrypt_credentials(row.encrypted_credentials)
+        if not allow_shared_fallback:
+            return {}
+
     row = (
         await db.execute(
             select(VendorMCPCredential).where(
                 VendorMCPCredential.server_id == server_id,
                 VendorMCPCredential.tenant_id == tenant_id,
+                VendorMCPCredential.user_id.is_(None),
             )
         )
     ).scalars().first()
@@ -149,16 +192,45 @@ async def load_server_credentials(
                 select(VendorMCPCredential).where(
                     VendorMCPCredential.server_id == server_id,
                     VendorMCPCredential.tenant_id.is_(None),
+                    VendorMCPCredential.user_id.is_(None),
                 )
             )
         ).scalars().first()
     return decrypt_credentials(row.encrypted_credentials) if row else {}
 
 
+async def has_user_credential(db: AsyncSession, *, server_id: str, user_id: str) -> bool:
+    """Whether this specific user has connected their own credential for a
+    server — used to gate tool invocation on "connect first" rather than
+    silently falling back to someone else's connection."""
+    row = (
+        await db.execute(
+            select(VendorMCPCredential.id).where(
+                VendorMCPCredential.server_id == server_id,
+                VendorMCPCredential.user_id == user_id,
+            )
+        )
+    ).scalars().first()
+    return row is not None
+
+
 async def delete_server_credentials(db: AsyncSession, *, server_id: str) -> None:
-    """Delete every stored credential row (vendor-level and per-tenant)."""
+    """Delete every stored credential row (vendor-level, per-tenant, AND
+    every user's own isolated row) — vendor-admin "Disconnect" only; never
+    call this for a single end user, use :func:`delete_user_credential`."""
     await db.execute(
         delete(VendorMCPCredential).where(VendorMCPCredential.server_id == server_id)
+    )
+
+
+async def delete_user_credential(db: AsyncSession, *, server_id: str, user_id: str) -> None:
+    """Delete only the calling user's own isolated credential row — leaves
+    the vendor-level row and every other user's row untouched."""
+    await db.execute(
+        delete(VendorMCPCredential).where(
+            VendorMCPCredential.server_id == server_id,
+            VendorMCPCredential.user_id == user_id,
+        )
     )
 
 
@@ -328,8 +400,12 @@ async def _dynamically_register_client(
 # ── token cache ──────────────────────────────────────────────────────
 
 
-def _cache_key(server_id: str | None, server_url: str, tenant_id: str | None):
-    return (server_id or server_url, tenant_id)
+def _cache_key(
+    server_id: str | None, server_url: str, tenant_id: str | None, user_id: str | None = None
+):
+    # user_id is part of the key so two different users (even sharing a
+    # tenant_id, or both None for solo users) never share a cached token.
+    return (server_id or server_url, tenant_id, user_id)
 
 
 def _cache_get(key) -> str | None:
@@ -349,10 +425,15 @@ def _cache_put(key, token_response: dict[str, Any]) -> str:
     return token_response["access_token"]
 
 
-def clear_token_cache(server_id: str | None = None) -> None:
-    """Drop cached tokens (all, or only one server's)."""
+def clear_token_cache(server_id: str | None = None, *, user_id: str | None = None) -> None:
+    """Drop cached tokens: all, only one server's, or (with ``user_id``)
+    only that one user's cached token for that server — leaves every other
+    user's cached token for the same server alone."""
     if server_id is None:
         _token_cache.clear()
+    elif user_id is not None:
+        for key in [k for k in _token_cache if k[0] == server_id and k[2] == user_id]:
+            _token_cache.pop(key, None)
     else:
         for key in [k for k in _token_cache if k[0] == server_id]:
             _token_cache.pop(key, None)
@@ -369,19 +450,22 @@ async def resolve_auth(
     auth_config: dict,
     credentials: dict[str, str] | None = None,
     tenant_id: str | None = None,
+    user_id: str | None = None,
     server_name: str = "",
 ) -> dict[str, Any]:
     """Resolve ready-to-use auth for an MCP server.
 
     Returns ``{"headers", "credentials", "auth_type", "token_source"}``:
     ``headers`` go straight into the MCP handshake; ``credentials`` is the
-    merged credential map (used for stdio env-var injection).
+    merged credential map (used for stdio env-var injection). ``user_id``,
+    when given, scopes credential lookup (and OAuth token caching/rotation)
+    to that user's own isolated row — see ``load_server_credentials``.
     """
     stored: dict[str, str] = {}
     if db is not None and server_id:
         try:
             stored = await load_server_credentials(
-                db, server_id=server_id, tenant_id=tenant_id
+                db, server_id=server_id, tenant_id=tenant_id, user_id=user_id
             )
         except McpAuthError:
             logger.warning("Stored credentials for %s are unreadable", server_id)
@@ -448,6 +532,7 @@ async def resolve_auth(
             auth_config=auth_config or {},
             credentials=merged,
             tenant_id=tenant_id,
+            user_id=user_id,
         )
 
     # unknown → legacy raw header passthrough
@@ -468,11 +553,12 @@ async def _resolve_oauth2(
     auth_config: dict,
     credentials: dict[str, str],
     tenant_id: str | None,
+    user_id: str | None = None,
 ) -> dict[str, Any]:
     """Acquire an OAuth2 access token natively, trying (in order): cached
     token → refresh_token grant → client_credentials grant → RFC 7591
     dynamic registration → passthrough of a pre-obtained token."""
-    key = _cache_key(server_id, server_url, tenant_id)
+    key = _cache_key(server_id, server_url, tenant_id, user_id)
     oauth = auth_config.get("oauth") or {}
     token_endpoint = oauth.get("token_endpoint") or credentials.get("token_endpoint")
     refresh_token = credentials.get("refresh_token")
@@ -506,6 +592,7 @@ async def _resolve_oauth2(
                         "refresh_token": token_response["refresh_token"],
                     },
                     tenant_id=tenant_id,
+                    user_id=user_id,
                 )
             return _result(_bearer_header(token_response["access_token"]), "refresh_token")
         except McpAuthError as exc:
@@ -531,7 +618,11 @@ async def _resolve_oauth2(
             _cache_put(key, token_response)
             if db is not None and server_id:
                 await store_server_credentials(
-                    db, server_id=server_id, credentials=credentials, tenant_id=tenant_id
+                    db,
+                    server_id=server_id,
+                    credentials=credentials,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
                 )
             return _result(
                 _bearer_header(token_response["access_token"]), "dynamic_registration"

@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.deps import CurrentUser
 from src.core.roles import Roles
 
-from vendor.models import MCPTool, TenantResourceGrant, VendorMCPServer
+from vendor.models import MCPTool, TenantResourceGrant, VendorMCPCredential, VendorMCPServer
 from vendor.services.embedding import embed_text
 from vendor.services.text_repr import server_text, tool_text
 
@@ -179,6 +179,60 @@ async def get_relevant_tools_semantic(
     ]
 
 
+async def has_user_credential(db: AsyncSession, *, server_id: str, user_id: str) -> bool:
+    """Whether the calling user has connected their own credential for a
+    server — used to gate tool-call planning on "connect first" instead of
+    silently returning nothing. Queries ``vendor.models`` directly (a
+    whitelisted read-only exception in the repo's import-linter contracts)
+    rather than ``vendor.services.mcp_auth``, which this package must never
+    import."""
+    row = (
+        await db.execute(
+            select(VendorMCPCredential.id).where(
+                VendorMCPCredential.server_id == server_id,
+                VendorMCPCredential.user_id == user_id,
+            )
+        )
+    ).scalars().first()
+    return row is not None
+
+
+async def get_user_connected_server_ids(
+    db: AsyncSession, *, server_ids: list[str], user_id: str
+) -> set[str]:
+    """Bulk version of :func:`has_user_credential` — which of these servers
+    the calling user has already connected their own credential for. Used
+    to annotate the catalog listing so the client can render "Connect" vs
+    "Connected" per server without one query each."""
+    if not server_ids:
+        return set()
+    rows = (
+        await db.execute(
+            select(VendorMCPCredential.server_id).where(
+                VendorMCPCredential.server_id.in_(server_ids),
+                VendorMCPCredential.user_id == user_id,
+            )
+        )
+    ).scalars().all()
+    return set(rows)
+
+
+def credential_field_names(server: VendorMCPServer) -> list[str]:
+    """Names (never values) of the credential fields a caller must supply to
+    connect to ``server`` — mirrors the vendor admin's own credential-field
+    resolution (see ``ConnectCredentialModal`` in the vendor tools UI):
+    prefer the structured ``auth_schema.fields``, else fall back to
+    ``env_vars`` keys that don't already have a stored (vendor-level)
+    value."""
+    auth_schema = getattr(server, "auth_schema", None) or {}
+    schema_fields = auth_schema.get("fields") if isinstance(auth_schema, dict) else None
+    if schema_fields:
+        return [f["name"] for f in schema_fields if isinstance(f, dict) and f.get("name")]
+    if server.env_vars:
+        return [k for k, v in server.env_vars.items() if not v]
+    return []
+
+
 # Re-exported for backward compatibility — this used to be defined here.
 cosine_similarity = hybrid_search.cosine_similarity
 
@@ -187,5 +241,8 @@ __all__ = [
     "get_authorized_vendor_catalog",
     "get_authorized_vendor_catalog_semantic",
     "get_relevant_tools_semantic",
+    "has_user_credential",
+    "get_user_connected_server_ids",
+    "credential_field_names",
     "cosine_similarity",
 ]
