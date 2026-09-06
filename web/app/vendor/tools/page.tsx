@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Server,
@@ -31,6 +31,8 @@ import {
   type ConnectMCPServerResponse,
   type AnalyzeRepoResponse,
   type AnalyzeRepoRequest,
+  type OAuthConfigBody,
+  type OAuthAuthorizeBody,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -120,6 +122,10 @@ export default function VendorMCPPage() {
       const id = (vars as any).id as string;
       setToolsServer({ id, name: servers.find((s) => s.id === id)?.name ?? id, response: data, error: null });
       setShowToolsModal(true);
+      // Without this, the server list keeps its pre-connect bound_tools (empty),
+      // so reopening "List Discovered Tools" later shows nothing even though
+      // the backend now has them — this is what the wrench button reads from.
+      queryClient.invalidateQueries({ queryKey: ["vendor-mcp-servers"] });
     },
     onError: (err, vars) => {
       const id = (vars as any).id as string;
@@ -376,7 +382,12 @@ export default function VendorMCPPage() {
 
       {showConnectModal && connectServer && (
         <ConnectCredentialModal
-          server={connectServer}
+          // Look the server up fresh from the list each render — the OAuth
+          // "Set endpoints"/"Connect via OAuth" actions invalidate this
+          // query, but connectServer itself is a snapshot taken when the
+          // modal opened and would otherwise never pick up the update.
+          server={servers.find((s) => s.id === connectServer.id) ?? connectServer}
+          accessToken={accessToken}
           onClose={() => setShowConnectModal(false)}
           onSubmit={(creds) => {
             connectMutation.mutate({ id: connectServer.id, credentials: creds ?? null });
@@ -498,8 +509,8 @@ function ToolsModal({
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
-        <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
+      <div className="flex max-h-[85vh] w-full max-w-md flex-col rounded-xl bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-zinc-100 px-6 py-4">
           <h3 className="text-lg font-semibold text-zinc-900">
             Tools for &ldquo;{serverName}&rdquo;
           </h3>
@@ -508,40 +519,40 @@ function ToolsModal({
           </button>
         </div>
 
-        {isPending ? (
-          <div className="flex justify-center py-8">
-            <Spinner className="h-6 w-6 text-zinc-500" />
-          </div>
-        ) : error ? (
-          <div className="py-4">
-            <p className="text-sm text-red-600">{error}</p>
-          </div>
-        ) : response ? (
-          <div className="py-4 space-y-3">
-            <div className="flex items-center gap-2 text-sm text-zinc-600">
-              <span className="inline-flex items-center rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium">
-                {response.transport}
-              </span>
-              <span className="text-xs text-zinc-500">
-                {response.bound_tools.length} tool(s) discovered
-              </span>
+        <div className="flex-1 overflow-y-auto px-6 py-4">
+          {isPending ? (
+            <div className="flex justify-center py-8">
+              <Spinner className="h-6 w-6 text-zinc-500" />
             </div>
-            {response.bound_tools.length > 0 ? (
-              <ul className="space-y-1">
-                {response.bound_tools.map((tool) => (
-                  <li key={tool} className="flex items-center gap-2 text-sm text-zinc-700">
-                    <Check className="h-3.5 w-3.5 text-emerald-500" />
-                    {tool}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-sm text-zinc-400">No tools discovered.</p>
-            )}
-          </div>
-        ) : null}
+          ) : error ? (
+            <p className="text-sm text-red-600">{error}</p>
+          ) : response ? (
+            <div className="space-y-3">
+              <div className="sticky -top-4 flex items-center gap-2 bg-white pb-2 pt-1 text-sm text-zinc-600">
+                <span className="inline-flex items-center rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium">
+                  {response.transport}
+                </span>
+                <span className="text-xs text-zinc-500">
+                  {response.bound_tools.length} tool(s) discovered
+                </span>
+              </div>
+              {response.bound_tools.length > 0 ? (
+                <ul className="space-y-1">
+                  {response.bound_tools.map((tool) => (
+                    <li key={tool} className="flex items-center gap-2 text-sm text-zinc-700">
+                      <Check className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                      {tool}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-sm text-zinc-400">No tools discovered.</p>
+              )}
+            </div>
+          ) : null}
+        </div>
 
-        <div className="flex justify-end pt-4">
+        <div className="flex justify-end border-t border-zinc-100 px-6 py-4">
           <Button variant="outline" onClick={onClose}>Close</Button>
         </div>
       </div>
@@ -620,6 +631,7 @@ function GrantServerModal({
 
 function ConnectCredentialModal({
   server,
+  accessToken,
   onClose,
   onSubmit,
   credKey,
@@ -629,6 +641,7 @@ function ConnectCredentialModal({
   isPending,
 }: {
   server: VendorMCPServer;
+  accessToken: string;
   onClose: () => void;
   onSubmit: (creds?: Record<string, string>) => void;
   credKey: string;
@@ -637,6 +650,7 @@ function ConnectCredentialModal({
   setCredValue: (v: string) => void;
   isPending: boolean;
 }) {
+  const queryClient = useQueryClient();
   const [customCreds, setCustomCreds] = useState<Record<string, string>>({});
   // Credential fields come from two sources:
   //  1. auth_config.credential_fields — populated by MCP detection for remote
@@ -672,6 +686,73 @@ function ConnectCredentialModal({
     detectedFields.length > 0 ? detectedFields : envFields;
   const isStdio = server.transport === "stdio";
   const needsNoCreds = credentialFields.length === 0 && isStdio;
+
+  // ── OAuth "Connect via provider" bootstrap (see oauth_flow.py backend) ──
+  const isOAuth = server.auth_type === "oauth2";
+  const oauthCfg: { authorization_endpoint?: string; token_endpoint?: string } =
+    (server.auth_config as any)?.oauth || {};
+  const oauthConfigured = !!(oauthCfg.authorization_endpoint && oauthCfg.token_endpoint);
+
+  const [showOAuthConfig, setShowOAuthConfig] = useState(false);
+  const [authEndpoint, setAuthEndpoint] = useState("");
+  const [tokenEndpoint, setTokenEndpoint] = useState("");
+  const [oauthScope, setOauthScope] = useState("");
+  const [oauthMessage, setOauthMessage] = useState<string | null>(null);
+
+  // The provider redirects into a popup we open, which posts back here once
+  // the admin finishes (or cancels) the consent screen — see
+  // apps/backend/vendor_resources/router.py::_oauth_result_html.
+  useEffect(() => {
+    function handleMessage(event: MessageEvent) {
+      const data = event.data;
+      if (!data || (data.type !== "MCP_OAUTH_SUCCESS" && data.type !== "MCP_OAUTH_ERROR")) return;
+      if (data.serverId && data.serverId !== server.id) return;
+      setOauthMessage(data.message || (data.type === "MCP_OAUTH_SUCCESS" ? "Connected." : "Failed."));
+      if (data.type === "MCP_OAUTH_SUCCESS") {
+        queryClient.invalidateQueries({ queryKey: ["vendor-mcp-servers"] });
+      }
+    }
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [server.id, queryClient]);
+
+  const oauthConfigMutation = useMutation({
+    mutationFn: (body: OAuthConfigBody) => vendorApi.setMCPOAuthConfig(accessToken, server.id, body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["vendor-mcp-servers"] });
+      setShowOAuthConfig(false);
+    },
+  });
+
+  const oauthAuthorizeMutation = useMutation({
+    mutationFn: (body: OAuthAuthorizeBody) => vendorApi.startMCPOAuthAuthorize(accessToken, server.id, body),
+    onSuccess: (data) => {
+      window.open(data.authorization_url, "mcp-oauth-connect", "width=600,height=750");
+      setOauthMessage("Waiting for you to finish in the popup window…");
+    },
+    onError: (err) => {
+      setOauthMessage(err instanceof ApiError ? err.message : "Could not start the OAuth flow.");
+    },
+  });
+
+  // Client ID/secret are just normal detected fields (e.g. QUICKBOOKS_CLIENT_ID) —
+  // find them by suffix rather than assuming an exact name, same fuzzy-match
+  // spirit as the backend's callback-param matching.
+  const findCredBySuffix = (suffix: string): string => {
+    const key = Object.keys(customCreds).find((k) => k.toUpperCase().endsWith(suffix));
+    return key ? customCreds[key] : "";
+  };
+
+  const handleOAuthConnect = () => {
+    const clientId = findCredBySuffix("CLIENT_ID");
+    const clientSecret = findCredBySuffix("CLIENT_SECRET");
+    if (!clientId || !clientSecret) {
+      setOauthMessage("Fill in the Client ID and Client Secret fields above first.");
+      return;
+    }
+    setOauthMessage(null);
+    oauthAuthorizeMutation.mutate({ client_id: clientId, client_secret: clientSecret });
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -755,6 +836,88 @@ function ConnectCredentialModal({
               </p>
             </>
           ) : null}
+
+          {isOAuth && (
+            <div className="rounded-lg border border-indigo-100 bg-indigo-50 p-3 space-y-2">
+              <p className="text-xs font-semibold text-indigo-800">OAuth provider detected</p>
+              {!oauthConfigured ? (
+                showOAuthConfig ? (
+                  <div className="space-y-2">
+                    <p className="text-xs text-indigo-600">
+                      This server&apos;s authorize/token URLs weren&apos;t auto-detected (common for
+                      local servers). Most providers publish these as fixed, documented URLs.
+                    </p>
+                    <Field label="Authorization endpoint">
+                      <Input
+                        value={authEndpoint}
+                        onChange={(e) => setAuthEndpoint(e.target.value)}
+                        placeholder="https://appcenter.intuit.com/connect/oauth2"
+                      />
+                    </Field>
+                    <Field label="Token endpoint">
+                      <Input
+                        value={tokenEndpoint}
+                        onChange={(e) => setTokenEndpoint(e.target.value)}
+                        placeholder="https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
+                      />
+                    </Field>
+                    <Field label="Scope (optional)">
+                      <Input
+                        value={oauthScope}
+                        onChange={(e) => setOauthScope(e.target.value)}
+                        placeholder="com.intuit.quickbooks.accounting"
+                      />
+                    </Field>
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={oauthConfigMutation.isPending || !authEndpoint.trim() || !tokenEndpoint.trim()}
+                        onClick={() =>
+                          oauthConfigMutation.mutate({
+                            authorization_endpoint: authEndpoint.trim(),
+                            token_endpoint: tokenEndpoint.trim(),
+                            scope: oauthScope.trim() || undefined,
+                          })
+                        }
+                      >
+                        {oauthConfigMutation.isPending ? <Spinner /> : null} Save endpoints
+                      </Button>
+                      <Button type="button" size="sm" variant="outline" onClick={() => setShowOAuthConfig(false)}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs text-indigo-700">
+                      No authorize/token URL set yet for this provider.
+                    </p>
+                    <Button type="button" size="sm" variant="outline" onClick={() => setShowOAuthConfig(true)}>
+                      Set OAuth endpoints
+                    </Button>
+                  </div>
+                )
+              ) : (
+                <div className="space-y-2">
+                  <p className="text-xs text-indigo-700">
+                    Fill in Client ID/Secret above, then connect via the provider&apos;s consent
+                    screen — it fills in the rest (refresh token, etc.) automatically.
+                  </p>
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={oauthAuthorizeMutation.isPending}
+                    onClick={handleOAuthConnect}
+                  >
+                    {oauthAuthorizeMutation.isPending ? <Spinner /> : <GlobeIcon className="h-4 w-4 mr-1" />}
+                    Connect via OAuth
+                  </Button>
+                </div>
+              )}
+              {oauthMessage && <p className="text-xs text-indigo-600">{oauthMessage}</p>}
+            </div>
+          )}
 
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>

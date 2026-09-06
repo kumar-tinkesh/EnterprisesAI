@@ -33,6 +33,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Index,
+    Integer,
     JSON,
     String,
     Text,
@@ -205,6 +206,16 @@ class VendorMCPServer(Base, TimestampMixin):
     env_vars: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, default=None)
     bound_tools: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
 
+    # ------------------------------------------------------------------
+    # Semantic search — embedding of "name. description" for catalog
+    # matching (see vendor_resources.services.catalog_engine). ``dim`` and
+    # ``embedding_model`` let callers detect a stale/mismatched vector (e.g.
+    # after switching embedding providers) instead of comparing garbage.
+    # ------------------------------------------------------------------
+    embedding: Mapped[Optional[list]] = mapped_column(JSON, nullable=True, default=None)
+    embedding_model: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    dim: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=None)
+
 
 # ---------------------------------------------------------------------------
 # VendorMCPCredential  (unchanged)
@@ -295,3 +306,10 @@ class MCPTool(Base, TimestampMixin):
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     input_schema: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     output_schema: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
+    # Semantic search — embedding of "name. description" (+ input_schema
+    # property names) for tool-level catalog matching. See VendorMCPServer
+    # above for why ``dim``/``embedding_model`` are tracked alongside it.
+    embedding: Mapped[Optional[list]] = mapped_column(JSON, nullable=True, default=None)
+    embedding_model: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    dim: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=None)

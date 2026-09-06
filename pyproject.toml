@@ -21,6 +21,8 @@ dependencies = [
     "mcp>=2.1.1",
     "PyGithub>=2.1.0",
     "structlog>=25.1.0",
+    "rank-bm25>=0.2.2",
+    "fastembed>=0.8.0",
 ]
 
 [dependency-groups]

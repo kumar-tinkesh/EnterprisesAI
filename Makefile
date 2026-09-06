@@ -8,7 +8,7 @@
 SHELL := /bin/bash
 
 .PHONY: help install install-api install-web upgrade downgrade stamp revision \
-        api web dev test test-api test-web docker-up docker-down clean help
+        seed-admin api web dev test test-api test-web docker-up docker-down clean help
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -29,6 +29,9 @@ downgrade: ## Roll back one migration
 
 stamp: ## Mark existing DB as head WITHOUT running migrations (legacy create_all DBs)
 	uv run alembic stamp head
+
+seed-admin: ## Seed the platform admin: make seed-admin email=a@b.com password=secret
+	uv run python scripts/seed_admin.py --email "$(email)" --password "$(password)"
 
 revision: m="change-me"          ## New autogenerate migration: make revision m="add x"
 revision:

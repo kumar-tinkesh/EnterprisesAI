@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.audit import log_audit_event
 from src.models import Tenant
 
-from vendor_resources.models import TenantResourceGrant, VendorMCPServer
+from vendor_resources.models import MCPTool, TenantResourceGrant, VendorMCPServer
 from vendor_resources.schemas import (
     AddMCPServerRequest,
     ConnectMCPServerRequest,
@@ -29,6 +29,7 @@ from vendor_resources.schemas import (
     AnalyzeRepoResponse,
 )
 from vendor_resources.services import mcp_auth
+from vendor_resources.services.catalog_engine import embed_server, embed_tool
 from vendor_resources.services.mcp_client import connect_mcp_server, MCPClient
 from vendor_resources.services.mcp_detect import detect_mcp_server
 from vendor_resources.services.repo_analyzer import analyze_repo_normalized, NormalizedMCPConfig
@@ -124,6 +125,9 @@ async def add_mcp_server(
         env_vars={f.name: "" for f in normalized.auth_fields},
         bound_tools=[],
     )
+    # Best-effort: an embedding-provider outage shouldn't block registration —
+    # the server is simply excluded from semantic ranking until re-embedded.
+    await embed_server(server)
     db.add(server)
     await db.flush()
 
@@ -314,6 +318,22 @@ async def test_mcp_connection(
     server.bound_tools = result["bound_tools"]
     server.status = "VERIFIED"
     server.auth_type = result.get("auth_type", server.auth_type)
+    await db.flush()
+
+    # Persist one MCPTool row per discovered tool (replacing any from a
+    # previous test on this server) and embed each for tool-level semantic
+    # search. Best-effort: an embedding-provider outage doesn't fail the
+    # connection test, it just leaves those tools out of semantic ranking.
+    await db.execute(delete(MCPTool).where(MCPTool.mcp_server_id == server.id))
+    for tool_data in result["tools"]:
+        tool = MCPTool(
+            mcp_server_id=server.id,
+            name=tool_data["name"],
+            description=tool_data.get("description") or "",
+            input_schema=tool_data.get("input_schema"),
+        )
+        await embed_tool(tool)
+        db.add(tool)
     await db.flush()
 
     # Persist any rotated OAuth tokens / dynamic registrations

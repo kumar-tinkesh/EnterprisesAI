@@ -327,6 +327,24 @@ export interface ConnectMCPServerResponse {
   auth_type?: string;
 }
 
+export interface OAuthConfigBody {
+  authorization_endpoint: string;
+  token_endpoint: string;
+  scope?: string;
+  extra_authorize_params?: Record<string, string>;
+}
+
+export interface OAuthAuthorizeBody {
+  client_id: string;
+  client_secret: string;
+  scope?: string;
+}
+
+export interface OAuthAuthorizeResponse {
+  authorization_url: string;
+  state: string;
+}
+
 export interface MCPServerEntry {
   id: string;
   name: string;
@@ -355,39 +373,40 @@ export interface Grant {
   created_at: string;
 }
 
-export interface AgentNode {
-  id: string;
-  server_id?: string | null;
-  node_type?: string;
-  args?: Record<string, unknown>;
-  description?: string;
-  unconfigured?: boolean;
-  [k: string]: unknown;
+// Two-stage semantic tool search — GET /catalog/tools (see
+// apps/backend/vendor_resources/services/catalog_engine.get_relevant_tools_semantic).
+// Selection only: no tool is ever called from this response.
+export interface ToolSearchResult {
+  tool_id: string;
+  tool_name: string;
+  tool_description: string;
+  input_schema: Record<string, unknown> | null;
+  server_id: string;
+  server_name: string;
+  score: number | null;
 }
 
-export interface AgentEdge {
-  source: string;
-  target: string;
-  condition?: string | null;
-  [k: string]: unknown;
+export interface ToolSearchResponse {
+  results: ToolSearchResult[];
+  count: number;
 }
 
-export interface CompiledAgentSpec {
-  agent_name: string;
-  description?: string;
-  nodes: AgentNode[];
-  edges: AgentEdge[];
+// GET /catalog/plan-tool-call — an LLM picks one tool from the search above
+// and fills its arguments from the query. Still not called.
+export interface PlannedToolCall {
+  tool_id: string;
+  tool_name: string;
+  server_id: string;
+  server_name: string;
+  arguments: Record<string, unknown>;
+  input_schema: Record<string, unknown> | null;
+  model: string;
 }
 
-export interface CompileAgentBody {
-  query: string;
-  top_k?: number;
-}
-
-export interface RunAgentResponse {
-  spec: CompiledAgentSpec;
-  results: Record<string, unknown>;
-  trace: Array<{ node: string; node_type?: string; result: unknown }>;
+export interface ToolCallPlanResponse {
+  plan: PlannedToolCall | null;
+  candidates_considered: string[];
+  message: string | null;
 }
 
 /** Client for the Vendor Resources / AI Compiler backend (port 8002). */
@@ -411,6 +430,17 @@ export const vendorApi = {
     }, token, BACKEND_API_URL),
   disconnectMCPServer: (token: string, serverId: string) =>
     request<VendorMCPServer>(`${VR}/mcp/${serverId}/disconnect`, { method: "POST" }, token, BACKEND_API_URL),
+  // "Connect via OAuth" bootstrap — see apps/backend/vendor_resources/services/oauth_flow.py
+  setMCPOAuthConfig: (token: string, serverId: string, body: OAuthConfigBody) =>
+    request<VendorMCPServer>(`${VR}/mcp/${serverId}/oauth-config`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }, token, BACKEND_API_URL),
+  startMCPOAuthAuthorize: (token: string, serverId: string, body: OAuthAuthorizeBody) =>
+    request<OAuthAuthorizeResponse>(`${VR}/mcp/${serverId}/oauth/authorize`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }, token, BACKEND_API_URL),
 
   // Analyze MCP Repository (vendor_admin)
   analyzeRepo: (token: string, repoUrl: string) =>
@@ -437,15 +467,29 @@ export const vendorApi = {
     }, token, BACKEND_API_URL);
   },
 
-  // AI Compiler (any authenticated user)
-  compileAgent: (token: string, body: CompileAgentBody) =>
-    request<CompiledAgentSpec>(`${VR}/agents/compile`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    }, token, BACKEND_API_URL),
-  runAgent: (token: string, body: CompileAgentBody) =>
-    request<RunAgentResponse>(`${VR}/agents/run`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    }, token, BACKEND_API_URL),
+  // Two-stage semantic tool search (any authenticated user) — selection only.
+  searchCatalogTools: (
+    token: string,
+    params: { q: string; top_k_servers?: number; top_k_tools?: number }
+  ) => {
+    const qs = new URLSearchParams({ q: params.q });
+    if (params.top_k_servers) qs.set("top_k_servers", String(params.top_k_servers));
+    if (params.top_k_tools) qs.set("top_k_tools", String(params.top_k_tools));
+    return request<ToolSearchResponse>(`${VR}/catalog/tools?${qs.toString()}`, {
+      method: "GET",
+    }, token, BACKEND_API_URL);
+  },
+  // Selects one tool from the search above and fills its arguments via an
+  // LLM (function-calling) — still does not call the tool.
+  planToolCall: (
+    token: string,
+    params: { q: string; top_k_servers?: number; top_k_tools?: number }
+  ) => {
+    const qs = new URLSearchParams({ q: params.q });
+    if (params.top_k_servers) qs.set("top_k_servers", String(params.top_k_servers));
+    if (params.top_k_tools) qs.set("top_k_tools", String(params.top_k_tools));
+    return request<ToolCallPlanResponse>(`${VR}/catalog/plan-tool-call?${qs.toString()}`, {
+      method: "GET",
+    }, token, BACKEND_API_URL);
+  },
 };

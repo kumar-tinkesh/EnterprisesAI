@@ -247,24 +247,43 @@ class LiteLLMClient(BaseLLMClient):
     # ── private helpers ──────────────────────────────────────────────────
 
     def _litellm_model(self, bare: str) -> str:
-        """Prefix a bare model id with the provider prefix unless already prefixed."""
+        """Prefix a bare model id with the provider prefix unless already
+        prefixed. Azure OpenAI (see ``ProviderConfig.is_azure``) routes by
+        *deployment name* under an ``azure/`` prefix instead — never the
+        plain ``openai/`` prefix, which hits Azure's endpoint with the wrong
+        URL shape and 404s.
+        """
         if not bare:
             return bare
         if "/" in bare:
             return bare
+        if self._config.is_azure:
+            return f"azure/{self._config.azure_chat_deployment or bare}"
         return f"{self._PREFIX}{bare}"
 
     def _embed_model(self, bare: str) -> str:
-        """Same as ``_litellm_model`` but strips a leading ``models/`` (Gemini)."""
+        """Same as ``_litellm_model`` but for embeddings — its own Azure
+        deployment (may differ from the chat deployment) and strips a
+        leading ``models/`` (Gemini)."""
         if bare and bare.startswith("models/"):
             bare = bare[len("models/"):]
-        return self._litellm_model(bare)
+        if not bare:
+            return bare
+        if "/" in bare:
+            return bare
+        if self._config.is_azure:
+            return f"azure/{self._config.azure_embedding_deployment or bare}"
+        return f"{self._PREFIX}{bare}"
 
     def _provider_kwargs(self) -> dict[str, Any]:
         """LiteLLM auth / endpoint kwargs passed to every call."""
         kwargs: dict[str, Any] = {"api_key": self._config.api_key}
         if self._PASS_API_BASE and self._config.base_url:
             kwargs["api_base"] = self._config.base_url
+        if self._config.is_azure and self._config.api_version:
+            # Azure OpenAI requires an api-version query param; plain
+            # OpenAI-compatible endpoints don't take this kwarg at all.
+            kwargs["api_version"] = self._config.api_version
         if self._config.organization:
             kwargs["organization"] = self._config.organization
         if self._config.timeout_seconds:

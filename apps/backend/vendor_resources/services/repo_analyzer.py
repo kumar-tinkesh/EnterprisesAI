@@ -15,10 +15,12 @@ Section 15 confidence scale:
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import re
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any
@@ -443,7 +445,7 @@ def _var_name_to_label(name: str) -> str:
 def _var_field_type(name: str) -> str:
     """Classify field type based on naming conventions."""
     upper = name.upper()
-    if any(upper.endswith(suffix) for suffix in ("_URL", "_ENDPOINT", "_HOST")):
+    if any(upper.endswith(suffix) for suffix in ("_URL", "_URI", "_ENDPOINT", "_HOST")):
         return "url"
     return "secret"
 
@@ -528,8 +530,25 @@ async def analyze_repo(repo_url: str) -> AnalyzeRepoResponse:
     return normalized.to_analyze_repo_response()
 
 
+# In-memory cache of recent analyses, keyed by the (stripped) source URL.
+# The UI flow always analyzes a URL twice — once for the "Analyze" preview
+# (``analyze_repo`` above) and again inside ``mcp_service.add_mcp_server``
+# when the user clicks "Add Server" — and each full analysis clones/fetches
+# the repo over the network, so reusing a fresh result avoids doing that
+# twice for the same URL. A short TTL keeps a fixed/updated repo from being
+# stuck with a stale result for long.
+_ANALYSIS_CACHE: dict[str, tuple[float, "NormalizedMCPConfig"]] = {}
+_ANALYSIS_CACHE_TTL_SECONDS = 300
+
+
 async def analyze_repo_normalized(repo_url: str) -> NormalizedMCPConfig:
-    """Universal analyzer — returns a NormalizedMCPConfig with full evidence scoring."""
+    """Universal analyzer — returns a NormalizedMCPConfig with full evidence scoring.
+
+    Caches its result per ``repo_url`` for ``_ANALYSIS_CACHE_TTL_SECONDS`` —
+    see the cache's docstring above for why. Returns a deep copy on a cache
+    hit so callers (e.g. ``add_mcp_server``, which mutates fields on the
+    returned config) can't corrupt the cached entry for other callers.
+    """
     logger.info(
         "analyzer_input",
         repo_url=repo_url,
@@ -542,15 +561,26 @@ async def analyze_repo_normalized(repo_url: str) -> NormalizedMCPConfig:
         )
 
     repo_url = repo_url.strip()
+
+    cached = _ANALYSIS_CACHE.get(repo_url)
+    if cached is not None:
+        cached_at, cached_config = cached
+        if time.monotonic() - cached_at < _ANALYSIS_CACHE_TTL_SECONDS:
+            logger.info("analyzer_cache_hit", repo_url=repo_url)
+            return copy.deepcopy(cached_config)
+
     source_type = detect_source_type(repo_url)
     root = Path("/tmp/repo_analysis")
 
     if source_type == "github":
-        return await _analyze_github_repo_normalized(repo_url, root)
+        result = await _analyze_github_repo_normalized(repo_url, root)
     elif source_type == "remote":
-        return await _analyze_remote_http_normalized(repo_url, root)
+        result = await _analyze_remote_http_normalized(repo_url, root)
     else:
-        return await _analyze_local_path_normalized(repo_url, root)
+        result = await _analyze_local_path_normalized(repo_url, root)
+
+    _ANALYSIS_CACHE[repo_url] = (time.monotonic(), copy.deepcopy(result))
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -820,23 +850,26 @@ def _build_normalized_config(
 
     # Auth
     auth_type = _detect_auth_type(scanned, remote_endpoint)
-    env_vars = _extract_env_vars(scanned, auth_type=auth_type)
+    env_vars = _extract_env_vars(scanned)
     if auth_type == "oauth2" or any(v.endswith("_OAUTH_CREDENTIALS") or v.endswith("_CREDENTIALS_JSON") for v in env_vars):
         auth_type = "oauth2"
-        auth_fields = [
-            AuthField(name="client_id", label="Client ID", type="text", required=True, location="env"),
-            AuthField(name="client_secret", label="Client Secret", type="secret", required=True, location="env"),
-        ]
-        env_vars = ["client_id", "client_secret"]
-    else:
-        auth_fields = _build_auth_fields(env_vars)
-        if not auth_fields and auth_type not in ("none", "unknown"):
-            auth_fields = _build_auth_fields_for_auth_type(
-                auth_type, is_github=(source_type == "github"), source_url=source_url
-            )
-            for f in auth_fields:
-                if f.location == "env" and f.name not in env_vars:
-                    env_vars.append(f.name)
+
+    # Build fields from whatever real env vars this repo actually declares
+    # (its own names, e.g. QUICKBOOKS_CLIENT_ID/QUICKBOOKS_REFRESH_TOKEN) —
+    # a local stdio server manages its own OAuth/token lifecycle internally
+    # and just wants these as plain config, so nothing here is renamed to a
+    # generic placeholder or dropped just because auth_type == "oauth2".
+    # The generic client_id/client_secret (or api_key, username/password, …)
+    # fallback below only kicks in when we found no concrete field at all —
+    # e.g. a repo that says "OAuth" without documenting its actual env vars.
+    auth_fields = _build_auth_fields(env_vars)
+    if not auth_fields and auth_type not in ("none", "unknown"):
+        auth_fields = _build_auth_fields_for_auth_type(
+            auth_type, is_github=(source_type == "github"), source_url=source_url
+        )
+        for f in auth_fields:
+            if f.location == "env" and f.name not in env_vars:
+                env_vars.append(f.name)
 
     return NormalizedMCPConfig(
         source_type=source_type,
@@ -1161,7 +1194,7 @@ IGNORED_SYSTEM_ENV_VARS = {
 }
 
 _CREDENTIAL_SUFFIXES = (
-    "TOKEN|KEY|SECRET|PASSWORD|AUTH|API|ID|URL|PAT|CLIENT_ID|ACCESS_KEY|"
+    "TOKEN|KEY|SECRET|PASSWORD|AUTH|API|ID|URL|URI|PAT|CLIENT_ID|ACCESS_KEY|"
     "CREDENTIALS|USERNAME|CONNECTION_STRING|PERSONAL_ACCESS_TOKEN|DB|ENDPOINT|"
     "CONSUMER_KEY|CONSUMER_SECRET|INSTANCE|REALM_ID"
 )
@@ -1176,8 +1209,16 @@ _CREDENTIAL_ENV_DECL_RE = re.compile(
 )
 
 
-def _extract_env_vars(scanned: dict[str, Any], auth_type: str = "none") -> list[str]:
-    """Extract required environment variables from scanned manifests."""
+def _extract_env_vars(scanned: dict[str, Any]) -> list[str]:
+    """Extract required environment variables from scanned manifests.
+
+    Returns every detected name as-is (e.g. ``QUICKBOOKS_REFRESH_TOKEN``,
+    ``QUICKBOOKS_REALM_ID``) — a local stdio MCP server frequently expects a
+    pre-obtained refresh token or other repo-specific identifier as plain
+    static config (it manages its own token lifecycle internally, with no
+    interactive OAuth step our platform is involved in), so token-shaped
+    names are not treated as special or excluded here.
+    """
     env_vars: set[str] = set()
 
     def get_content(key: str) -> str:
@@ -1212,11 +1253,9 @@ def _extract_env_vars(scanned: dict[str, Any], auth_type: str = "none") -> list[
     for v in env_vars:
         if v in IGNORED_SYSTEM_ENV_VARS:
             continue
-        if auth_type == "oauth2" and (
-            v.endswith("_REFRESH_TOKEN") or v.endswith("_ACCESS_TOKEN") or v.endswith("_EXPIRES_IN")
-        ):
-            continue
-        if v.endswith("_REFRESH_TOKEN") or v.endswith("_EXPIRES_IN"):
+        # _EXPIRES_IN is response metadata (a computed TTL), never something
+        # a human supplies — the only var name shape still worth excluding.
+        if v.endswith("_EXPIRES_IN"):
             continue
         cleaned.append(v)
 

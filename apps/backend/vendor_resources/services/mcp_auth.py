@@ -270,6 +270,31 @@ async def _refresh_token_grant(
     return await _token_request(oauth["token_endpoint"], form, basic=basic)
 
 
+async def exchange_authorization_code(
+    oauth: dict, credentials: dict[str, str], *, code: str, redirect_uri: str
+) -> dict[str, Any]:
+    """RFC 6749 §4.1.3 authorization_code grant.
+
+    This is the one-time human-consent *bootstrap* step (see
+    ``vendor_resources.services.oauth_flow`` for the live redirect that
+    produces ``code``) — it exchanges the one-time code for the initial
+    access_token/refresh_token pair. Every call after this one goes through
+    ordinary ``resolve_auth``/``_resolve_oauth2`` above, which already
+    handles refreshing via the ``refresh_token`` grant (step 2 there), so
+    nothing else needs to change once this has run once per server.
+    """
+    client_id = credentials.get("client_id", "")
+    client_secret = credentials.get("client_secret", "")
+    form: dict[str, str] = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": redirect_uri,
+    }
+    return await _token_request(
+        oauth["token_endpoint"], form, basic=(client_id, client_secret)
+    )
+
+
 async def _dynamically_register_client(
     oauth: dict, server_name: str
 ) -> dict[str, str]:

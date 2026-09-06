@@ -8,8 +8,7 @@ import {
   Play,
   Search,
   Server,
-  ArrowRight,
-  CircleDot,
+  Wrench,
 } from "lucide-react";
 
 import ProtectedDashboard from "@/components/protected-dashboard";
@@ -17,8 +16,8 @@ import { useAuthStore } from "@/stores/auth-store";
 import {
   vendorApi,
   ApiError,
-  type CompiledAgentSpec,
-  type RunAgentResponse,
+  type ToolSearchResponse,
+  type ToolCallPlanResponse,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,8 +27,8 @@ export default function UserAgentsPage() {
   const accessToken = useAuthStore((s) => s.accessToken) || "";
   const [query, setQuery] = useState("");
   const [catalogQuery, setCatalogQuery] = useState("");
-  const [runResult, setRunResult] = useState<RunAgentResponse | null>(null);
-  const [compileResult, setCompileResult] = useState<CompiledAgentSpec | null>(null);
+  const [searchResult, setSearchResult] = useState<ToolSearchResponse | null>(null);
+  const [planResult, setPlanResult] = useState<ToolCallPlanResponse | null>(null);
 
   // Authorized catalog (semantic when catalogQuery set)
   const { data: catalog, isLoading: catalogLoading } = useQuery({
@@ -39,48 +38,49 @@ export default function UserAgentsPage() {
     enabled: !!accessToken,
   });
 
-  const compileMutation = useMutation({
-    mutationFn: (q: string) => vendorApi.compileAgent(accessToken, { query: q, top_k: 5 }),
-    onSuccess: (spec) => setCompileResult(spec),
+  // "Compile": two-stage semantic search -> which tools could answer this?
+  const searchMutation = useMutation({
+    mutationFn: (q: string) =>
+      vendorApi.searchCatalogTools(accessToken, { q, top_k_servers: 5, top_k_tools: 5 }),
+    onSuccess: (res) => setSearchResult(res),
   });
 
-  const runMutation = useMutation({
-    mutationFn: (q: string) => vendorApi.runAgent(accessToken, { query: q, top_k: 5 }),
-    onSuccess: (res) => {
-      setRunResult(res);
-      setCompileResult(res.spec);
-    },
+  // "Run": pick one tool + fill its arguments via LLM — still doesn't call it.
+  const planMutation = useMutation({
+    mutationFn: (q: string) =>
+      vendorApi.planToolCall(accessToken, { q, top_k_servers: 5, top_k_tools: 3 }),
+    onSuccess: (res) => setPlanResult(res),
   });
 
-  const handleCompile = (e: React.FormEvent) => {
+  const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     if (!query.trim()) return;
-    setRunResult(null);
-    compileMutation.mutate(query.trim());
+    setPlanResult(null);
+    searchMutation.mutate(query.trim());
   };
 
-  const handleRun = () => {
+  const handlePlan = () => {
     if (!query.trim()) return;
-    setCompileResult(null);
-    runMutation.mutate(query.trim());
+    setSearchResult(null);
+    planMutation.mutate(query.trim());
   };
 
-  const compileError = compileMutation.isError
-    ? compileMutation.error instanceof ApiError
-      ? compileMutation.error.message
-      : "Failed to compile agent"
+  const searchError = searchMutation.isError
+    ? searchMutation.error instanceof ApiError
+      ? searchMutation.error.message
+      : "Failed to search the catalog"
     : null;
-  const runError = runMutation.isError
-    ? runMutation.error instanceof ApiError
-      ? runMutation.error.message
-      : "Failed to run agent"
+  const planError = planMutation.isError
+    ? planMutation.error instanceof ApiError
+      ? planMutation.error.message
+      : "Failed to plan a tool call"
     : null;
 
   return (
     <ProtectedDashboard
       path="/user"
       title="AI Compiler"
-      description="Describe an agent in natural language — the compiler picks your authorized MCP servers and LangGraph executes the plan."
+      description="Describe what you need in natural language — semantic search picks the matching MCP server and tool from your authorized catalog."
     >
       <div className="mt-6 flex items-center justify-between">
         <a href="/user" className="text-sm text-zinc-500 hover:text-zinc-800 cursor-pointer">
@@ -92,38 +92,39 @@ export default function UserAgentsPage() {
       <div className="mt-4 rounded-xl border border-zinc-200 bg-white p-6 shadow-xs">
         <div className="flex items-center gap-2">
           <Bot className="h-5 w-5 text-indigo-600" />
-          <h2 className="text-lg font-semibold text-zinc-900">Compile an agent</h2>
+          <h2 className="text-lg font-semibold text-zinc-900">Find a tool</h2>
         </div>
-          <p className="mt-1 text-sm text-zinc-500">
-            Only servers you&apos;re authorized for (global servers, or servers
-            granted to your tenant) can be selected.
-          </p>
-        <form onSubmit={handleCompile} className="mt-4 flex gap-2">
+        <p className="mt-1 text-sm text-zinc-500">
+          Only servers you&apos;re authorized for (global servers, or servers
+          granted to your tenant) can be matched.
+        </p>
+        <form onSubmit={handleSearch} className="mt-4 flex gap-2">
           <Input
-            placeholder="e.g. verify a vendor invoice over 5000 and notify finance"
+            placeholder="e.g. how do I get all pending invoices"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
-          <Button type="submit" disabled={compileMutation.isPending}>
-            {compileMutation.isPending ? <Spinner /> : <Sparkles className="h-4 w-4 mr-1" />}
+          <Button type="submit" disabled={searchMutation.isPending}>
+            {searchMutation.isPending ? <Spinner /> : <Sparkles className="h-4 w-4 mr-1" />}
             Compile
           </Button>
-          <Button type="button" variant="outline" onClick={handleRun} disabled={runMutation.isPending}>
-            {runMutation.isPending ? <Spinner /> : <Play className="h-4 w-4 mr-1" />} Run
+          <Button type="button" variant="outline" onClick={handlePlan} disabled={planMutation.isPending}>
+            {planMutation.isPending ? <Spinner /> : <Play className="h-4 w-4 mr-1" />} Run
           </Button>
         </form>
-        {(compileError || runError) && (
-          <p className="mt-3 text-xs text-red-600">{compileError || runError}</p>
+        <p className="mt-2 text-xs text-zinc-400">
+          <span className="font-medium">Compile</span> lists matching tools + their parameters.{" "}
+          <span className="font-medium">Run</span> additionally asks an LLM to fill in those
+          parameters from your text — neither calls the tool.
+        </p>
+        {(searchError || planError) && (
+          <p className="mt-3 text-xs text-red-600">{searchError || planError}</p>
         )}
       </div>
 
-      {/* Compiled spec + run results */}
-      {(compileResult || runResult) && (
-        <div className="mt-6 grid gap-6 lg:grid-cols-2">
-          <SpecCard spec={runResult?.spec ?? compileResult!} />
-          {runResult && <ResultsCard result={runResult} />}
-        </div>
-      )}
+      {/* Search / plan results */}
+      {searchResult && <SearchResultsCard result={searchResult} />}
+      {planResult && <PlanResultCard result={planResult} />}
 
       {/* Authorized catalog */}
       <div className="mt-8 rounded-xl border border-zinc-200 bg-white p-6 shadow-xs">
@@ -132,7 +133,7 @@ export default function UserAgentsPage() {
             <Server className="h-5 w-5 text-sky-600" />
             <div>
               <h2 className="text-lg font-semibold text-zinc-900">Your authorized catalog</h2>
-              <p className="text-sm text-zinc-500">MCP servers the compiler may bind for you.</p>
+              <p className="text-sm text-zinc-500">MCP servers available to you.</p>
             </div>
           </div>
           <div className="relative">
@@ -178,109 +179,81 @@ export default function UserAgentsPage() {
   );
 }
 
-function SpecCard({ spec }: { spec: CompiledAgentSpec }) {
+function SearchResultsCard({ result }: { result: ToolSearchResponse }) {
   return (
-    <div className="rounded-xl border border-zinc-200 bg-white p-6 shadow-xs">
-      <h3 className="text-lg font-semibold text-zinc-900">Compiled spec</h3>
-      <p className="mt-1 text-sm text-zinc-500">
-        <span className="font-medium text-zinc-700">{spec.agent_name}</span>
-        {spec.description ? ` — ${spec.description}` : ""}
-      </p>
+    <div className="mt-6 rounded-xl border border-zinc-200 bg-white p-6 shadow-xs">
+      <div className="flex items-center gap-2">
+        <Wrench className="h-5 w-5 text-indigo-500" />
+        <h3 className="text-lg font-semibold text-zinc-900">Matched tools</h3>
+      </div>
 
-      {spec.nodes.length === 0 ? (
+      {result.results.length === 0 ? (
         <p className="mt-4 text-sm text-zinc-400">
-          No servers matched your request from your authorized catalog.
+          No tools matched your request from your authorized catalog.
         </p>
       ) : (
         <ol className="mt-4 space-y-3">
-          {spec.nodes.map((n, i) => (
-            <li key={n.id} className="rounded-lg border border-zinc-200 p-3">
-              <div className="flex items-center gap-2">
-                <CircleDot className="h-4 w-4 text-indigo-500" />
+          {result.results.map((r, i) => (
+            <li key={r.tool_id} className="rounded-lg border border-zinc-200 p-3">
+              <div className="flex items-center justify-between gap-2">
                 <span className="text-xs font-semibold uppercase text-zinc-400">
-                  Step {i + 1} · {n.node_type ?? "mcp.call"}
+                  {i + 1}. {r.tool_name}
                 </span>
-              </div>
-              <div className="mt-1 font-mono text-sm text-zinc-900">{n.id}</div>
-              {n.description && (
-                <p className="text-xs text-zinc-500">{n.description}</p>
-              )}
-              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-                {n.server_id ? (
-                  <span className="rounded bg-emerald-50 px-2 py-0.5 font-mono text-emerald-700">
-                    server: {n.server_id}
-                  </span>
-                ) : (
-                  <span className="rounded bg-amber-50 px-2 py-0.5 text-amber-700">
-                    unconfigured (no matching server)
+                {r.score != null && (
+                  <span className="rounded bg-zinc-50 px-2 py-0.5 font-mono text-xs text-zinc-500">
+                    {r.score.toFixed(3)}
                   </span>
                 )}
-                {n.unconfigured && (
-                  <span className="text-amber-600">simulated</span>
-                )}
               </div>
-              {n.args && Object.keys(n.args).length > 0 && (
+              <p className="mt-1 text-xs text-zinc-500">{r.tool_description || "—"}</p>
+              <span className="mt-2 inline-block rounded bg-emerald-50 px-2 py-0.5 font-mono text-xs text-emerald-700">
+                server: {r.server_name}
+              </span>
+              {r.input_schema && (
                 <pre className="mt-2 overflow-x-auto rounded bg-zinc-50 p-2 text-xs text-zinc-600">
-                  {JSON.stringify(n.args, null, 2)}
+                  {JSON.stringify(r.input_schema, null, 2)}
                 </pre>
               )}
             </li>
           ))}
         </ol>
       )}
-
-      {spec.edges.length > 0 && (
-        <div className="mt-4 text-xs text-zinc-500">
-          <span className="font-semibold">Edges:</span>{" "}
-          {spec.edges.map((e, i) => (
-            <span key={i} className="font-mono">
-              {e.source} → {e.target}
-              {e.condition ? ` (${e.condition})` : ""}
-              {i < spec.edges.length - 1 ? ", " : ""}
-            </span>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
 
-function ResultsCard({ result }: { result: RunAgentResponse }) {
+function PlanResultCard({ result }: { result: ToolCallPlanResponse }) {
   return (
-    <div className="rounded-xl border border-zinc-200 bg-white p-6 shadow-xs">
-      <h3 className="text-lg font-semibold text-zinc-900">Execution results</h3>
-      <p className="mt-1 text-sm text-zinc-500">
-        LangGraph ran {result.trace.length} node{result.trace.length === 1 ? "" : "s"}.
-      </p>
+    <div className="mt-6 rounded-xl border border-zinc-200 bg-white p-6 shadow-xs">
+      <h3 className="text-lg font-semibold text-zinc-900">Proposed tool call</h3>
+      <p className="mt-1 text-xs text-amber-600">Not executed — no MCP call is made here.</p>
 
-      <ul className="mt-4 space-y-3">
-        {result.trace.map((t, i) => {
-          const res = result.results[t.node] as Record<string, unknown> | undefined;
-          const simulated = (res as { simulated?: boolean } | undefined)?.simulated;
-          return (
-            <li key={t.node} className="rounded-lg border border-zinc-200 p-3">
-              <div className="flex items-center gap-2">
-                <ArrowRight className="h-4 w-4 text-zinc-400" />
-                <span className="text-xs font-semibold uppercase text-zinc-400">
-                  {i + 1}. {t.node}
-                </span>
-                {simulated === true ? (
-                  <span className="rounded bg-amber-50 px-2 py-0.5 text-xs text-amber-700">
-                    simulated
-                  </span>
-                ) : (
-                  <span className="rounded bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700">
-                    live call
-                  </span>
-                )}
-              </div>
-              <pre className="mt-2 overflow-x-auto rounded bg-zinc-50 p-2 text-xs text-zinc-600">
-                {JSON.stringify(res ?? null, null, 2)}
-              </pre>
-            </li>
-          );
-        })}
-      </ul>
+      {!result.plan ? (
+        <p className="mt-4 text-sm text-zinc-400">
+          {result.message || "No confident tool match for this request."}
+        </p>
+      ) : (
+        <div className="mt-4 rounded-lg border border-zinc-200 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-mono text-sm font-medium text-zinc-900">
+              {result.plan.tool_name}
+            </span>
+            <span className="rounded bg-emerald-50 px-2 py-0.5 font-mono text-xs text-emerald-700">
+              server: {result.plan.server_name}
+            </span>
+          </div>
+          <p className="mt-1 text-xs text-zinc-400">model: {result.plan.model}</p>
+          <pre className="mt-2 overflow-x-auto rounded bg-zinc-50 p-2 text-xs text-zinc-600">
+            {JSON.stringify(result.plan.arguments, null, 2)}
+          </pre>
+        </div>
+      )}
+
+      {result.candidates_considered.length > 0 && (
+        <p className="mt-3 text-xs text-zinc-400">
+          Considered: {result.candidates_considered.join(", ")}
+        </p>
+      )}
     </div>
   );
 }

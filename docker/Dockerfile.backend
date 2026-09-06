@@ -26,6 +26,11 @@ RUN uv sync --frozen
 COPY apps/ apps/
 COPY alembic.ini ./
 
+# Pre-download the hybrid-search reranker's ONNX model at build time (~80MB)
+# so the first real query doesn't pay for a HuggingFace Hub download, and
+# the container works without internet egress at runtime.
+RUN uv run python -c "from fastembed.rerank.cross_encoder import TextCrossEncoder; TextCrossEncoder(model_name='Xenova/ms-marco-MiniLM-L-6-v2')"
+
 # Create entrypoint script
 RUN cat > entrypoint.sh << 'EOF'
 #!/bin/bash

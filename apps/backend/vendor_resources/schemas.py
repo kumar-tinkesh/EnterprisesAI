@@ -183,6 +183,38 @@ class ConnectCredentialsRequest(BaseModel):
     credentials: dict[str, str] | None = None
 
 
+class OAuthConfigRequest(BaseModel):
+    """Manually supply a server's OAuth endpoints.
+
+    Needed when they can't be auto-discovered — e.g. a local stdio server
+    isn't running yet at analysis time, so there's nothing to probe via
+    RFC 8414. Most providers publish these as fixed, documented URLs
+    (Intuit's, Slack's, …), so this is a one-time admin paste, not
+    per-vendor code.
+    """
+
+    authorization_endpoint: str
+    token_endpoint: str
+    scope: str | None = None
+    extra_authorize_params: dict[str, str] | None = None
+
+
+class OAuthAuthorizeRequest(BaseModel):
+    """Start a 'Connect via OAuth' bootstrap for a server."""
+
+    client_id: str
+    client_secret: str
+    scope: str | None = None
+
+
+class OAuthAuthorizeResponse(BaseModel):
+    """Where to send the admin's browser to complete the provider's consent
+    screen, and the state token that flow will round-trip back."""
+
+    authorization_url: str
+    state: str
+
+
 class MCPServerResponse(BaseModel):
     """Full MCP server representation (admin view)."""
 
@@ -295,6 +327,54 @@ class CatalogResponse(BaseModel):
 
     servers: list[CatalogEntry]
     count: int
+
+
+class ToolSearchResult(BaseModel):
+    """One tool match from the two-stage semantic tool search.
+
+    ``input_schema`` is the tool's raw JSON Schema for its parameters —
+    intended to be handed to an LLM (e.g. as an OpenAI-style function
+    definition) to fill in arguments. This does NOT mean the tool has been
+    or will be called; ``GET /catalog/tools`` only selects candidates.
+    """
+
+    tool_id: str
+    tool_name: str
+    tool_description: str
+    input_schema: dict[str, Any] | None
+    server_id: str
+    server_name: str
+    score: float | None = None
+
+
+class ToolSearchResponse(BaseModel):
+    """Two-stage semantic search results: relevant tools within the
+    caller's access-filtered, query-ranked top MCP servers."""
+
+    results: list[ToolSearchResult]
+    count: int
+
+
+class PlannedToolCall(BaseModel):
+    """One tool selected by the chat LLM, with its arguments filled in from
+    the query. This has NOT been called against the MCP server."""
+
+    tool_id: str
+    tool_name: str
+    server_id: str
+    server_name: str
+    arguments: dict[str, Any]
+    input_schema: dict[str, Any] | None
+    model: str
+
+
+class ToolCallPlanResponse(BaseModel):
+    """Result of ``GET /catalog/plan-tool-call``. ``plan`` is null when no
+    tool call could be produced; ``message`` then explains why."""
+
+    plan: PlannedToolCall | None
+    candidates_considered: list[str]
+    message: str | None = None
 
 
 class AgentNode(BaseModel):

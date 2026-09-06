@@ -12,7 +12,13 @@ from typing import Optional
 
 @dataclass(frozen=True)
 class ProviderConfig:
-    """Credentials & defaults for a single LLM provider."""
+    """Credentials & defaults for a single LLM provider.
+
+    ``azure_chat_deployment``/``azure_embedding_deployment`` only apply to
+    the ``openai`` provider config when it's actually pointed at Azure
+    OpenAI (see :attr:`is_azure`) — Azure routes by *deployment name*, which
+    may differ from the underlying model name, instead of by model name.
+    """
 
     api_key: str = ""
     base_url: Optional[str] = None
@@ -22,10 +28,24 @@ class ProviderConfig:
     organization: Optional[str] = None
     api_version: Optional[str] = None
     default_embedding_model: str = ""
+    azure_chat_deployment: str = ""
+    azure_embedding_deployment: str = ""
 
     @property
     def is_configured(self) -> bool:
         return bool(self.api_key)
+
+    @property
+    def is_azure(self) -> bool:
+        """True when ``base_url`` is an Azure OpenAI endpoint (``*.azure.com``)
+        with an ``api_version`` set — Azure OpenAI requires both a
+        deployment-scoped URL and an ``api-version`` query param, unlike
+        plain OpenAI-compatible endpoints."""
+        return bool(
+            self.base_url
+            and "azure.com" in self.base_url.lower()
+            and self.api_version
+        )
 
 
 @dataclass(frozen=True)
@@ -36,6 +56,10 @@ class GatewaySettings:
     Environment variables consumed
     ──────────────────────────────
     OPENAI_API_KEY, OPENAI_ORG_ID, OPENAI_BASE_URL, OPENAI_DEFAULT_MODEL
+    OPENAI_API_VERSION             Azure OpenAI only — enables Azure routing
+                                    when OPENAI_BASE_URL is a *.azure.com URL
+    AZURE_OPENAI_CHAT_DEPLOYMENT       optional — defaults to OPENAI_DEFAULT_MODEL
+    AZURE_OPENAI_EMBEDDING_DEPLOYMENT  optional — defaults to OPENAI_EMBEDDING_MODEL
     GROQ_API_KEY, GROQ_BASE_URL, GROQ_DEFAULT_MODEL
     GEMINI_API_KEY, GEMINI_BASE_URL, GEMINI_DEFAULT_MODEL
     LLM_GATEWAY_DEFAULT_PROVIDER   (openai | groq | gemini)
@@ -78,6 +102,8 @@ class GatewaySettings:
             default_embedding_model=os.getenv("OPENAI_EMBEDDING_MODEL", ""),
             organization=os.getenv("OPENAI_ORG_ID"),
             api_version=os.getenv("OPENAI_API_VERSION"),
+            azure_chat_deployment=os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT", ""),
+            azure_embedding_deployment=os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", ""),
             max_retries=retries,
             timeout_seconds=timeout,
         )

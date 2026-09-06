@@ -18,7 +18,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.deps import CurrentUser
 from src.core.roles import Roles
 
-from vendor_resources.models import TenantResourceGrant, VendorMCPServer
+from vendor_resources.models import MCPTool, TenantResourceGrant, VendorMCPServer
+from vendor_resources.services import hybrid_search
 
 
 async def get_authorized_vendor_catalog(
@@ -54,6 +55,41 @@ async def get_authorized_vendor_catalog(
     return list(result.scalars().all())
 
 
+def _server_text(server: VendorMCPServer) -> str:
+    return f"{server.name}. {server.description}".strip(". ")
+
+
+def _tool_text(tool: MCPTool) -> str:
+    properties = ""
+    if isinstance(tool.input_schema, dict):
+        properties = " ".join((tool.input_schema.get("properties") or {}).keys())
+    return f"{tool.name}. {tool.description} {properties}".strip(". ")
+
+
+def _rank_servers(servers: list[VendorMCPServer], *, query: str, q_vec, top_k: int):
+    return hybrid_search.rank(
+        servers,
+        query=query,
+        query_vector=q_vec,
+        top_k=top_k,
+        text_of=_server_text,
+        embedding_of=lambda s: s.embedding,
+        dim_of=lambda s: s.dim,
+    )
+
+
+def _rank_tools(tools: list[MCPTool], *, query: str, q_vec, top_k: int):
+    return hybrid_search.rank(
+        tools,
+        query=query,
+        query_vector=q_vec,
+        top_k=top_k,
+        text_of=_tool_text,
+        embedding_of=lambda t: t.embedding,
+        dim_of=lambda t: t.dim,
+    )
+
+
 async def get_authorized_vendor_catalog_semantic(
     db: AsyncSession,
     *,
@@ -62,45 +98,85 @@ async def get_authorized_vendor_catalog_semantic(
     top_k: int = 5,
     embedding_provider: Optional[str] = None,
 ) -> list[VendorMCPServer]:
-    """Semantic match: rank the access-filtered catalog against ``query``.
+    """Hybrid-search match: rank the access-filtered catalog against
+    ``query``.
 
     Access control is enforced **first**, then the candidate servers are
-    ranked by cosine similarity between the query embedding and each
-    server's stored embedding. If no embeddings are available or the
-    query can't be embedded, falls back to the access-filtered list
-    truncated to ``top_k``.
+    ranked by :func:`hybrid_search.rank` (vector + BM25 + rerank — see that
+    module for why). BM25 and the reranker work even when the query
+    couldn't be embedded (provider down, etc.), so only a genuinely empty
+    query or zero candidates skips ranking entirely.
     """
     candidates = await get_authorized_vendor_catalog(db, user=user)
     if not candidates or not query:
         return candidates[:top_k]
 
     q_embedded = await embed_text(query, provider=embedding_provider)
-    if q_embedded is None:
-        return candidates[:top_k]
-    q_vec, _ = q_embedded
+    q_vec = q_embedded[0] if q_embedded else None
 
-    candidate_ids = [t.id for t in candidates]
-    emap = {
-        e.id: e
-        for e in (
-            await db.execute(
-                select(VendorMCPServer).where(VendorMCPServer.id.in_(candidate_ids))
-            )
-        ).scalars().all()
-    }
+    ranked = _rank_servers(candidates, query=query, q_vec=q_vec, top_k=top_k)
+    return ranked or candidates[:top_k]
 
-    scored: list[tuple[float, VendorMCPServer]] = []
-    for server in candidates:
-        emb = emap.get(server.id)
-        if emb is None or emb.dim != len(q_vec):
-            continue
-        scored.append((cosine_similarity(q_vec, emb.embedding), server))
 
-    if not scored:
-        return candidates[:top_k]
+async def get_relevant_tools_semantic(
+    db: AsyncSession,
+    *,
+    user: CurrentUser,
+    query: str,
+    top_k_servers: int = 5,
+    top_k_tools: int = 8,
+    embedding_provider: Optional[str] = None,
+) -> list[tuple[VendorMCPServer, MCPTool, Optional[float]]]:
+    """Two-stage hybrid tool retrieval — the actual "which tool(s) can
+    answer this query" lookup, for handing to an LLM as function-calling
+    candidates. Does **not** call any tool; it only selects and returns them
+    with their ``input_schema`` (parameters).
 
-    scored.sort(key=lambda s: s[0], reverse=True)
-    return [server for _, server in scored[:top_k]]
+    Stage 1: rank the caller's *access-filtered* catalog (same rules as
+    :func:`get_authorized_vendor_catalog`) down to ``top_k_servers``.
+    Stage 2: within only those servers' tools, rank down to ``top_k_tools``.
+    Both stages go through :func:`hybrid_search.rank` (vector + BM25 +
+    cross-encoder rerank).
+
+    The query is embedded once and reused for both stages. Returns
+    ``(server, tool, score)`` triples, best match first; ``score`` is the
+    tool's cosine similarity to the query when an embedding was available,
+    else ``None`` (BM25/rerank still ranked it, there's just no vector
+    score to report).
+    """
+    candidates = await get_authorized_vendor_catalog(db, user=user)
+    if not candidates or not query:
+        return []
+
+    q_embedded = await embed_text(query, provider=embedding_provider)
+    q_vec = q_embedded[0] if q_embedded else None
+
+    servers = _rank_servers(candidates, query=query, q_vec=q_vec, top_k=top_k_servers)
+    if not servers:
+        servers = candidates[:top_k_servers]
+    if not servers:
+        return []
+
+    server_ids = [s.id for s in servers]
+    server_map = {s.id: s for s in servers}
+    tools = (
+        await db.execute(select(MCPTool).where(MCPTool.mcp_server_id.in_(server_ids)))
+    ).scalars().all()
+    if not tools:
+        return []
+
+    ranked_tools = _rank_tools(list(tools), query=query, q_vec=q_vec, top_k=top_k_tools)
+    if not ranked_tools:
+        ranked_tools = list(tools)[:top_k_tools]
+
+    return [
+        (
+            server_map[t.mcp_server_id],
+            t,
+            hybrid_search.cosine_similarity(q_vec, t.embedding) if q_vec and t.embedding else None,
+        )
+        for t in ranked_tools
+    ]
 
 
 async def embed_text(
@@ -110,17 +186,14 @@ async def embed_text(
     if not text:
         return None
     try:
-        from apps.llm_gateway.gateway import LLMGateway
         from apps.llm_gateway.exceptions import LLMGatewayError
         from apps.llm_gateway.types import EmbeddingResponse
-        from functools import lru_cache
 
-        @lru_cache
-        def _get_gw() -> LLMGateway:
-            return LLMGateway.from_env()
+        from vendor_resources.services.llm_gateway_client import get_gateway
 
-        gw = _get_gw()
-        resp: EmbeddingResponse = await gw.embed([text], provider=provider, model=model)
+        resp: EmbeddingResponse = await get_gateway().embed(
+            [text], provider=provider, model=model
+        )
     except LLMGatewayError:
         return None
     except Exception:
@@ -131,19 +204,54 @@ async def embed_text(
     return list(resp.embeddings[0]), resp.model or (model or "")
 
 
-def cosine_similarity(a: list[float], b: list[float]) -> float:
-    """Cosine similarity of two vectors."""
-    if not a or not b or len(a) != len(b):
-        return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
-    na = (sum(x * x for x in a)) ** 0.5
-    nb = (sum(y * y for y in b)) ** 0.5
-    if na == 0.0 or nb == 0.0:
-        return 0.0
-    return dot / (na * nb)
+async def embed_server(
+    server: VendorMCPServer, *, provider: Optional[str] = None
+) -> bool:
+    """(Re)compute ``server.embedding``/``embedding_model``/``dim`` in place.
+
+    Returns False (leaving the server's embedding fields untouched) when no
+    embedding could be produced right now (provider not configured, network
+    error, …) — callers should treat that as "skip for now", not a fatal
+    error for the surrounding add/verify operation.
+    """
+    embedded = await embed_text(_server_text(server), provider=provider)
+    if embedded is None:
+        return False
+    vector, model = embedded
+    server.embedding = vector
+    server.embedding_model = model
+    server.dim = len(vector)
+    return True
+
+
+async def embed_tool(tool: MCPTool, *, provider: Optional[str] = None) -> bool:
+    """(Re)compute ``tool.embedding``/``embedding_model``/``dim`` in place.
+
+    The embedded text includes the tool's input parameter names so a query
+    like "resize an image" can match a tool whose description is thin but
+    whose schema has a ``width``/``height`` property. See :func:`embed_server`
+    for the "no embedding available" contract.
+    """
+    embedded = await embed_text(_tool_text(tool), provider=provider)
+    if embedded is None:
+        return False
+    vector, model = embedded
+    tool.embedding = vector
+    tool.embedding_model = model
+    tool.dim = len(vector)
+    return True
+
+
+# Re-exported for backward compatibility — this used to be defined here.
+cosine_similarity = hybrid_search.cosine_similarity
 
 
 __all__ = [
     "get_authorized_vendor_catalog",
     "get_authorized_vendor_catalog_semantic",
+    "get_relevant_tools_semantic",
+    "embed_text",
+    "embed_server",
+    "embed_tool",
+    "cosine_similarity",
 ]

@@ -71,8 +71,10 @@ services:
     image: enterpriseai-web
     container_name: enterpriseai-web
     restart: unless-stopped
+    environment:
+      PORT: ${WEB_PORT:-3001}
     ports:
-      - "${WEB_PORT:-3001}:3000"
+      - "${WEB_PORT:-3001}:${WEB_PORT:-3001}"
     depends_on:
       auth:
         condition: service_healthy
