@@ -15,6 +15,7 @@ import {
   ChevronDown,
   ChevronUp,
   X,
+  PlugZap,
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -39,6 +40,7 @@ export default function UserAgentsPage() {
   const [searchResult, setSearchResult] = useState<ToolSearchResponse | null>(null);
   const [planResult, setPlanResult] = useState<ToolCallPlanResponse | null>(null);
   const [connectServer, setConnectServer] = useState<MCPServerEntry | null>(null);
+  const [connectPromptServer, setConnectPromptServer] = useState<MCPServerEntry | null>(null);
   const [expandedToolsId, setExpandedToolsId] = useState<string | null>(null);
   const catalogSectionRef = useRef<HTMLDivElement>(null);
 
@@ -69,6 +71,20 @@ export default function UserAgentsPage() {
     else scrollToCatalog();
   };
 
+  // Show the "connect first" prompt modal instead of directly opening the connect modal
+  const promptConnectServerById = (serverId: string) => {
+    const entry = serverById[serverId];
+    if (entry) setConnectPromptServer(entry);
+    else scrollToCatalog();
+  };
+
+  // Helper: get a fresh server-by-id map directly from the query cache
+  // (avoids stale-closure bugs inside mutation onSuccess callbacks).
+  const getFreshServerById = () => {
+    const cached = queryClient.getQueryData<{ servers: MCPServerEntry[] }>(["catalog", accessToken, ""]);
+    return Object.fromEntries((cached?.servers ?? []).map((s) => [s.id, s]));
+  };
+
   const connectMutation = useMutation({
     mutationFn: ({ id, credentials }: { id: string; credentials?: Record<string, string> | null }) =>
       vendorApi.connectMCPServerAsUser(accessToken, id, credentials),
@@ -88,15 +104,19 @@ export default function UserAgentsPage() {
   // "Compile": two-stage semantic search -> which tools could answer this?
   const searchMutation = useMutation({
     mutationFn: (q: string) =>
-      vendorApi.searchCatalogTools(accessToken, { q, top_k_servers: 5, top_k_tools: 5 }),
-    onSuccess: (res) => setSearchResult(res),
+      vendorApi.searchCatalogTools(accessToken, { q, top_k_servers: 5, top_k_tools: 8 }),
+    onSuccess: (res) => {
+      setSearchResult(res);
+    },
   });
 
   // "Run": pick one tool + fill its arguments via LLM — still doesn't call it.
   const planMutation = useMutation({
     mutationFn: (q: string) =>
-      vendorApi.planToolCall(accessToken, { q, top_k_servers: 5, top_k_tools: 3 }),
-    onSuccess: (res) => setPlanResult(res),
+      vendorApi.planToolCall(accessToken, { q, top_k_servers: 5, top_k_tools: 8 }),
+    onSuccess: (res) => {
+      setPlanResult(res);
+    },
   });
 
   const scrollToCatalog = () => {
@@ -106,20 +126,12 @@ export default function UserAgentsPage() {
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     if (!query.trim()) return;
-    if (!hasAnyConnectedServer) {
-      scrollToCatalog();
-      return;
-    }
     setPlanResult(null);
     searchMutation.mutate(query.trim());
   };
 
   const handlePlan = () => {
     if (!query.trim()) return;
-    if (!hasAnyConnectedServer) {
-      scrollToCatalog();
-      return;
-    }
     setSearchResult(null);
     planMutation.mutate(query.trim());
   };
@@ -163,7 +175,7 @@ export default function UserAgentsPage() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
-          <Button type="submit" disabled={searchMutation.isPending || !hasAnyConnectedServer}>
+          <Button type="submit" disabled={searchMutation.isPending || !query.trim()}>
             {searchMutation.isPending ? <Spinner /> : <Sparkles className="h-4 w-4 mr-1" />}
             Compile
           </Button>
@@ -171,7 +183,7 @@ export default function UserAgentsPage() {
             type="button"
             variant="outline"
             onClick={handlePlan}
-            disabled={planMutation.isPending || !hasAnyConnectedServer}
+            disabled={planMutation.isPending || !query.trim()}
           >
             {planMutation.isPending ? <Spinner /> : <Play className="h-4 w-4 mr-1" />} Run
           </Button>
@@ -321,6 +333,35 @@ export default function UserAgentsPage() {
                     )}
                   </div>
                 )}
+                {connectMutation.isPending && (connectMutation.variables as any)?.id === s.id && (
+                  <div className="mt-3 rounded-lg border border-sky-200 bg-sky-50/80 p-3 space-y-1.5">
+                    <div className="flex items-center justify-between text-xs font-semibold text-sky-800">
+                      <span className="flex items-center gap-1.5">
+                        <Spinner className="h-3.5 w-3.5 text-sky-600" />
+                        Connecting {s.name}...
+                      </span>
+                      <span className="text-[10px] font-mono text-sky-600 uppercase">Connecting</span>
+                    </div>
+                    <div className="h-2 w-full overflow-hidden rounded-full bg-sky-200">
+                      <div className="h-full bg-gradient-to-r from-indigo-500 via-sky-500 to-emerald-500 animate-pulse rounded-full w-full" />
+                    </div>
+                    <p className="text-[11px] text-sky-700">Verifying credentials and synchronizing MCP tools...</p>
+                  </div>
+                )}
+                {disconnectMutation.isPending && (disconnectMutation.variables as any) === s.id && (
+                  <div className="mt-3 rounded-lg border border-red-200 bg-red-50/80 p-3 space-y-1.5">
+                    <div className="flex items-center justify-between text-xs font-semibold text-red-800">
+                      <span className="flex items-center gap-1.5">
+                        <Spinner className="h-3.5 w-3.5 text-red-600" />
+                        Disconnecting {s.name}...
+                      </span>
+                      <span className="text-[10px] font-mono text-red-600 uppercase">Disconnecting</span>
+                    </div>
+                    <div className="h-2 w-full overflow-hidden rounded-full bg-red-200">
+                      <div className="h-full bg-gradient-to-r from-red-400 via-red-500 to-amber-500 animate-pulse rounded-full w-full" />
+                    </div>
+                  </div>
+                )}
               </li>
             ))}
           </ul>
@@ -346,7 +387,90 @@ export default function UserAgentsPage() {
           onSubmit={(credentials) => connectMutation.mutate({ id: connectServer.id, credentials })}
         />
       )}
+
+      {connectPromptServer && (
+        <ConnectServerPromptModal
+          server={connectPromptServer}
+          onClose={() => setConnectPromptServer(null)}
+          onConnect={() => {
+            setConnectPromptServer(null);
+            setConnectServer(connectPromptServer);
+          }}
+        />
+      )}
     </ProtectedDashboard>
+  );
+}
+
+// ─── Connect-Server Prompt Modal ────────────────────────────────────────────
+function ConnectServerPromptModal({
+  server,
+  onClose,
+  onConnect,
+}: {
+  server: MCPServerEntry;
+  onClose: () => void;
+  onConnect: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+      <div className="w-full max-w-sm rounded-2xl bg-white shadow-2xl overflow-hidden">
+        {/* Header */}
+        <div className="bg-gradient-to-r from-indigo-600 to-sky-500 px-6 py-5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="rounded-full bg-white/20 p-2">
+                <PlugZap className="h-5 w-5 text-white" />
+              </div>
+              <h3 className="text-base font-semibold text-white">Server not connected</h3>
+            </div>
+            <button
+              onClick={onClose}
+              className="rounded-full bg-white/10 p-1 text-white hover:bg-white/20 transition-colors cursor-pointer"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* Body */}
+        <div className="px-6 py-5">
+          <p className="text-sm text-zinc-600">
+            To use tools from{" "}
+            <span className="font-semibold font-mono text-zinc-900">{server.name}</span>, you need
+            to connect this server to your account first.
+          </p>
+          <div className="mt-4 rounded-xl border border-zinc-100 bg-zinc-50 p-3 flex items-center gap-3">
+            <div className="rounded-full bg-sky-100 p-2">
+              <Server className="h-4 w-4 text-sky-600" />
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-zinc-800 font-mono">{server.name}</p>
+              <p className="text-xs text-zinc-400 mt-0.5">{server.description || "MCP server"}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 pb-5 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 transition-colors cursor-pointer"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConnect}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-indigo-600 to-sky-500 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:opacity-90 transition-opacity cursor-pointer"
+          >
+            <Link2 className="h-4 w-4" />
+            Connect {server.name}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -409,12 +533,36 @@ function UserConnectModal({
 
           {error && <p className="text-xs text-red-600">{error}</p>}
 
+          {isPending && (
+            <div className="rounded-lg border border-indigo-200 bg-indigo-50/90 p-3.5 space-y-2">
+              <div className="flex items-center justify-between text-xs font-semibold text-indigo-900">
+                <span className="flex items-center gap-2">
+                  <Spinner className="h-4 w-4 text-indigo-600" />
+                  Connecting {server.name}...
+                </span>
+                <span className="text-[10px] font-mono text-indigo-600 uppercase">Connecting</span>
+              </div>
+              <div className="h-2 w-full overflow-hidden rounded-full bg-indigo-200">
+                <div className="h-full bg-gradient-to-r from-indigo-500 via-sky-500 to-emerald-500 animate-pulse rounded-full w-full" />
+              </div>
+              <p className="text-xs text-indigo-700">Verifying credentials and discovering available tools...</p>
+            </div>
+          )}
+
           <div className="flex justify-end gap-2 pt-2">
-            <Button type="button" variant="outline" onClick={onClose}>
+            <Button type="button" variant="outline" onClick={onClose} disabled={isPending}>
               Cancel
             </Button>
             <Button type="submit" disabled={isPending}>
-              {isPending ? <Spinner /> : <Link2 className="h-4 w-4 mr-1" />} Connect
+              {isPending ? (
+                <>
+                  <Spinner className="mr-1" /> Connecting...
+                </>
+              ) : (
+                <>
+                  <Link2 className="h-4 w-4 mr-1" /> Connect
+                </>
+              )}
             </Button>
           </div>
         </form>

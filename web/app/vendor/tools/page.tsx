@@ -214,7 +214,25 @@ export default function VendorMCPPage() {
                       </span>
                     </td>
                     <td className="px-4 py-3">
-                      {s.status === "VERIFIED" ? (
+                      {connectMutation.isPending && (connectMutation.variables as any)?.id === s.id ? (
+                        <div className="space-y-1.5 min-w-[130px]">
+                          <span className="inline-flex items-center gap-1.5 rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-semibold text-indigo-700">
+                            <Spinner className="h-3 w-3 text-indigo-600" /> Connecting...
+                          </span>
+                          <div className="h-1.5 w-full overflow-hidden rounded-full bg-indigo-100">
+                            <div className="h-full bg-gradient-to-r from-indigo-500 via-sky-500 to-emerald-500 animate-pulse rounded-full w-full" />
+                          </div>
+                        </div>
+                      ) : disconnectMutation.isPending && (disconnectMutation.variables as any) === s.id ? (
+                        <div className="space-y-1.5 min-w-[130px]">
+                          <span className="inline-flex items-center gap-1.5 rounded-full bg-red-50 px-2 py-0.5 text-xs font-semibold text-red-700">
+                            <Spinner className="h-3 w-3 text-red-600" /> Disconnecting...
+                          </span>
+                          <div className="h-1.5 w-full overflow-hidden rounded-full bg-red-100">
+                            <div className="h-full bg-gradient-to-r from-red-400 via-red-500 to-amber-500 animate-pulse rounded-full w-full" />
+                          </div>
+                        </div>
+                      ) : s.status === "VERIFIED" ? (
                         <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
                           <CheckCircle2 className="h-3 w-3 text-emerald-600" /> Connected
                         </span>
@@ -240,19 +258,25 @@ export default function VendorMCPPage() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-2">
-                        <button
-                          onClick={() => {
-                            setConnectServer(s);
-                            setCredKey("");
-                            setCredValue("");
-                            setShowConnectModal(true);
-                          }}
-                          className="p-1 text-zinc-400 hover:text-emerald-600 cursor-pointer"
-                          title="Test Connection & Discover Tools"
-                          disabled={connectMutation.isPending}
-                        >
-                          <Link className="h-4 w-4" />
-                        </button>
+                        {connectMutation.isPending && (connectMutation.variables as any)?.id === s.id ? (
+                          <span className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600">
+                            <Spinner className="h-4 w-4 text-indigo-600" /> Testing connection...
+                          </span>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => {
+                                setConnectServer(s);
+                                setCredKey("");
+                                setCredValue("");
+                                setShowConnectModal(true);
+                              }}
+                              className="p-1 text-zinc-400 hover:text-emerald-600 cursor-pointer disabled:opacity-30"
+                              title="Test Connection & Discover Tools"
+                              disabled={connectMutation.isPending}
+                            >
+                              <Link className="h-4 w-4" />
+                            </button>
                         <button
                           onClick={() => {
                             setToolsServer({
@@ -319,6 +343,8 @@ export default function VendorMCPPage() {
                         >
                           <Trash2 className="h-4 w-4" />
                         </button>
+                          </>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -919,10 +945,34 @@ function ConnectCredentialModal({
             </div>
           )}
 
+          {isPending && (
+            <div className="rounded-lg border border-indigo-200 bg-indigo-50/90 p-3.5 space-y-2">
+              <div className="flex items-center justify-between text-xs font-semibold text-indigo-900">
+                <span className="flex items-center gap-2">
+                  <Spinner className="h-4 w-4 text-indigo-600" />
+                  Testing connection & discovering tools...
+                </span>
+                <span className="text-[10px] font-mono text-indigo-600 uppercase">Connecting</span>
+              </div>
+              <div className="h-2 w-full overflow-hidden rounded-full bg-indigo-200">
+                <div className="h-full bg-gradient-to-r from-indigo-500 via-sky-500 to-emerald-500 animate-pulse rounded-full w-full" />
+              </div>
+              <p className="text-xs text-indigo-700">Running MCP protocol handshake and discovering tools list...</p>
+            </div>
+          )}
+
           <div className="flex justify-end gap-2 pt-2">
-            <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+            <Button type="button" variant="outline" onClick={onClose} disabled={isPending}>Cancel</Button>
             <Button type="submit" disabled={isPending}>
-              {isPending ? <Spinner /> : <Link className="h-4 w-4 mr-1" />} Test Connection & Discover Tools
+              {isPending ? (
+                <>
+                  <Spinner className="mr-1" /> Connecting...
+                </>
+              ) : (
+                <>
+                  <Link className="h-4 w-4 mr-1" /> Test Connection & Discover Tools
+                </>
+              )}
             </Button>
           </div>
         </form>
