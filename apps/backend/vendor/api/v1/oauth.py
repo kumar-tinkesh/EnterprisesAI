@@ -52,6 +52,20 @@ async def set_mcp_oauth_config(
     }
     server.auth_config = auth_config
     server.auth_type = "oauth2"
+    if payload.client_id and payload.client_secret:
+        # Save once, encrypted, on the vendor's shared credential row so
+        # both the admin's own future authorize calls and every
+        # end-user's authorize-as-user call can reuse them without the
+        # app secret ever being re-typed or shown to an end-user.
+        await mcp_auth.store_server_credentials(
+            db,
+            server_id=server.id,
+            credentials={
+                "oauth_client_id": payload.client_id,
+                "oauth_client_secret": payload.client_secret,
+            },
+            tenant_id=None,
+        )
     await db.commit()
     await db.refresh(server)
     return server
@@ -71,10 +85,16 @@ async def start_mcp_oauth_authorize(
             status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found"
         )
     try:
+        client_id, client_secret = await oauth_flow.resolve_app_credentials(
+            db,
+            server_id=server.id,
+            override_client_id=payload.client_id,
+            override_client_secret=payload.client_secret,
+        )
         url, state = oauth_flow.build_authorize_url(
             server,
-            client_id=payload.client_id,
-            client_secret=payload.client_secret,
+            client_id=client_id,
+            client_secret=client_secret,
             backend_public_url=get_backend_settings().BACKEND_PUBLIC_URL,
             scope_override=payload.scope,
         )
@@ -124,11 +144,11 @@ async def mcp_oauth_callback(
         return HTMLResponse(_oauth_result_html(success=False, message=error), status_code=400)
 
     try:
-        server, credentials = await oauth_flow.complete_authorization(
+        server, credentials, tenant_id, user_id = await oauth_flow.complete_authorization(
             db, state=state, code=code, extra_callback_params=params
         )
         await mcp_auth.store_server_credentials(
-            db, server_id=server.id, credentials=credentials, tenant_id=None
+            db, server_id=server.id, credentials=credentials, tenant_id=tenant_id, user_id=user_id
         )
         await db.commit()
     except oauth_flow.OAuthFlowError as exc:

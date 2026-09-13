@@ -3,6 +3,13 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from vendor.api.v1.bridge import (
+    forget_bridge_as_user,
+    get_bridge_status_as_user,
+    router as bridge_router,
+    start_bridge_as_user,
+    stop_bridge_as_user,
+)
 from vendor.api.v1.connection import (
     connect_mcp_server_endpoint,
     disconnect_mcp_server_endpoint,
@@ -37,6 +44,7 @@ from vendor.api.v1.user_connection import (
     connect_mcp_server_as_user_endpoint,
     disconnect_mcp_server_as_user_endpoint,
     router as user_connection_router,
+    start_mcp_oauth_authorize_as_user,
 )
 
 router = APIRouter()
@@ -48,9 +56,14 @@ router.include_router(user_connection_router)
 router.include_router(detection_router)
 router.include_router(oauth_router)
 router.include_router(grants_router)
+router.include_router(bridge_router)
 
 __all__ = [
     "router",
+    "start_bridge_as_user",
+    "get_bridge_status_as_user",
+    "stop_bridge_as_user",
+    "forget_bridge_as_user",
     "post_add_mcp_server",
     "post_create_mcp_server_legacy",
     "get_list_mcp_servers",
@@ -61,6 +74,7 @@ __all__ = [
     "disconnect_mcp_server_endpoint",
     "connect_mcp_server_as_user_endpoint",
     "disconnect_mcp_server_as_user_endpoint",
+    "start_mcp_oauth_authorize_as_user",
     "detect_mcp_server_endpoint",
     "analyze_mcp_repo_endpoint",
     "set_mcp_oauth_config",

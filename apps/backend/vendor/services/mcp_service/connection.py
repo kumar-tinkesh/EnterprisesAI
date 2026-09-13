@@ -11,10 +11,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.audit import log_audit_event
 
+from apps.backend.config import get_backend_settings
+
 from vendor.models import MCPTool, VendorMCPServer
 from vendor.services import mcp_auth
 from vendor.services.embedding import embed_tool
 from vendor.services.mcp_client import MCPClient
+from vendor.services.whatsapp_bridge import manager as bridge_manager
 
 logger = logging.getLogger("vendor.mcp_service")
 
@@ -92,6 +95,35 @@ async def _resolve_and_build_config(
             "source_repo_url": server.source_repo_url or server.server_url,
             "env_vars": server.env_vars,
         })
+        # device_pairing (e.g. WhatsApp): the generic detected command/args
+        # above point at a fresh, unauthenticated clone of the upstream
+        # repo — real end-user usage instead requires *this user's own*
+        # long-running, QR-authenticated bridge (see
+        # vendor.services.whatsapp_bridge). Redirect the stdio process at
+        # our vendored MCP server pointed at that bridge's port/store
+        # instead, and refuse outright if it isn't connected yet.
+        if auth_config.get("auth_type") == "device_pairing" and user_id is not None:
+            bridge_status = await bridge_manager.get_status(
+                db, server_id=str(server.id), user_id=user_id
+            )
+            endpoint = bridge_manager.get_running_endpoint(str(server.id), user_id)
+            if bridge_status["status"] != "connected" or endpoint is None:
+                raise mcp_auth.McpAuthError(
+                    "Your WhatsApp bridge isn't connected yet — connect it and scan the "
+                    "QR code first (see the bridge connect flow for this server)."
+                )
+            port, data_dir = endpoint
+            settings = get_backend_settings()
+            config.update({
+                "command": "python3",
+                "args": [settings.WHATSAPP_MCP_SERVER_SCRIPT],
+                "working_directory": None,
+                "source_repo_url": None,
+                "env_vars": {
+                    "WHATSAPP_API_BASE_URL": f"http://127.0.0.1:{port}/api",
+                    "WHATSAPP_MESSAGES_DB_PATH": f"{data_dir}/store/messages.db",
+                },
+            })
     elif transport in ("streamable_http", "sse"):
         config.update({
             "endpoint": server.endpoint or server.server_url,
@@ -106,6 +138,7 @@ async def test_mcp_connection(
     server: VendorMCPServer,
     request_credentials: dict[str, str] | None = None,
     tenant_id: str | None = None,
+    actor_id: str | None = None,
 ) -> dict:
     """Step 2: Test connection and discover tools for a registered MCP server."""
     config = await _resolve_and_build_config(
@@ -143,7 +176,7 @@ async def test_mcp_connection(
     await log_audit_event(
         db,
         action="mcp_server.test_connection",
-        user_id=tenant_id or "system",
+        user_id=actor_id or tenant_id or "system",
         resource=f"mcp_server:{server.id}",
         detail=f"tools_discovered={len(result['bound_tools'])}",
     )
@@ -165,6 +198,7 @@ async def connect_registered_server(
     server: VendorMCPServer,
     request_credentials: dict[str, str] | None = None,
     tenant_id: str | None = None,
+    actor_id: str | None = None,
 ) -> dict:
     """Connect endpoint helper: Natively resolve auth for a registered MCP server and test connection."""
     from vendor.services import mcp_service
@@ -174,6 +208,7 @@ async def connect_registered_server(
         server=server,
         request_credentials=request_credentials,
         tenant_id=tenant_id,
+        actor_id=actor_id,
     )
 
 

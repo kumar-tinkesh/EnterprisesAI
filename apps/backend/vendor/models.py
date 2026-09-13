@@ -341,3 +341,59 @@ class MCPTool(Base, TimestampMixin):
     embedding: Mapped[Optional[list]] = mapped_column(JSON, nullable=True, default=None)
     embedding_model: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     dim: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=None)
+
+
+# ---------------------------------------------------------------------------
+# VendorMCPBridgeInstance  (new — native per-user device-pairing bridges,
+# e.g. WhatsApp)
+# ---------------------------------------------------------------------------
+
+class VendorMCPBridgeInstance(Base, TimestampMixin):
+    """Tracks one running (or previously-run) background bridge process for
+    a ``device_pairing``-auth server (e.g. WhatsApp), owned by exactly one
+    end user.
+
+    Unlike ``VendorMCPCredential``, there is no secret to encrypt here — the
+    "credential" *is* the long-running, QR-authenticated bridge process
+    itself. This row is the durable record of that process's identity
+    (its isolated ``data_dir`` and allocated ``port``) and last-known
+    status; the live OS process handle lives only in
+    ``vendor.services.whatsapp_bridge.manager``'s in-memory registry and is
+    re-derived (re-spawned against the same ``data_dir``) on backend
+    restart rather than persisted.
+
+    ``status`` values: ``not_connected`` | ``starting`` | ``awaiting_qr`` |
+    ``connected`` | ``error``. Unique per ``(server_id, user_id)`` — exactly
+    one bridge per user per server, matching WhatsApp's own one-account
+    one-linked-session-per-app model.
+    """
+
+    __tablename__ = "vendor_mcp_bridge_instances"
+    __table_args__ = (
+        Index(
+            "ix_bridge_server_user",
+            "server_id",
+            "user_id",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    server_id: Mapped[str] = mapped_column(
+        ForeignKey("vendor_mcp_servers.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    tenant_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    user_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="not_connected")
+    # Isolated working directory for this instance's Go bridge process —
+    # holds its own store/{messages,whatsapp}.db, never shared with any
+    # other user's instance.
+    data_dir: Mapped[str] = mapped_column(String(512), nullable=False)
+    # Allocated REST API port for this instance's bridge (each instance
+    # needs its own — the upstream bridge hardcodes one port per process).
+    port: Mapped[int] = mapped_column(Integer, nullable=False)
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    last_connected_at: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)

@@ -58,8 +58,17 @@ async def resolve_auth(
     auth_type = ((auth_config or {}).get("auth_type") or "none").lower()
 
     if auth_type in ("none", "env", "device_pairing") or transport == "stdio":
+        # Detection can be wrong (e.g. an unauthenticated-looking probe
+        # response from a server that actually needs auth) or incomplete
+        # (device_pairing has no static field). If the caller explicitly
+        # supplied a header-shaped credential anyway (e.g. a vendor admin
+        # typing "Authorization" / "Bearer ..." into the raw credential
+        # box), honor it as a raw passthrough header instead of silently
+        # dropping it — but only for HTTP transports; stdio servers take
+        # credentials via env vars, not headers.
+        headers = _raw_header_passthrough(merged) if transport != "stdio" else {}
         return {
-            "headers": {},
+            "headers": headers,
             "credentials": merged,
             "auth_type": auth_type,
             "token_source": "credentials" if merged else None,

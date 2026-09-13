@@ -10,6 +10,7 @@ Includes:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -62,7 +63,17 @@ def create_app() -> FastAPI:
             from pprint import pprint
 
             pprint(settings.redacted_repr())
-        yield
+
+        from vendor.services.whatsapp_bridge import manager as bridge_manager
+
+        reaper_task = asyncio.create_task(bridge_manager.reaper_loop())
+        try:
+            yield
+        finally:
+            reaper_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await reaper_task
+            await bridge_manager.shutdown_all()
 
     app = FastAPI(
         title=settings.APP_NAME,

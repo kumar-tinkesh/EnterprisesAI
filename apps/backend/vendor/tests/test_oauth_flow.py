@@ -33,8 +33,8 @@ def _oauth_config_payload():
     }
 
 
-async def _create_server(admin_client) -> str:
-    res = await admin_client.post(f"{BASE}/mcp", json=_mcp_payload())
+async def _create_server(admin_client, *, is_global: bool = True) -> str:
+    res = await admin_client.post(f"{BASE}/mcp", json=_mcp_payload(is_global=is_global))
     assert res.status_code == 201, res.text
     return res.json()["id"]
 
@@ -209,3 +209,142 @@ async def test_callback_rejects_unknown_state(anon_client):
 async def test_callback_missing_code_or_state(anon_client):
     res = await anon_client.get(f"{BASE}/mcp/oauth/callback")
     assert res.status_code == 400
+
+
+# ── Saving the app's client_id/secret via oauth-config (for reuse) ────
+
+
+@pytest.mark.asyncio
+async def test_oauth_config_persists_app_credentials_for_reuse(admin_client, db):
+    """PATCH .../oauth-config with client_id/secret -> saved encrypted on
+    the server's shared credential row, not just endpoints."""
+    server_id = await _create_server(admin_client)
+    payload = {**_oauth_config_payload(), "client_id": "APPCID", "client_secret": "APPSEC"}
+    res = await admin_client.patch(f"{BASE}/mcp/{server_id}/oauth-config", json=payload)
+    assert res.status_code == 200, res.text
+
+    stored = await mcp_auth.load_server_credentials(db, server_id=server_id, tenant_id=None)
+    assert stored["oauth_client_id"] == "APPCID"
+    assert stored["oauth_client_secret"] == "APPSEC"
+
+
+@pytest.mark.asyncio
+async def test_authorize_reuses_stored_app_credentials(admin_client):
+    """Admin's own authorize call can omit client_id/secret once they're saved."""
+    server_id = await _create_server(admin_client)
+    await admin_client.patch(
+        f"{BASE}/mcp/{server_id}/oauth-config",
+        json={**_oauth_config_payload(), "client_id": "APPCID", "client_secret": "APPSEC"},
+    )
+    res = await admin_client.post(f"{BASE}/mcp/{server_id}/oauth/authorize", json={})
+    assert res.status_code == 200, res.text
+    assert "client_id=APPCID" in res.json()["authorization_url"]
+
+
+# ── End-user self-service "Connect via OAuth" (authorize-as-user) ─────
+
+
+async def _verified_oauth_server(admin_client, db, *, with_app_credentials=True) -> str:
+    server_id = await _create_server(admin_client, is_global=True)
+    payload = dict(_oauth_config_payload())
+    if with_app_credentials:
+        payload.update(client_id="APPCID", client_secret="APPSEC")
+    await admin_client.patch(f"{BASE}/mcp/{server_id}/oauth-config", json=payload)
+
+    from vendor.services.mcp_service import get_mcp_server
+
+    server_row = await get_mcp_server(db, server_id=server_id)
+    server_row.status = "VERIFIED"
+    await db.commit()
+    return server_id
+
+
+@pytest.mark.asyncio
+async def test_authorize_as_user_rejects_non_oauth_server(tenant_client, admin_client):
+    server_id = await _create_server(admin_client, is_global=True)
+    res = await tenant_client.post(f"{BASE}/mcp/{server_id}/oauth/authorize-as-user", json={})
+    assert res.status_code == 400
+    assert "doesn't use OAuth" in res.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_authorize_as_user_rejects_unverified_server(tenant_client, admin_client):
+    server_id = await _create_server(admin_client, is_global=True)
+    await admin_client.patch(
+        f"{BASE}/mcp/{server_id}/oauth-config",
+        json={**_oauth_config_payload(), "client_id": "APPCID", "client_secret": "APPSEC"},
+    )
+    res = await tenant_client.post(f"{BASE}/mcp/{server_id}/oauth/authorize-as-user", json={})
+    assert res.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_authorize_as_user_requires_admin_configured_app_credentials(
+    tenant_client, admin_client, db
+):
+    """An end-user must never be asked for (or able to supply) the app's
+    client_secret — if the admin never saved one, this fails clearly."""
+    server_id = await _verified_oauth_server(admin_client, db, with_app_credentials=False)
+    res = await tenant_client.post(f"{BASE}/mcp/{server_id}/oauth/authorize-as-user", json={})
+    assert res.status_code == 400
+    assert "vendor admin must set them" in res.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_authorize_as_user_forbidden_for_invisible_server(solo_client, admin_client, db):
+    """A restricted (non-global, ungranted) server stays invisible to the
+    connect-as-user OAuth path exactly like the plain connect-as-user one."""
+    server_id = await _create_server(admin_client, is_global=False)
+    await admin_client.patch(
+        f"{BASE}/mcp/{server_id}/oauth-config",
+        json={**_oauth_config_payload(), "client_id": "APPCID", "client_secret": "APPSEC"},
+    )
+    res = await solo_client.post(f"{BASE}/mcp/{server_id}/oauth/authorize-as-user", json={})
+    assert res.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_authorize_as_user_builds_url_without_exposing_secret(tenant_client, admin_client, db):
+    server_id = await _verified_oauth_server(admin_client, db)
+    res = await tenant_client.post(f"{BASE}/mcp/{server_id}/oauth/authorize-as-user", json={})
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert "client_id=APPCID" in body["authorization_url"]
+    # The app secret is never round-tripped to the end-user's browser.
+    assert "APPSEC" not in body["authorization_url"]
+    assert "state" in body
+
+
+@pytest.mark.asyncio
+async def test_callback_from_user_flow_stores_isolated_user_credential(
+    tenant_client, admin_client, anon_client, monkeypatch, db, tenant
+):
+    """The tokens from an end-user-initiated OAuth flow land in *that
+    user's own* isolated credential row — never the vendor's shared one."""
+    server_id = await _verified_oauth_server(admin_client, db)
+
+    authorize_res = await tenant_client.post(
+        f"{BASE}/mcp/{server_id}/oauth/authorize-as-user", json={}
+    )
+    state = authorize_res.json()["state"]
+
+    async def fake_exchange(oauth, credentials, *, code, redirect_uri):
+        return {"access_token": "USERACCESS1", "refresh_token": "USERREFRESH1"}
+
+    monkeypatch.setattr(mcp_auth, "exchange_authorization_code", fake_exchange)
+
+    callback_res = await anon_client.get(
+        f"{BASE}/mcp/oauth/callback", params={"code": "C1", "state": state}
+    )
+    assert callback_res.status_code == 200, callback_res.text
+
+    user_creds = await mcp_auth.load_server_credentials(
+        db, server_id=server_id, tenant_id=tenant.id, user_id="tu_1"
+    )
+    assert user_creds["access_token"] == "USERACCESS1"
+
+    shared_creds = await mcp_auth.load_server_credentials(db, server_id=server_id, tenant_id=None)
+    # The shared row still only has the app's own client credentials —
+    # this user's freshly-issued tokens must not have landed there.
+    assert "access_token" not in shared_creds
+    assert shared_creds["oauth_client_id"] == "APPCID"

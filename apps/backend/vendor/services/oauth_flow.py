@@ -54,6 +54,11 @@ class _PendingAuthorization:
     client_id: str
     client_secret: str
     redirect_uri: str
+    # Set only when an end-user (not the vendor admin) started this flow —
+    # see ``build_authorize_url``'s ``user_id`` param. Determines whether
+    # the callback persists the resulting tokens as the vendor's shared
+    # primary credential or as this one user's isolated row.
+    user_id: Optional[str] = None
     created_at: float = field(default_factory=time.monotonic)
 
 
@@ -85,6 +90,37 @@ def callback_redirect_uri(backend_public_url: str) -> str:
     return f"{backend_public_url.rstrip('/')}/api/v1/vendor/resources/mcp/oauth/callback"
 
 
+async def resolve_app_credentials(
+    db: AsyncSession,
+    *,
+    server_id: str,
+    override_client_id: Optional[str] = None,
+    override_client_secret: Optional[str] = None,
+) -> tuple[str, str]:
+    """Resolve the OAuth app's (client_id, client_secret) for a server.
+
+    Explicit overrides win (the vendor admin's own authorize call may still
+    pass them ad hoc). Otherwise falls back to whatever was saved via
+    ``PATCH .../oauth-config`` — stored encrypted in the server's shared
+    credential row (``tenant_id=None, user_id=None``) under
+    ``oauth_client_id``/``oauth_client_secret``. This is the only source
+    available to an end-user's ``authorize-as-user`` call, which never
+    accepts the app secret directly.
+    """
+    if override_client_id and override_client_secret:
+        return override_client_id, override_client_secret
+
+    stored = await mcp_auth.load_server_credentials(db, server_id=server_id, tenant_id=None)
+    client_id = override_client_id or stored.get("oauth_client_id")
+    client_secret = override_client_secret or stored.get("oauth_client_secret")
+    if not client_id or not client_secret:
+        raise OAuthFlowError(
+            "No OAuth client_id/client_secret configured for this server. "
+            "A vendor admin must set them via PATCH /mcp/{server_id}/oauth-config first."
+        )
+    return client_id, client_secret
+
+
 def build_authorize_url(
     server: VendorMCPServer,
     *,
@@ -92,6 +128,7 @@ def build_authorize_url(
     client_secret: str,
     backend_public_url: str,
     tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
     scope_override: Optional[str] = None,
 ) -> tuple[str, str]:
     """Return ``(authorization_url, state)`` for the given server.
@@ -125,6 +162,7 @@ def build_authorize_url(
         client_id=client_id,
         client_secret=client_secret,
         redirect_uri=redirect_uri,
+        user_id=user_id,
     )
 
     scope = scope_override or " ".join(oauth.get("scopes_supported") or [])
@@ -160,11 +198,15 @@ async def complete_authorization(
     state: str,
     code: str,
     extra_callback_params: dict[str, str],
-) -> tuple[VendorMCPServer, dict[str, str]]:
+) -> tuple[VendorMCPServer, dict[str, str], Optional[str], Optional[str]]:
     """Redeem ``code`` for tokens against whichever server ``state`` was
-    issued for. Returns ``(server, credentials_to_persist)`` — this function
-    only reads; callers persist via ``mcp_auth.store_server_credentials``
-    and commit alongside whatever else they're doing in the same request.
+    issued for. Returns ``(server, credentials_to_persist, tenant_id,
+    user_id)`` — the last two say *who* this flow belongs to (both ``None``
+    for the vendor admin's own shared authorization; ``user_id`` set when
+    an end-user started it via ``authorize-as-user``) so the caller can
+    persist to the right row via ``mcp_auth.store_server_credentials``.
+    This function only reads; callers persist and commit alongside whatever
+    else they're doing in the same request.
 
     The path has no ``{server_id}`` (see module docstring — one shared
     callback URL for every server), so ``state`` is how we find it.
@@ -213,12 +255,13 @@ async def complete_authorization(
         if matched and matched not in merged:
             merged[matched] = value
 
-    return server, merged
+    return server, merged, pending.tenant_id, pending.user_id
 
 
 __all__ = [
     "OAuthFlowError",
     "callback_redirect_uri",
+    "resolve_app_credentials",
     "build_authorize_url",
     "complete_authorization",
 ]

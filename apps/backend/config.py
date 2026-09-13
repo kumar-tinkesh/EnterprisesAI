@@ -39,6 +39,23 @@ class BackendSettings(BaseSettings):
     # per most providers' rules); localhost is fine for sandbox testing.
     BACKEND_PUBLIC_URL: str = "http://localhost:8002"
 
+    # Native per-user device-pairing bridges (see
+    # vendor.services.whatsapp_bridge) — each user's bridge process gets an
+    # isolated cwd under this root and a port in this range.
+    WHATSAPP_BRIDGE_BINARY: str = "/app/bin/whatsapp-bridge"
+    # The vendored+patched MCP server (see vendor_src/README.md) that talks
+    # to a bridge instance over HTTP — run with the app's own interpreter
+    # (its httpx/mcp/requests deps are already installed there).
+    WHATSAPP_MCP_SERVER_SCRIPT: str = (
+        "/app/apps/backend/vendor/services/whatsapp_bridge/vendor_src/server/main.py"
+    )
+    WHATSAPP_BRIDGE_DATA_ROOT: str = "/data/whatsapp_bridges"
+    WHATSAPP_BRIDGE_PORT_RANGE_START: int = 20000
+    WHATSAPP_BRIDGE_PORT_RANGE_END: int = 21000
+    # Kill a bridge that's had no successful "connected" heartbeat for this
+    # long — bounds total resource usage (each is a real OS process).
+    WHATSAPP_BRIDGE_IDLE_TIMEOUT_SECONDS: int = 6 * 60 * 60
+
 
 @lru_cache
 def get_backend_settings() -> BackendSettings:

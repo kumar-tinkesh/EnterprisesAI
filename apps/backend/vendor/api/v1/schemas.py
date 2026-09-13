@@ -199,18 +199,42 @@ class OAuthConfigRequest(BaseModel):
     token_endpoint: str
     scope: str | None = None
     extra_authorize_params: dict[str, str] | None = None
+    # Optional: persist the OAuth app's client_id/secret (encrypted, in the
+    # vendor's shared credential row) so every future authorize call — the
+    # admin's own, and every end-user's via authorize-as-user — can reuse
+    # them without re-entering the secret each time. End-users must never
+    # be asked for this; only a vendor admin sets it, once, here.
+    client_id: str | None = None
+    client_secret: str | None = None
 
 
 class OAuthAuthorizeRequest(BaseModel):
-    """Start a 'Connect via OAuth' bootstrap for a server."""
+    """Start a 'Connect via OAuth' bootstrap for a server (vendor admin).
 
-    client_id: str
-    client_secret: str
+    ``client_id``/``client_secret`` are optional if already saved via
+    ``PATCH .../oauth-config``; when given here they override the stored
+    ones for this call only.
+    """
+
+    client_id: str | None = None
+    client_secret: str | None = None
+    scope: str | None = None
+
+
+class OAuthAuthorizeAsUserRequest(BaseModel):
+    """Start a 'Connect via OAuth' bootstrap as an end-user.
+
+    No client_id/client_secret here — those are the vendor's shared OAuth
+    app credentials (set once by an admin via ``oauth-config``); an
+    individual end-user only ever supplies their own consent, never the
+    app secret.
+    """
+
     scope: str | None = None
 
 
 class OAuthAuthorizeResponse(BaseModel):
-    """Where to send the admin's browser to complete the provider's consent
+    """Where to send the caller's browser to complete the provider's consent
     screen, and the state token that flow will round-trip back."""
 
     authorization_url: str
@@ -263,7 +287,10 @@ class AddMCPServerResponse(BaseModel):
     status: str = "UNCONNECTED"
     is_global: bool = False
     source_type: str | None = None
-    transport_type: str | None = None
+    # The ORM column is named ``transport``; keep the external field name
+    # ``transport_type`` for API-contract stability but read from the real
+    # attribute so this doesn't always serialize as null.
+    transport_type: str | None = Field(default=None, validation_alias="transport")
     transport_confidence: float | None = None
     transport_evidence: list[dict] | None = None
     runtime_type: str | None = None
@@ -309,5 +336,14 @@ class GrantResponse(BaseModel):
     resource_type: str
     resource_id: str
     created_at: datetime
+
+
+class BridgeStatusResponse(BaseModel):
+    """Status of a caller's own native device-pairing bridge (e.g.
+    WhatsApp) for a server — see vendor.services.whatsapp_bridge."""
+
+    status: str  # not_connected | starting | awaiting_qr | connected | error
+    qr: str | None = None
+    error: str | None = None
 
 

@@ -335,9 +335,24 @@ export interface OAuthConfigBody {
 }
 
 export interface OAuthAuthorizeBody {
-  client_id: string;
-  client_secret: string;
+  client_id?: string;
+  client_secret?: string;
   scope?: string;
+}
+
+// No client_id/client_secret — those are the vendor's shared OAuth app
+// credentials (set once by an admin via oauth-config); an end-user only
+// ever supplies their own consent, never the app secret.
+export interface OAuthAuthorizeAsUserBody {
+  scope?: string;
+}
+
+// Native per-user device-pairing bridge (e.g. WhatsApp) — see
+// apps/backend/vendor/services/whatsapp_bridge/manager.py.
+export interface BridgeStatus {
+  status: "not_connected" | "starting" | "awaiting_qr" | "connected" | "error";
+  qr?: string | null;
+  error?: string | null;
 }
 
 export interface OAuthAuthorizeResponse {
@@ -452,6 +467,34 @@ export const vendorApi = {
   // apps/backend/vendor/api/v1/router.py::disconnect_mcp_server_as_user_endpoint).
   disconnectMCPServerAsUser: (token: string, serverId: string) =>
     request<void>(`${VR}/mcp/${serverId}/disconnect-as-user`, {
+      method: "POST",
+    }, token, BACKEND_API_URL),
+  // End-user self-service "Connect via OAuth" — builds *this user's own*
+  // consent URL for an oauth2 server; the resulting tokens land in this
+  // user's own isolated credential row, never the vendor's shared one
+  // (see apps/backend/vendor/api/v1/user_connection.py::start_mcp_oauth_authorize_as_user).
+  startMCPOAuthAuthorizeAsUser: (token: string, serverId: string, body: OAuthAuthorizeAsUserBody) =>
+    request<OAuthAuthorizeResponse>(`${VR}/mcp/${serverId}/oauth/authorize-as-user`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }, token, BACKEND_API_URL),
+  // Native per-user device-pairing bridge (e.g. WhatsApp) — start/poll/stop
+  // *this user's own* long-running bridge process. See
+  // apps/backend/vendor/api/v1/bridge.py.
+  startBridgeAsUser: (token: string, serverId: string) =>
+    request<BridgeStatus>(`${VR}/mcp/${serverId}/bridge/connect-as-user`, {
+      method: "POST",
+    }, token, BACKEND_API_URL),
+  getBridgeStatusAsUser: (token: string, serverId: string) =>
+    request<BridgeStatus>(`${VR}/mcp/${serverId}/bridge/status-as-user`, {
+      method: "GET",
+    }, token, BACKEND_API_URL),
+  disconnectBridgeAsUser: (token: string, serverId: string) =>
+    request<void>(`${VR}/mcp/${serverId}/bridge/disconnect-as-user`, {
+      method: "POST",
+    }, token, BACKEND_API_URL),
+  forgetBridgeAsUser: (token: string, serverId: string) =>
+    request<void>(`${VR}/mcp/${serverId}/bridge/forget-as-user`, {
       method: "POST",
     }, token, BACKEND_API_URL),
   // "Connect via OAuth" bootstrap — see apps/backend/vendor/services/oauth_flow.py

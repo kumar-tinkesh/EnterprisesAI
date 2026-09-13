@@ -82,8 +82,12 @@ async def test_mcp_connection_endpoint(
         )
     try:
         creds = payload.credentials if payload is not None else None
+        # Vendor admins verify with the server's single shared "primary"
+        # credential (tenant_id=None, user_id=None) — the same row the
+        # legacy /connect endpoint reads/writes — not one keyed to the
+        # calling admin's own account id.
         result = await test_mcp_connection(
-            db, server=server, request_credentials=creds, tenant_id=user.id
+            db, server=server, request_credentials=creds, tenant_id=None, actor_id=user.id
         )
         await db.commit()
     except McpAuthError as exc:
@@ -133,7 +137,7 @@ async def connect_mcp_server_endpoint(
     try:
         creds = payload.credentials if payload is not None else None
         result = await connect_registered_server(
-            db, server=server, request_credentials=creds
+            db, server=server, request_credentials=creds, actor_id=user.id
         )
         await db.commit()
     except McpAuthError as exc:

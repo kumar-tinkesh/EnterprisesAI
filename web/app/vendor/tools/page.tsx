@@ -248,8 +248,11 @@ export default function VendorMCPPage() {
                           <Globe className="h-3 w-3" /> Global
                         </span>
                       ) : (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
-                          <Lock className="h-3 w-3" /> Granted
+                        <span
+                          className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700"
+                          title="Not global — invisible to every tenant/solo user until you explicitly grant it via the Grants action"
+                        >
+                          <Lock className="h-3 w-3" /> Restricted
                         </span>
                       )}
                     </td>
@@ -712,6 +715,13 @@ function ConnectCredentialModal({
     detectedFields.length > 0 ? detectedFields : envFields;
   const isStdio = server.transport === "stdio";
   const needsNoCreds = credentialFields.length === 0 && isStdio;
+  // device_pairing (e.g. WhatsApp): there is no vendor-wide account to
+  // verify here — clicking "connect" below only proves the MCP protocol
+  // scaffolding runs (it spawns the raw, unauthenticated server), never
+  // that the server is actually usable. Read from auth_config directly
+  // (not the top-level auth_type) so this can't silently go stale again
+  // the way it did before (see the c8e2a6f13d90 backfill migration).
+  const isDevicePairing = (server.auth_config as any)?.auth_type === "device_pairing";
 
   // ── OAuth "Connect via provider" bootstrap (see oauth_flow.py backend) ──
   const isOAuth = server.auth_type === "oauth2";
@@ -804,7 +814,20 @@ function ConnectCredentialModal({
         </div>
 
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
-          {needsNoCreds ? (
+          {isDevicePairing ? (
+            <div className="rounded-lg bg-amber-50 border border-amber-200 p-3">
+              <p className="text-xs font-medium text-amber-900">
+                Nothing to verify centrally for this server.
+              </p>
+              <p className="mt-1 text-xs text-amber-700">
+                This server authenticates per end-user via device pairing (e.g. scanning a
+                QR code) — there is no single vendor-wide account to connect. Running the
+                check below only confirms the server process starts and speaks MCP; it does
+                not mean any user is actually paired yet. Each user connects independently
+                from their own dashboard.
+              </p>
+            </div>
+          ) : needsNoCreds ? (
             <div className="rounded-lg bg-emerald-50 border border-emerald-100 p-3">
               <p className="text-xs font-medium text-emerald-800">
                 No credentials required.
@@ -966,11 +989,13 @@ function ConnectCredentialModal({
             <Button type="submit" disabled={isPending}>
               {isPending ? (
                 <>
-                  <Spinner className="mr-1" /> Connecting...
+                  <Spinner className="mr-1" />
+                  {isDevicePairing ? "Checking..." : "Connecting..."}
                 </>
               ) : (
                 <>
-                  <Link className="h-4 w-4 mr-1" /> Test Connection & Discover Tools
+                  <Link className="h-4 w-4 mr-1" />
+                  {isDevicePairing ? "Check Server Reachability" : "Test Connection & Discover Tools"}
                 </>
               )}
             </Button>

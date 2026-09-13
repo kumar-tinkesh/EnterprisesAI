@@ -1,6 +1,7 @@
 """Network transports (streamable_http, sse), auth headers mapping, and MCP handshakes for mcp_client."""
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 from typing import Any
@@ -121,23 +122,41 @@ async def _handshake(
     headers: dict[str, str] | None,
     timeout: float,
 ) -> dict:
-    """Perform the MCP handshake over an http(s) transport."""
+    """Perform the MCP handshake over an http(s) transport.
+
+    The whole handshake (connect + initialize + list_tools) is bounded by
+    ``timeout`` via ``asyncio.wait_for`` — some underlying transports (e.g.
+    a GET-based SSE stream against a server that never sends the expected
+    ``endpoint`` event) can otherwise keep the connection open and hang
+    indefinitely even though bytes/keep-alives keep arriving, which bypasses
+    a plain httpx read-timeout.
+    """
     from vendor.services import mcp_client
 
     session_details_fn = getattr(mcp_client, "_session_details", _session_details)
-    if transport == "streamable_http":
-        streamable_fn = getattr(mcp_client, "streamable_http_client", streamable_http_client)
-        async with httpx.AsyncClient(timeout=timeout, headers=headers or None) as http:
-            async with streamable_fn(server_url, http_client=http) as (
+
+    async def _run() -> dict:
+        if transport == "streamable_http":
+            streamable_fn = getattr(mcp_client, "streamable_http_client", streamable_http_client)
+            async with httpx.AsyncClient(timeout=timeout, headers=headers or None) as http:
+                async with streamable_fn(server_url, http_client=http) as (
+                    read_stream,
+                    write_stream,
+                ):
+                    return await session_details_fn(read_stream, write_stream)
+        if transport == "sse":
+            sse_fn = getattr(mcp_client, "sse_client", sse_client)
+            async with sse_fn(server_url, headers=headers or None, timeout=timeout) as (
                 read_stream,
                 write_stream,
             ):
                 return await session_details_fn(read_stream, write_stream)
-    if transport == "sse":
-        sse_fn = getattr(mcp_client, "sse_client", sse_client)
-        async with sse_fn(server_url, headers=headers or None, timeout=timeout) as (
-            read_stream,
-            write_stream,
-        ):
-            return await session_details_fn(read_stream, write_stream)
-    raise ValueError(f"Unsupported transport: {transport}")
+        raise ValueError(f"Unsupported transport: {transport}")
+
+    try:
+        return await asyncio.wait_for(_run(), timeout=timeout)
+    except asyncio.TimeoutError as exc:
+        raise TimeoutError(
+            f"MCP handshake over {transport} timed out after {timeout}s "
+            f"connecting to {server_url}"
+        ) from exc

@@ -2,6 +2,19 @@
 # Backend Service Dockerfile
 # Builds the EnterpriseAI backend service for MCP server management
 # ---------------------------------------------------------------------------
+
+# --- WhatsApp bridge builder ------------------------------------------------
+# Vendored + patched fork of github.com/lharries/whatsapp-mcp's Go bridge —
+# see apps/backend/vendor/services/whatsapp_bridge/vendor_src/README.md for
+# why it's vendored (per-user port isolation) and patched (whatsmeow version
+# bump — WhatsApp raises its minimum client version over time, so this stage
+# may need bumping `go.mod`'s whatsmeow pin again in the future; the debian
+# apt `golang-go` package is far too old for whatsmeow's requirement).
+FROM golang:1.26-bookworm AS whatsapp_bridge_builder
+WORKDIR /src
+COPY apps/backend/vendor/services/whatsapp_bridge/vendor_src/bridge/ ./
+RUN go build -o /out/whatsapp-bridge .
+
 FROM python:3.12-slim
 
 WORKDIR /app
@@ -13,9 +26,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     nodejs \
     npm \
-    golang-go \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+COPY --from=whatsapp_bridge_builder /out/whatsapp-bridge /app/bin/whatsapp-bridge
 
 # Copy uv configuration and install dependencies
 COPY pyproject.toml uv.lock ./

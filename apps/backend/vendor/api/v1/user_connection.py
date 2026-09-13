@@ -6,13 +6,18 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apps.backend.config import get_backend_settings
+
 from src.api.deps import CurrentUser, get_current_user
 from src.db.session import get_db
 
 from vendor.api.v1.schemas import (
     ConnectCredentialsRequest,
     ConnectMCPServerResponse,
+    OAuthAuthorizeAsUserRequest,
+    OAuthAuthorizeResponse,
 )
+from vendor.services import oauth_flow
 from vendor.services.mcp_auth import McpAuthError
 from vendor.services.mcp_service import (
     disconnect_user_credential,
@@ -89,6 +94,59 @@ async def connect_mcp_server_as_user_endpoint(
         auth_type=result.get("auth_type", "none"),
         status="CONNECTED",
     )
+
+
+@router.post(
+    "/mcp/{server_id}/oauth/authorize-as-user", response_model=OAuthAuthorizeResponse
+)
+async def start_mcp_oauth_authorize_as_user(
+    server_id: str,
+    payload: OAuthAuthorizeAsUserRequest,
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """End-user self-service 'Connect via OAuth': build *this user's own*
+    consent URL for an already vendor-verified oauth2 server.
+
+    Mirrors the vendor admin's ``POST /mcp/{id}/oauth/authorize`` (see
+    ``oauth.py``) but never accepts a client_id/client_secret — those are
+    the vendor's shared OAuth app credentials, configured once by an admin
+    via ``PATCH /mcp/{id}/oauth-config`` and resolved here from storage.
+    The resulting tokens are persisted as this user's own isolated
+    credential row (same isolation guarantee as ``connect-as-user``), not
+    the vendor's shared one.
+    """
+    server = await get_mcp_server(db, server_id=server_id)
+    if server is None or not await is_server_visible_to_user(db, user=user, server=server):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found"
+        )
+    if (server.auth_type or "").lower() != "oauth2":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This server doesn't use OAuth — connect with connect-as-user instead",
+        )
+    if server.status != "VERIFIED":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This server hasn't been verified by the vendor yet",
+        )
+    try:
+        client_id, client_secret = await oauth_flow.resolve_app_credentials(
+            db, server_id=server.id
+        )
+        url, state = oauth_flow.build_authorize_url(
+            server,
+            client_id=client_id,
+            client_secret=client_secret,
+            backend_public_url=get_backend_settings().BACKEND_PUBLIC_URL,
+            tenant_id=user.tenant_id,
+            user_id=user.id,
+            scope_override=payload.scope,
+        )
+    except oauth_flow.OAuthFlowError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return OAuthAuthorizeResponse(authorization_url=url, state=state)
 
 
 @router.post("/mcp/{server_id}/disconnect-as-user", status_code=status.HTTP_204_NO_CONTENT)

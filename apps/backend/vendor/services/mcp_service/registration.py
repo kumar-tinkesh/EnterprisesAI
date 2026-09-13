@@ -179,6 +179,7 @@ async def create_mcp_server(
         source_repo_url=data.source_repo_url,
         env_vars=data.env_vars,
         bound_tools=result["bound_tools"],
+        auth_type=auth_config["auth_type"],
         auth_config=auth_config,
         is_global=data.is_global,
         status="VERIFIED" if result["bound_tools"] else "UNCONNECTED",

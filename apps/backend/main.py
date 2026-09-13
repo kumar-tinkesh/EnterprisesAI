@@ -16,6 +16,7 @@ JWT guards (``src.api.deps``) — there is no second engine and no duplicate aut
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import sys
 from contextlib import asynccontextmanager
@@ -59,7 +60,16 @@ async def lifespan(app: FastAPI):
         except Exception as exc2:  # pragma: no cover
             logger.error("DB init skipped: %s", exc2)
 
-    yield
+    from vendor.services.whatsapp_bridge import manager as bridge_manager
+
+    reaper_task = asyncio.create_task(bridge_manager.reaper_loop())
+    try:
+        yield
+    finally:
+        reaper_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await reaper_task
+        await bridge_manager.shutdown_all()
 
 
 def create_app() -> FastAPI:

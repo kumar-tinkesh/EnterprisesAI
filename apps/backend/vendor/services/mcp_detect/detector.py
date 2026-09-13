@@ -211,8 +211,12 @@ async def detect_mcp_server(
                         }
                     ]
                 elif probe_method == "POST" and is_sse:
-                    # POST returned SSE stream — unusual but valid; treat as SSE.
-                    transport = "sse"
+                    # POST returned an SSE-framed response body — this is the
+                    # normal shape of the modern streamable_http transport
+                    # (the server may stream the JSON-RPC response as SSE
+                    # events on the same POST). Legacy "sse" transport is
+                    # GET-based on a separate endpoint, not POST-based.
+                    transport = "streamable_http"
                     t_confidence = 0.90
                     evidence = [
                         {
@@ -220,7 +224,8 @@ async def detect_mcp_server(
                             "reason": (
                                 f"POST {candidate} returned HTTP 200 with "
                                 f"Content-Type: {content_type} (event-stream) — "
-                                "classified as SSE transport (POST+SSE response)."
+                                "classified as streamable_http transport "
+                                "(POST+SSE-framed response is normal for streamable_http)."
                             ),
                         }
                     ]
