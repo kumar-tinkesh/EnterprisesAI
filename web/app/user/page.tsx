@@ -17,7 +17,7 @@ const QUICK_ACTIONS = [
   {
     icon: Bot,
     title: "Agent Builder",
-    desc: "Describe an agent in natural language — the AI Compiler picks your authorized MCP servers and LangGraph runs it.",
+    desc: "Describe an agent in natural language — the AI Compiler semantically matches it to tools from your authorized MCP servers.",
     color: "#6366f1",
     bg: "#eef2ff",
     href: "/user/agents",
