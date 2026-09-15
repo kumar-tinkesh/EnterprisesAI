@@ -169,6 +169,33 @@ async def get_relevant_tools_semantic(
     if not ranked_tools:
         ranked_tools = list(tools)[:top_k_tools]
 
+    # Diversity floor: ranking every selected server's tools together in one
+    # pool lets a server with many tools (e.g. 20+) statistically crowd out
+    # a server with only a couple, especially for a multi-intent query whose
+    # single combined embedding is blurry (verified live: a 5-server pool
+    # for a 4-intent query returned zero tools from two of the servers
+    # Stage 1 itself had just ranked as relevant). Guarantee each Stage-1
+    # server its own best-matching tool a slot, so a server Stage 1 already
+    # judged relevant can't be silently dropped here purely because a
+    # bigger sibling server crowded the pool.
+    seen_servers = {t.mcp_server_id for t in ranked_tools}
+    missing_servers = [s for s in servers if s.id not in seen_servers]
+    if missing_servers:
+        tools_by_server: dict[str, list[MCPTool]] = {}
+        for t in tools:
+            tools_by_server.setdefault(t.mcp_server_id, []).append(t)
+        floor_tools: list[MCPTool] = []
+        for s in missing_servers:
+            server_tools = tools_by_server.get(s.id) or []
+            if not server_tools:
+                continue
+            top1 = _rank_tools(server_tools, query=query, q_vec=q_vec, top_k=1)
+            floor_tools.extend(top1 or server_tools[:1])
+        floor_tools = floor_tools[:top_k_tools]
+        if floor_tools:
+            keep = max(0, top_k_tools - len(floor_tools))
+            ranked_tools = ranked_tools[:keep] + floor_tools
+
     return [
         (
             server_map[t.mcp_server_id],

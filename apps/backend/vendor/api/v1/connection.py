@@ -72,14 +72,6 @@ async def test_mcp_connection_endpoint(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found"
         )
-    if server.status == "VERIFIED":
-        return ConnectMCPServerResponse(
-            transport=getattr(server, "transport", "stdio"),
-            bound_tools=server.bound_tools,
-            tools=[],
-            auth_type=server.auth_type or "none",
-            status="VERIFIED",
-        )
     try:
         creds = payload.credentials if payload is not None else None
         # Vendor admins verify with the server's single shared "primary"

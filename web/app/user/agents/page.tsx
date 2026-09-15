@@ -19,6 +19,7 @@ import {
   Globe,
   Trash2,
   QrCode,
+  LayoutGrid,
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -35,10 +36,12 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import AgentCanvasBuilder from "./agent-canvas";
 
 export default function UserAgentsPage() {
   const accessToken = useAuthStore((s) => s.accessToken) || "";
   const queryClient = useQueryClient();
+  const [view, setView] = useState<"canvas" | "list">("canvas");
   const [query, setQuery] = useState("");
   const [catalogQuery, setCatalogQuery] = useState("");
   const [searchResult, setSearchResult] = useState<ToolSearchResponse | null>(null);
@@ -157,77 +160,116 @@ export default function UserAgentsPage() {
       path="/user"
       title="AI Compiler"
       description="Describe what you need in natural language — semantic search picks the matching MCP server and tool from your authorized catalog."
+      fullBleed={view === "canvas"}
     >
-      <div className="mt-6 flex items-center justify-between">
-        <a href="/user" className="text-sm text-zinc-500 hover:text-zinc-800 cursor-pointer">
-          ← Back to workspace
-        </a>
-      </div>
-
-      {/* NL prompt */}
-      <div className="mt-4 rounded-xl border border-zinc-200 bg-white p-6 shadow-xs">
-        <div className="flex items-center gap-2">
-          <Bot className="h-5 w-5 text-indigo-600" />
-          <h2 className="text-lg font-semibold text-zinc-900">Find a tool</h2>
-        </div>
-        <p className="mt-1 text-sm text-zinc-500">
-          Only servers you&apos;re authorized for (global servers, or servers
-          granted to your tenant) can be matched.
-        </p>
-        <form onSubmit={handleSearch} className="mt-4 flex gap-2">
-          <Input
-            placeholder="e.g. how do I get all pending invoices"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-          <Button type="submit" disabled={searchMutation.isPending || !query.trim()}>
-            {searchMutation.isPending ? <Spinner /> : <Sparkles className="h-4 w-4 mr-1" />}
-            Compile
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={handlePlan}
-            disabled={planMutation.isPending || !query.trim()}
-          >
-            {planMutation.isPending ? <Spinner /> : <Play className="h-4 w-4 mr-1" />} Run
-          </Button>
-        </form>
-        <p className="mt-2 text-xs text-zinc-400">
-          <span className="font-medium">Compile</span> lists matching tools + their parameters.{" "}
-          <span className="font-medium">Run</span> additionally asks an LLM to fill in those
-          parameters from your text — neither calls the tool.
-        </p>
-        {(searchError || planError) && (
-          <p className="mt-3 text-xs text-red-600">{searchError || planError}</p>
-        )}
-        {!catalogLoading && !hasAnyConnectedServer && (
-          <div className="mt-3 flex items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 p-3">
-            <p className="text-xs text-amber-800">
-              You haven&apos;t connected any MCP server yet. Connect one before you can compile
-              or run a tool.
-            </p>
+      {view === "canvas" && (
+        <div className="relative h-screen w-full overflow-hidden bg-zinc-950">
+          <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-between p-4">
+            <a
+              href="/user"
+              className="rounded-md bg-white/5 px-3 py-1.5 text-sm text-zinc-300 backdrop-blur-sm hover:bg-white/10 hover:text-white cursor-pointer"
+            >
+              ← Back to workspace
+            </a>
             <button
               type="button"
-              onClick={scrollToCatalog}
-              className="inline-flex shrink-0 items-center gap-1 rounded-md border border-amber-300 bg-white px-2 py-1 text-xs font-medium text-amber-800 hover:bg-amber-100 cursor-pointer"
+              onClick={() => setView("list")}
+              className="inline-flex items-center gap-1.5 rounded-md border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-zinc-300 backdrop-blur-sm hover:bg-white/10 hover:text-white cursor-pointer"
             >
-              <Link2 className="h-3 w-3" /> Connect a server
+              <Sparkles className="h-3.5 w-3.5" /> AI Compiler
             </button>
           </div>
-        )}
-      </div>
-
-      {/* Search / plan results */}
-      {searchResult && (
-        <SearchResultsCard result={searchResult} serverById={serverById} onConnect={connectServerById} />
+          <AgentCanvasBuilder
+            serverById={serverById}
+            onConnect={connectServerById}
+            hasAnyConnectedServer={hasAnyConnectedServer}
+            onScrollToCatalog={() => {
+              setView("list");
+              setTimeout(scrollToCatalog, 50);
+            }}
+          />
+        </div>
       )}
-      {planResult && (
-        <PlanResultCard result={planResult} serverById={serverById} onConnect={connectServerById} />
-      )}
 
-      {/* Authorized catalog */}
-      <div ref={catalogSectionRef} className="mt-8 rounded-xl border border-zinc-200 bg-white p-6 shadow-xs">
+      {view === "list" && (
+        <>
+          <div className="mt-6 flex items-center justify-between">
+            <a href="/user" className="text-sm text-zinc-500 hover:text-zinc-800 cursor-pointer">
+              ← Back to workspace
+            </a>
+            <button
+              type="button"
+              onClick={() => setView("canvas")}
+              className="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-50 cursor-pointer"
+            >
+              <LayoutGrid className="h-3.5 w-3.5" /> Canvas
+            </button>
+          </div>
+
+          {/* NL prompt */}
+          <div className="mt-4 rounded-xl border border-zinc-200 bg-white p-6 shadow-xs">
+            <div className="flex items-center gap-2">
+              <Bot className="h-5 w-5 text-indigo-600" />
+              <h2 className="text-lg font-semibold text-zinc-900">Find a tool</h2>
+            </div>
+            <p className="mt-1 text-sm text-zinc-500">
+              Only servers you&apos;re authorized for (global servers, or servers
+              granted to your tenant) can be matched.
+            </p>
+            <form onSubmit={handleSearch} className="mt-4 flex gap-2">
+              <Input
+                placeholder="e.g. how do I get all pending invoices"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+              <Button type="submit" disabled={searchMutation.isPending || !query.trim()}>
+                {searchMutation.isPending ? <Spinner /> : <Sparkles className="h-4 w-4 mr-1" />}
+                Compile
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handlePlan}
+                disabled={planMutation.isPending || !query.trim()}
+              >
+                {planMutation.isPending ? <Spinner /> : <Play className="h-4 w-4 mr-1" />} Run
+              </Button>
+            </form>
+            <p className="mt-2 text-xs text-zinc-400">
+              <span className="font-medium">Compile</span> lists matching tools + their parameters.{" "}
+              <span className="font-medium">Run</span> additionally asks an LLM to fill in those
+              parameters from your text — neither calls the tool.
+            </p>
+            {(searchError || planError) && (
+              <p className="mt-3 text-xs text-red-600">{searchError || planError}</p>
+            )}
+            {!catalogLoading && !hasAnyConnectedServer && (
+              <div className="mt-3 flex items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 p-3">
+                <p className="text-xs text-amber-800">
+                  You haven&apos;t connected any MCP server yet. Connect one before you can compile
+                  or run a tool.
+                </p>
+                <button
+                  type="button"
+                  onClick={scrollToCatalog}
+                  className="inline-flex shrink-0 items-center gap-1 rounded-md border border-amber-300 bg-white px-2 py-1 text-xs font-medium text-amber-800 hover:bg-amber-100 cursor-pointer"
+                >
+                  <Link2 className="h-3 w-3" /> Connect a server
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Search / plan results */}
+          {searchResult && (
+            <SearchResultsCard result={searchResult} serverById={serverById} onConnect={connectServerById} />
+          )}
+          {planResult && (
+            <PlanResultCard result={planResult} serverById={serverById} onConnect={connectServerById} />
+          )}
+
+          {/* Authorized catalog */}
+          <div ref={catalogSectionRef} className="mt-8 rounded-xl border border-zinc-200 bg-white p-6 shadow-xs">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-zinc-100 pb-4">
           <div className="flex items-center gap-2">
             <Server className="h-5 w-5 text-sky-600" />
@@ -379,7 +421,9 @@ export default function UserAgentsPage() {
           </ul>
         )}
         <p className="mt-3 text-xs text-zinc-400">{catalog?.count ?? 0} servers</p>
-      </div>
+          </div>
+        </>
+      )}
 
       {connectServer && (
         <UserConnectModal

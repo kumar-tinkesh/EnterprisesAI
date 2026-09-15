@@ -24,11 +24,13 @@ export default function ProtectedDashboard({
   path,
   title,
   description,
+  fullBleed,
   children,
 }: {
   path: string;
   title: string;
   description: string;
+  fullBleed?: boolean;
   children: React.ReactNode;
 }) {
   const router = useRouter();
@@ -126,6 +128,10 @@ export default function ProtectedDashboard({
         </button>
       </Centered>
     );
+  }
+
+  if (fullBleed) {
+    return <>{children}</>;
   }
 
   return (
