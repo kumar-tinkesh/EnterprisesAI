@@ -47,4 +47,4 @@ USER nextjs
 
 EXPOSE 3000
 
-CMD ["node", "server.js"]
+CMD ["sh", "-c", "echo '==========================================================================' && echo '  🚀  EnterpriseAI Web:  http://localhost:'\"$PORT\" && echo '  🔐  Auth / Login UI:   http://localhost:'\"$PORT\"'/auth' && echo '==========================================================================' && exec node server.js"]

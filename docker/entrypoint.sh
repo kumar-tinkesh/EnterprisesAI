@@ -21,7 +21,10 @@ fi
 echo "[entrypoint] running alembic upgrade head..."
 alembic upgrade head
 
-echo "[entrypoint] starting uvicorn on port ${PORT:-8001}..."
+echo "=========================================================================="
+echo "  🛡️  Auth Service:     http://localhost:${PORT:-8001}"
+echo "  📚  Auth Docs:        http://localhost:${PORT:-8001}/docs"
+echo "=========================================================================="
 exec uvicorn src.main:app \
     --app-dir apps/auth \
     --host 0.0.0.0 \

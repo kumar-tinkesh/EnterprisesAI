@@ -204,6 +204,32 @@ services:
       timeout: 5s
       retries: 6
 
+  # --- Project URLs Display ------------------------------------------------
+  urls:
+    image: alpine:latest
+    container_name: enterpriseai-urls
+    restart: "no"
+    depends_on:
+      web:
+        condition: service_started
+      auth:
+        condition: service_started
+      backend:
+        condition: service_started
+    command:
+      - /bin/sh
+      - -c
+      - |
+        echo ""
+        echo "=========================================================================="
+        echo "  🚀  EnterpriseAI Web UI:     http://localhost:${WEB_PORT:-3001}"
+        echo "  🔐  Auth / Login UI:         http://localhost:${WEB_PORT:-3001}/auth"
+        echo "  🛡️  Auth API Docs:           http://localhost:${AUTH_PORT:-8001}/docs"
+        echo "  ⚡  Backend API Docs:        http://localhost:${BACKEND_PORT:-8002}/docs"
+        echo "  🤖  LLM Gateway Docs:        http://localhost:${LLM_GATEWAY_PORT:-4000}/docs"
+        echo "=========================================================================="
+        echo ""
+
 volumes:
   pgdata:
   redisdata:

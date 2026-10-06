@@ -54,8 +54,24 @@ test-api: ## Backend pytest suite
 test-web: ## Frontend vitest suite
 	pnpm --dir web test
 
-docker-up: ## Full stack in Docker (web :3000, auth :8001)
+docker-up: ## Full stack in Docker (web :3001, auth :8001, backend :8002)
 	docker compose up --build -d
+	@echo ""
+	@echo "=========================================================================="
+	@echo "  🚀  EnterpriseAI Web UI:  http://localhost:3001"
+	@echo "  🔐  Auth Service Docs:    http://localhost:8001/docs"
+	@echo "  ⚡  Backend API Docs:     http://localhost:8002/docs"
+	@echo "  🤖  LLM Gateway Docs:     http://localhost:4000/docs"
+	@echo "=========================================================================="
+
+urls: ## Show all active service URLs
+	@echo ""
+	@echo "=========================================================================="
+	@echo "  🚀  EnterpriseAI Web UI:  http://localhost:3001"
+	@echo "  🔐  Auth Service Docs:    http://localhost:8001/docs"
+	@echo "  ⚡  Backend API Docs:     http://localhost:8002/docs"
+	@echo "  🤖  LLM Gateway Docs:     http://localhost:4000/docs"
+	@echo "=========================================================================="
 
 docker-down: ## Stop containers (data volumes are kept)
 	docker compose down
