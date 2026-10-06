@@ -3,56 +3,74 @@
 # Builds the EnterpriseAI backend service for MCP server management
 # ---------------------------------------------------------------------------
 
-# --- WhatsApp bridge builder ------------------------------------------------
-# Vendored + patched fork of github.com/lharries/whatsapp-mcp's Go bridge —
-# see apps/backend/vendor/services/whatsapp_bridge/vendor_src/README.md for
-# why it's vendored (per-user port isolation) and patched (whatsmeow version
-# bump — WhatsApp raises its minimum client version over time, so this stage
-# may need bumping `go.mod`'s whatsmeow pin again in the future; the debian
-# apt `golang-go` package is far too old for whatsmeow's requirement).
+# --- Stage 1 (Parallel): WhatsApp bridge builder (Go) -----------------------
+# Vendored + patched fork of github.com/lharries/whatsapp-mcp's Go bridge.
 FROM golang:1.26-bookworm AS whatsapp_bridge_builder
 WORKDIR /src
+COPY apps/backend/vendor/services/whatsapp_bridge/vendor_src/bridge/go.mod \
+     apps/backend/vendor/services/whatsapp_bridge/vendor_src/bridge/go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY apps/backend/vendor/services/whatsapp_bridge/vendor_src/bridge/ ./
-RUN go build -o /out/whatsapp-bridge .
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go build -o /out/whatsapp-bridge .
 
-FROM python:3.12-slim
+# --- Stage 2 (Parallel): Python dependencies builder ------------------------
+FROM python:3.12-slim AS python_builder
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    FASTEMBED_CACHE_PATH=/app/.cache/fastembed
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+WORKDIR /app
+COPY pyproject.toml uv.lock .python-version ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --no-install-project
+
+# Pre-download the hybrid-search reranker's ONNX model (~80MB) in this stage
+# so it is CACHED once and never re-downloaded when application source code changes.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv run python -c "from fastembed.rerank.cross_encoder import TextCrossEncoder; TextCrossEncoder(model_name='Xenova/ms-marco-MiniLM-L-6-v2')"
+
+# --- Stage 3: Runtime --------------------------------------------------------
+FROM python:3.12-slim AS runtime
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PATH="/app/.venv/bin:$PATH" \
+    PYTHONPATH=/app \
+    FASTEMBED_CACHE_PATH=/app/.cache/fastembed
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+# Install runtime system tools using BuildKit APT cache (without slow build-essential)
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
     nodejs \
     npm \
-    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
+# Copy WhatsApp bridge from Go builder
 COPY --from=whatsapp_bridge_builder /out/whatsapp-bridge /app/bin/whatsapp-bridge
 
-# Copy uv configuration and install dependencies
-COPY pyproject.toml uv.lock ./
-RUN pip install uv
-RUN uv sync --frozen
+# Copy Python venv and cached FastEmbed model from Python builder
+COPY --from=python_builder /app/.venv /app/.venv
+COPY --from=python_builder /app/.cache /app/.cache
 
-# Copy source code
-# CACHEBUST: pass --build-arg CACHEBUST=<anything-new> to force this layer
-# (and everything after it) to redo when the build cache goes stale, without
-# needing a full --no-cache rebuild (which reinstalls apt/uv from scratch).
-# The RUN below must actually consume the arg, or it has no effect on the
-# cache key and the stale COPY layer gets reused as-is.
-ARG CACHEBUST=1
-RUN echo "cachebust=$CACHEBUST"
+# Copy project files needed for uv and execution
+COPY pyproject.toml uv.lock .python-version alembic.ini ./
 COPY apps/ apps/
-COPY alembic.ini ./
 
-# Pre-download the hybrid-search reranker's ONNX model at build time (~80MB)
-# so the first real query doesn't pay for a HuggingFace Hub download, and
-# the container works without internet egress at runtime.
-RUN uv run python -c "from fastembed.rerank.cross_encoder import TextCrossEncoder; TextCrossEncoder(model_name='Xenova/ms-marco-MiniLM-L-6-v2')"
-
-# Entrypoint script (tracked in git; avoids relying on BuildKit heredoc parsing)
+# Entrypoint script
 COPY docker/entrypoint.backend.sh entrypoint.sh
 RUN sed -i 's/\r$//' entrypoint.sh && chmod +x entrypoint.sh
 

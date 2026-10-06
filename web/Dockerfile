@@ -12,7 +12,8 @@ WORKDIR /app
 FROM base AS deps
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 # Approve esbuild/sharp postinstall scripts explicitly (pnpm 11 requires it).
-RUN pnpm install --frozen-lockfile --dangerously-allow-all-builds
+RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile --dangerously-allow-all-builds
 
 # --- Build -------------------------------------------------------------------
 FROM base AS builder
@@ -23,7 +24,9 @@ ARG NEXT_PUBLIC_API_URL=http://localhost:8001/api/v1
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL \
     NEXT_TELEMETRY_DISABLED=1
 
-RUN pnpm build
+# Use BuildKit cache mount for Next.js build cache to speed up recompilation
+RUN --mount=type=cache,target=/app/.next/cache \
+    pnpm build
 
 # --- Runtime (slim, standalone server) ---------------------------------------
 FROM node:22-alpine AS runner

@@ -16,7 +16,8 @@ WORKDIR /app
 # --- Dependencies (cached layer) -------------------------------------------
 FROM base AS deps
 COPY pyproject.toml uv.lock .python-version ./
-RUN uv sync --frozen --no-dev --no-install-project
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --no-install-project
 
 # --- Runtime -----------------------------------------------------------------
 FROM base AS runtime

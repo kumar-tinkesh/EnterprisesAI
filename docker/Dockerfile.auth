@@ -17,7 +17,8 @@ WORKDIR /app
 FROM base AS deps
 COPY pyproject.toml uv.lock .python-version ./
 # Install only runtime deps; the app itself is imported via --app-dir.
-RUN uv sync --frozen --no-dev --no-install-project
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --no-install-project
 
 # --- Runtime -----------------------------------------------------------------
 FROM base AS runtime
