@@ -58,8 +58,10 @@ async function request<T>(
   token?: string,
   base: string = API_URL,
 ): Promise<T> {
+  // A FormData body (file upload) must let the browser set its own
+  // multipart Content-Type, boundary included.
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
+    ...(init.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
     ...(init.headers as Record<string, string> | undefined),
   };
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -559,4 +561,91 @@ export const vendorApi = {
       method: "GET",
     }, token, BACKEND_API_URL);
   },
+};
+
+// ─── Knowledge bases (backend /api/v1/knowledge-bases) ──────────────────────
+
+export interface KnowledgeBase {
+  id: string;
+  name: string;
+  description: string;
+  owner_id: string;
+  document_count: number;
+  // True for the knowledge base's creator and tenant admins (rename / delete).
+  can_manage: boolean;
+  created_at: string;
+}
+
+export type KnowledgeDocumentStatus = "processing" | "ready" | "error";
+
+export interface KnowledgeDocument {
+  id: string;
+  filename: string;
+  status: KnowledgeDocumentStatus;
+  error_message: string | null;
+  chunk_count: number;
+  // Typed text or an uploaded .md/.txt file: can be opened and edited.
+  editable: boolean;
+  created_at: string;
+}
+
+export interface KnowledgeDocumentText {
+  id: string;
+  filename: string;
+  title: string;
+  content: string;
+}
+
+export interface KnowledgeSearchHit {
+  id: string;
+  content: string;
+  filename: string;
+  document_id: string;
+  chunk_index: number;
+  score: number;
+  retrieval_method: "hybrid" | "semantic" | "keyword";
+  metadata: Record<string, string | number>;
+}
+
+export interface KnowledgeSearchResponse {
+  query: string;
+  results: KnowledgeSearchHit[];
+}
+
+const KB = "/knowledge-bases";
+
+export const knowledgeApi = {
+  list: (token: string) =>
+    request<KnowledgeBase[]>(KB, { method: "GET" }, token, BACKEND_API_URL),
+  create: (token: string, body: { name: string; description?: string }) =>
+    request<KnowledgeBase>(KB, { method: "POST", body: JSON.stringify(body) }, token, BACKEND_API_URL),
+  update: (token: string, kbId: string, body: { name?: string; description?: string }) =>
+    request<KnowledgeBase>(`${KB}/${kbId}`, { method: "PATCH", body: JSON.stringify(body) }, token, BACKEND_API_URL),
+  remove: (token: string, kbId: string) =>
+    request<void>(`${KB}/${kbId}`, { method: "DELETE" }, token, BACKEND_API_URL),
+
+  listDocuments: (token: string, kbId: string) =>
+    request<KnowledgeDocument[]>(`${KB}/${kbId}/documents`, { method: "GET" }, token, BACKEND_API_URL),
+  uploadDocument: (token: string, kbId: string, file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    return request<KnowledgeDocument>(`${KB}/${kbId}/documents`, { method: "POST", body }, token, BACKEND_API_URL);
+  },
+  addText: (token: string, kbId: string, body: { title: string; content: string }) =>
+    request<KnowledgeDocument>(`${KB}/${kbId}/text`, { method: "POST", body: JSON.stringify(body) }, token, BACKEND_API_URL),
+  getText: (token: string, kbId: string, docId: string) =>
+    request<KnowledgeDocumentText>(`${KB}/${kbId}/documents/${docId}/text`, { method: "GET" }, token, BACKEND_API_URL),
+  updateText: (token: string, kbId: string, docId: string, body: { title: string; content: string }) =>
+    request<KnowledgeDocument>(`${KB}/${kbId}/documents/${docId}/text`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }, token, BACKEND_API_URL),
+  removeDocument: (token: string, kbId: string, docId: string) =>
+    request<void>(`${KB}/${kbId}/documents/${docId}`, { method: "DELETE" }, token, BACKEND_API_URL),
+
+  search: (token: string, kbId: string, body: { query: string; top_k?: number }) =>
+    request<KnowledgeSearchResponse>(`${KB}/${kbId}/search`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }, token, BACKEND_API_URL),
 };

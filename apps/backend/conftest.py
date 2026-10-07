@@ -83,6 +83,7 @@ from src.db.session import get_db  # noqa: E402
 from src.models import *  # noqa: E402,F403
 
 __import__("vendor.models")
+__import__("knowledge.models")
 
 _test_engine = create_async_engine(_TEST_URL, echo=False)
 _TestSessionLocal = async_sessionmaker(

@@ -25,9 +25,10 @@ const QUICK_ACTIONS = [
   {
     icon: Brain,
     title: "Knowledge Base",
-    desc: "Upload documents, connect data sources, and build RAG pipelines. (coming soon)",
+    desc: "Upload documents or paste text your agents can retrieve from, and test what a search returns.",
     color: "#8b5cf6",
     bg: "#f5f3ff",
+    href: "/user/knowledge",
   },
   {
     icon: FolderKanban,

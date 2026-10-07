@@ -31,6 +31,10 @@ try:  # pragma: no cover - import-time registration
     import vendor.models  # noqa: F401
 except ImportError:
     pass
+try:  # pragma: no cover - import-time registration
+    import knowledge.models  # noqa: F401
+except ImportError:
+    pass
 
 config = context.config
 

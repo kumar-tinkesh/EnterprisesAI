@@ -8,7 +8,8 @@ Responsibilities:
     back to ``create_db_tables()`` if Alembic is unavailable.
   * Mount the vendor and user routers, both under ``/api/v1/vendor/resources``
     (unchanged from before the vendor/user package split — see those routers'
-    docstrings for why the prefix stays shared).
+    docstrings for why the prefix stays shared), and the knowledge router
+    under ``/api/v1/knowledge-bases``.
 
 The backend reuses the Auth service's engine/session (``src.db.session``) and
 JWT guards (``src.api.deps``) — there is no second engine and no duplicate auth.
@@ -36,6 +37,7 @@ from src.db.session import create_db_tables  # noqa: E402
 
 from vendor.api.v1.router import router as vendor_router  # noqa: E402
 from user.api.v1.router import router as user_router  # noqa: E402
+from knowledge.api.v1.router import router as knowledge_router  # noqa: E402
 
 from apps.backend.config import get_backend_settings  # noqa: E402
 
@@ -59,6 +61,15 @@ async def lifespan(app: FastAPI):
             await create_db_tables()
         except Exception as exc2:  # pragma: no cover
             logger.error("DB init skipped: %s", exc2)
+
+    from knowledge.services.ingest import fail_interrupted_documents
+
+    try:
+        interrupted = await fail_interrupted_documents()
+        if interrupted:
+            logger.info("marked %d interrupted knowledge document(s) as failed", interrupted)
+    except Exception as exc:  # pragma: no cover - best-effort startup path
+        logger.warning("knowledge startup cleanup skipped: %s", exc)
 
     from vendor.services.whatsapp_bridge import manager as bridge_manager
 
@@ -102,6 +113,11 @@ def create_app() -> FastAPI:
         user_router,
         prefix=f"{_backend_settings.BACKEND_API_V1_PREFIX}/vendor/resources",
         tags=["vendor-resources"],
+    )
+    app.include_router(
+        knowledge_router,
+        prefix=f"{_backend_settings.BACKEND_API_V1_PREFIX}/knowledge-bases",
+        tags=["knowledge-bases"],
     )
     return app
 
