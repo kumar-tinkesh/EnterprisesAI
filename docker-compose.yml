@@ -114,9 +114,14 @@ services:
       OPENAI_API_VERSION: ${OPENAI_API_VERSION:-}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      # Defaults
-      LLM_GATEWAY_DEFAULT_PROVIDER: ${LLM_GATEWAY_DEFAULT_PROVIDER:-openai}
-      LLM_GATEWAY_EMBEDDING_PROVIDER: ${LLM_GATEWAY_EMBEDDING_PROVIDER:-gemini}
+      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY:-}
+      AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT:-}
+      AZURE_OPENAI_API_VERSION: ${AZURE_OPENAI_API_VERSION:-}
+      AZURE_OPENAI_DEPLOYMENT: ${AZURE_OPENAI_DEPLOYMENT:-}
+      AZURE_OPENAI_EMBEDDING_DEPLOYMENT: ${AZURE_OPENAI_EMBEDDING_DEPLOYMENT:-}
+      # Defaults — empty lets the gateway pick (azure when it's configured)
+      LLM_GATEWAY_DEFAULT_PROVIDER: ${LLM_GATEWAY_DEFAULT_PROVIDER:-}
+      LLM_GATEWAY_EMBEDDING_PROVIDER: ${LLM_GATEWAY_EMBEDDING_PROVIDER:-}
       LLM_GATEWAY_TIMEOUT: ${LLM_GATEWAY_TIMEOUT:-60}
       LLM_GATEWAY_MAX_RETRIES: ${LLM_GATEWAY_MAX_RETRIES:-3}
       OPENAI_DEFAULT_MODEL: ${OPENAI_DEFAULT_MODEL:-}
@@ -165,11 +170,17 @@ services:
       JWT_ISSUER: enterprise-ai-auth
       JWT_AUDIENCE: enterprise-ai
       SECRET_KEY: ${SECRET_KEY:-your-secret-key-here}
+      # Agent/workflow runs go to the `worker` service over Redis Streams;
+      # live run events come back over Redis pub/sub.
+      BUILDER_QUEUE_BACKEND: redis
+      REDIS_URL: redis://redis:6379/0
     volumes:
       - ./data:/data  # Shared database with auth service
       - ./data/.keys:/app/apps/auth/.keys  # Shared RSA keypair with auth service
     depends_on:
       auth:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test:
@@ -183,6 +194,32 @@ services:
       timeout: 5s
       retries: 6
       start_period: 15s
+
+  # --- Builder worker (executes agent/workflow runs) -----------------------
+  # Scale with `docker compose up --scale worker=3`. Several workers writing
+  # one SQLite file will contend for its lock — use the postgres profile then.
+  # A worker that dies mid-run leaves its run checkpointed; another worker
+  # resumes it once the lease lapses (RUN_LEASE_SECONDS).
+  worker:
+    image: enterpriseai-backend
+    restart: unless-stopped
+    entrypoint: ["sh", "-c", "cd apps/backend && exec python -m builder.worker"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      ENV: production
+      DATABASE_URL: ${AUTH_DATABASE_URL:-sqlite+aiosqlite:////data/auth.db}
+      BUILDER_QUEUE_BACKEND: redis
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./data:/data
+    stop_grace_period: 30s
+    depends_on:
+      backend:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   # --- Optional: PostgreSQL (profile "postgres") ---------------------------
   db:

@@ -21,7 +21,10 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 ARG NEXT_PUBLIC_API_URL=http://localhost:8001/api/v1
+# The backend (MCP catalog, knowledge bases, builder) — also browser-facing.
+ARG NEXT_PUBLIC_BACKEND_API_URL=http://localhost:8002/api/v1
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL \
+    NEXT_PUBLIC_BACKEND_API_URL=$NEXT_PUBLIC_BACKEND_API_URL \
     NEXT_TELEMETRY_DISABLED=1
 
 # Use BuildKit cache mount for Next.js build cache to speed up recompilation

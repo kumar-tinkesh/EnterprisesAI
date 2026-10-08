@@ -30,6 +30,7 @@ dependencies = [
     "openpyxl>=3.1.5",
     "pytesseract>=0.3.13",
     "pillow>=10.4.0",
+    "redis>=5.2",
 ]
 
 [dependency-groups]
@@ -44,14 +45,14 @@ package = false
 
 [tool.pytest.ini_options]
 minversion = "7.0"
-testpaths = ["apps/auth/tests", "apps/backend/vendor/tests", "apps/backend/user/tests", "apps/backend/knowledge/tests", "apps/llm_gateway/tests"]
+testpaths = ["apps/auth/tests", "apps/backend/vendor/tests", "apps/backend/user/tests", "apps/backend/knowledge/tests", "apps/backend/builder/tests", "apps/llm_gateway/tests"]
 python_files = ["test_*.py"]
 pythonpath = [".", "apps/auth", "apps/backend", "apps/llm_gateway"]
 asyncio_mode = "auto"
 filterwarnings = ["ignore::DeprecationWarning"]
 
 [tool.importlinter]
-root_packages = ["vendor", "user", "knowledge"]
+root_packages = ["vendor", "user", "knowledge", "builder"]
 
 [[tool.importlinter.contracts]]
 name = "user must not import vendor's mutating/admin services"
@@ -77,7 +78,7 @@ type = "forbidden"
 # user.services.catalog_engine to test access-filtering end to end, which
 # is not a production code dependency.
 source_modules = ["vendor.api", "vendor.services", "vendor.models"]
-forbidden_modules = ["user"]
+forbidden_modules = ["user", "builder", "knowledge"]
 
 [[tool.importlinter.contracts]]
 name = "knowledge must not import vendor's mutating/admin services or user"
@@ -87,6 +88,7 @@ type = "forbidden"
 source_modules = ["knowledge.api", "knowledge.services", "knowledge.models"]
 forbidden_modules = [
     "user",
+    "builder",
     "vendor.api",
     "vendor.models",
     "vendor.services.mcp_service",
@@ -95,4 +97,25 @@ forbidden_modules = [
     "vendor.services.mcp_auth",
     "vendor.services.repo_analyzer",
     "vendor.services.oauth_flow",
+]
+
+[[tool.importlinter.contracts]]
+name = "builder may run tools but must not import vendor's admin API, detection or registration code"
+type = "forbidden"
+# builder needs vendor's connection services to *run* tools as a user:
+# mcp_service.connection (build_runtime_config), mcp_service.crud (access
+# check), mcp_client (sessions) and mcp_auth (credential presence). Import
+# those submodules directly — the mcp_service package itself pulls in
+# detection/registration code. Indirect imports are allowed only because
+# vendor's own modules lazily re-import their package (for test
+# monkeypatching), which links every mcp_service submodule to the rest;
+# builder's own direct imports are what this contract polices.
+allow_indirect_imports = true
+source_modules = ["builder.api", "builder.services"]
+forbidden_modules = [
+    "vendor.api",
+    "vendor.services.mcp_detect",
+    "vendor.services.repo_analyzer",
+    "vendor.services.oauth_flow",
+    "vendor.services.mcp_service.registration",
 ]

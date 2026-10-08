@@ -13,7 +13,8 @@ Introduces the Vendor Resources subsystem tables (Phase 1):
     a further schema change.
 
 SQLite-safe: ``parameters_schema`` uses portable ``sa.JSON()`` (SQLite has no
-``JSONB``) and booleans use ``server_default=sa.text('0')``.
+``JSONB``) and booleans use ``server_default=sa.false()`` (``0`` on SQLite,
+``false`` on PostgreSQL — a bare ``sa.text("0")`` is rejected by PostgreSQL).
 """
 from __future__ import annotations
 
@@ -38,7 +39,7 @@ def upgrade() -> None:
         sa.Column("method", sa.String(length=16), nullable=False, server_default="POST"),
         sa.Column("endpoint_url", sa.String(length=512), nullable=True),
         sa.Column("parameters_schema", sa.JSON(), nullable=False),
-        sa.Column("is_global", sa.Boolean(), nullable=False, server_default=sa.text("0")),
+        sa.Column("is_global", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("vault_secret_ref", sa.String(length=255), nullable=True),
         sa.Column(
             "created_at",

@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Network,
   Rocket,
   Bot,
   Brain,
@@ -15,9 +16,17 @@ import { useAuthStore } from "@/stores/auth-store";
 
 const QUICK_ACTIONS = [
   {
+    icon: Network,
+    title: "Builder Studio",
+    desc: "Build agents and multi-step workflows — describe them to the AI or draw them on a canvas, then test them live in the playground.",
+    color: "#0f766e",
+    bg: "#f0fdfa",
+    href: "/user/builder",
+  },
+  {
     icon: Bot,
-    title: "Agent Builder",
-    desc: "Describe an agent in natural language — the AI Compiler semantically matches it to tools from your authorized MCP servers.",
+    title: "AI Compiler",
+    desc: "Describe a task in natural language — the AI Compiler semantically matches it to tools from your authorized MCP servers.",
     color: "#6366f1",
     bg: "#eef2ff",
     href: "/user/agents",

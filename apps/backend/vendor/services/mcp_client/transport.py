@@ -88,12 +88,23 @@ def _build_auth_headers(
 
 
 def _normalize_tool(tool: Any) -> dict[str, Any]:
-    """Normalize an MCP tool model into a plain dict with full metadata."""
+    """Normalize an MCP tool model into a plain dict with full metadata.
+
+    ``annotations`` keeps the server's own behaviour hints (``read_only_hint``,
+    ``destructive_hint``, …) — the builder runtime uses them to decide which
+    tools are safe to run without asking.
+    """
+    annotations = getattr(tool, "annotations", None)
+    if annotations is not None and hasattr(annotations, "model_dump"):
+        annotations = annotations.model_dump(exclude_none=True) or None
+    elif not isinstance(annotations, dict):
+        annotations = None
     return {
         "name": tool.name,
         "description": getattr(tool, "description", "") or "",
         "input_schema": getattr(tool, "input_schema", None)
         or {"type": "object", "properties": {}},
+        "annotations": annotations,
     }
 
 

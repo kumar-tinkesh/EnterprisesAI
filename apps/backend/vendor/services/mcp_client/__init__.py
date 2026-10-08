@@ -13,6 +13,7 @@ from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 
 from vendor.services.mcp_client.client import MCPClient, connect_mcp_server
+from vendor.services.mcp_client.session import open_mcp_session, runtime_transport
 from vendor.services.mcp_client.stdio import (
     _PACKAGE_RUNNER_COMMANDS,
     _REPO_BUILD_TIMEOUT,
@@ -25,6 +26,7 @@ from vendor.services.mcp_client.stdio import (
     _python_console_entry_code,
     _python_module_base,
     _sanitize_stdio_env,
+    build_stdio_params,
 )
 from vendor.services.mcp_client.transport import (
     _DEFAULT_TIMEOUT,
@@ -39,6 +41,9 @@ from vendor.services.mcp_client.transport import (
 __all__ = [
     "MCPClient",
     "connect_mcp_server",
+    "open_mcp_session",
+    "runtime_transport",
+    "build_stdio_params",
     "stdio_client",
     "sse_client",
     "streamable_http_client",

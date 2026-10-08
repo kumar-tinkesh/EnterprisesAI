@@ -8,6 +8,7 @@ from vendor.services.mcp_detect import detect_mcp_server
 from vendor.services.mcp_service.connection import (
     _cleanup_server_local_repo_cache,
     _resolve_and_build_config,
+    build_runtime_config,
     connect_registered_server,
     disconnect_mcp_server,
     disconnect_user_credential,
@@ -38,6 +39,7 @@ __all__ = [
     "delete_mcp_server",
     "is_server_visible_to_user",
     "_resolve_and_build_config",
+    "build_runtime_config",
     "test_mcp_connection",
     "connect_registered_server",
     "verify_user_credentials",

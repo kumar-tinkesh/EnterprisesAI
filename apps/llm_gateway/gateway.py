@@ -36,6 +36,7 @@ from apps.llm_gateway.providers.base import BaseLLMClient
 from apps.llm_gateway.providers.openai_client import OpenAIClient
 from apps.llm_gateway.providers.groq_client import GroqClient
 from apps.llm_gateway.providers.gemini_client import GeminiClient
+from apps.llm_gateway.providers.azure_client import AzureOpenAIClient
 
 logger = logging.getLogger("llm_gateway.gateway")
 
@@ -43,9 +44,10 @@ logger = logging.getLogger("llm_gateway.gateway")
 # ── Fallback ordering ────────────────────────────────────────────────────────
 # When a provider fails with a retryable error, try the others in this order.
 _FALLBACK_ORDER: dict[str, list[str]] = {
-    "openai": ["gemini", "groq"],
-    "groq": ["openai", "gemini"],
-    "gemini": ["openai", "groq"],
+    "azure": ["openai", "gemini", "groq"],
+    "openai": ["azure", "gemini", "groq"],
+    "groq": ["azure", "openai", "gemini"],
+    "gemini": ["azure", "openai", "groq"],
 }
 
 
@@ -286,11 +288,13 @@ class LLMGateway:
             "openai": self._settings.openai,
             "groq": self._settings.groq,
             "gemini": self._settings.gemini,
+            "azure": self._settings.azure,
         }
         factories = {
             "openai": OpenAIClient,
             "groq": GroqClient,
             "gemini": GeminiClient,
+            "azure": AzureOpenAIClient,
         }
         for name, cfg in configs.items():
             if cfg.is_configured:
@@ -305,7 +309,8 @@ class LLMGateway:
         if not self._clients:
             logger.warning(
                 "⚠ No LLM providers configured. "
-                "Set at least one of OPENAI_API_KEY, GROQ_API_KEY, GEMINI_API_KEY."
+                "Set at least one of AZURE_OPENAI_API_KEY (+ AZURE_OPENAI_ENDPOINT), "
+                "OPENAI_API_KEY, GROQ_API_KEY, GEMINI_API_KEY."
             )
 
     def _build_try_order(self, primary: str, fallback: bool) -> list[str]:

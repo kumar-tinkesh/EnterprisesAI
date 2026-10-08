@@ -52,6 +52,64 @@ def test_gateway_settings_from_env(monkeypatch):
     assert settings.gemini.is_configured is False
 
 
+_LLM_ENV = (
+    "OPENAI_API_KEY", "GROQ_API_KEY", "GEMINI_API_KEY", "AZURE_OPENAI_API_KEY",
+    "AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_VERSION", "AZURE_OPENAI_DEPLOYMENT",
+    "AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "LLM_GATEWAY_DEFAULT_PROVIDER",
+    "LLM_GATEWAY_EMBEDDING_PROVIDER",
+)
+
+
+@pytest.fixture
+def clean_llm_env(monkeypatch):
+    """No .env and none of the provider variables — each test sets its own."""
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: False)
+    for name in _LLM_ENV:
+        monkeypatch.delenv(name, raising=False)
+    return monkeypatch
+
+
+def test_azure_from_marketplace_variables_becomes_default(clean_llm_env):
+    clean_llm_env.setenv("AZURE_OPENAI_API_KEY", "az-key")
+    clean_llm_env.setenv("AZURE_OPENAI_ENDPOINT", "https://dev.openai.azure.com/")
+    clean_llm_env.setenv("AZURE_OPENAI_API_VERSION", "2025-01-01-preview")
+    clean_llm_env.setenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4.1-mini")
+
+    settings = GatewaySettings.from_env()
+
+    assert settings.azure.is_configured and settings.azure.is_azure
+    assert settings.azure.api_version == "2025-01-01-preview"
+    assert settings.default_provider == "azure"
+    # no embedding deployment -> embeddings stay where they were
+    assert settings.embedding_provider == "gemini"
+
+
+def test_azure_defaults_and_explicit_provider_wins(clean_llm_env):
+    clean_llm_env.setenv("AZURE_OPENAI_API_KEY", "az-key")
+    clean_llm_env.setenv("AZURE_OPENAI_ENDPOINT", "https://my-proxy.example.com/")
+    clean_llm_env.setenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "embed-small")
+    clean_llm_env.setenv("LLM_GATEWAY_DEFAULT_PROVIDER", "openai")
+
+    settings = GatewaySettings.from_env()
+
+    assert settings.azure.is_azure  # custom domain still routes as Azure
+    assert settings.azure.api_version == "2024-06-01"
+    assert settings.azure.azure_chat_deployment == "gpt-4o-mini"
+    assert settings.default_provider == "openai"
+    assert settings.embedding_provider == "azure"
+
+
+def test_no_azure_keeps_old_defaults(clean_llm_env):
+    clean_llm_env.setenv("AZURE_OPENAI_API_KEY", "az-key")  # no endpoint -> not configured
+    clean_llm_env.setenv("LLM_GATEWAY_DEFAULT_PROVIDER", "")  # compose passes "" when unset
+
+    settings = GatewaySettings.from_env()
+
+    assert settings.azure.is_configured is False
+    assert settings.default_provider == "openai"
+    assert settings.embedding_provider == "gemini"
+
+
 # ── Gateway Routing & Fallback Tests ─────────────────────────────────────────
 
 @pytest.mark.asyncio

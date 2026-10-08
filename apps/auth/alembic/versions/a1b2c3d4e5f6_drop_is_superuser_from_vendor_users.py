@@ -29,10 +29,10 @@ def downgrade() -> None:
     if op.get_bind().dialect.name == 'sqlite':
         with op.batch_alter_table('vendor_users') as batch_op:
             batch_op.add_column(
-                sa.Column('is_superuser', sa.Boolean(), nullable=False, server_default=sa.text('0')),
+                sa.Column('is_superuser', sa.Boolean(), nullable=False, server_default=sa.false()),
             )
     else:
         op.add_column(
             'vendor_users',
-            sa.Column('is_superuser', sa.Boolean(), nullable=False, server_default=sa.text('0')),
+            sa.Column('is_superuser', sa.Boolean(), nullable=False, server_default=sa.false()),
         )

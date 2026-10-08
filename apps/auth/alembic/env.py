@@ -5,6 +5,7 @@ import asyncio
 from logging.config import fileConfig
 
 from alembic import context
+from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
@@ -35,6 +36,10 @@ try:  # pragma: no cover - import-time registration
     import knowledge.models  # noqa: F401
 except ImportError:
     pass
+try:  # pragma: no cover - import-time registration
+    import builder.models  # noqa: F401
+except ImportError:
+    pass
 
 config = context.config
 
@@ -60,7 +65,26 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+def _widen_version_table(connection: Connection) -> None:
+    """Alembic's own ``alembic_version.version_num`` is VARCHAR(32), but one
+    revision id here (``20260903_universal_mcp_server_flow``) is 34 chars.
+    SQLite ignores VARCHAR lengths; PostgreSQL rejects the insert. Create —
+    or widen — the table first. Renaming the revision instead would break
+    every database that already recorded it.
+    """
+    if connection.dialect.name != "postgresql":
+        return
+    connection.execute(text(
+        "CREATE TABLE IF NOT EXISTS alembic_version ("
+        "version_num VARCHAR(64) NOT NULL, "
+        "CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num))"
+    ))
+    connection.execute(text("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(64)"))
+    connection.commit()
+
+
 def do_run_migrations(connection: Connection) -> None:
+    _widen_version_table(connection)
     context.configure(
         connection=connection,
         target_metadata=target_metadata,

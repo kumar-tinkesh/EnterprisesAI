@@ -43,7 +43,7 @@ def upgrade() -> None:
         sa.Column("transport", sa.String(length=32), nullable=False, server_default="sse"),
         sa.Column("server_url", sa.String(length=512), nullable=False),
         sa.Column("bound_tools", sa.JSON, nullable=False, server_default="[]"),
-        sa.Column("is_global", sa.Boolean(), nullable=False, server_default=sa.text("0")),
+        sa.Column("is_global", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -114,7 +114,7 @@ def downgrade() -> None:
         sa.Column("method", sa.String(length=16), nullable=False, server_default="POST"),
         sa.Column("endpoint_url", sa.String(length=512), nullable=True),
         sa.Column("parameters_schema", sa.JSON(), nullable=False),
-        sa.Column("is_global", sa.Boolean(), nullable=False, server_default=sa.text("0")),
+        sa.Column("is_global", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("vault_secret_ref", sa.String(length=255), nullable=True),
         sa.Column(
             "created_at",

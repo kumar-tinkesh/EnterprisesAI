@@ -8,8 +8,9 @@ Responsibilities:
     back to ``create_db_tables()`` if Alembic is unavailable.
   * Mount the vendor and user routers, both under ``/api/v1/vendor/resources``
     (unchanged from before the vendor/user package split — see those routers'
-    docstrings for why the prefix stays shared), and the knowledge router
-    under ``/api/v1/knowledge-bases``.
+    docstrings for why the prefix stays shared), the knowledge router
+    under ``/api/v1/knowledge-bases`` and the builder router under
+    ``/api/v1/builder``.
 
 The backend reuses the Auth service's engine/session (``src.db.session``) and
 JWT guards (``src.api.deps``) — there is no second engine and no duplicate auth.
@@ -38,6 +39,8 @@ from src.db.session import create_db_tables  # noqa: E402
 from vendor.api.v1.router import router as vendor_router  # noqa: E402
 from user.api.v1.router import router as user_router  # noqa: E402
 from knowledge.api.v1.router import router as knowledge_router  # noqa: E402
+from builder.api.v1.router import router as builder_router  # noqa: E402
+from builder.services.tool_runtime import shutdown_pool  # noqa: E402
 
 from apps.backend.config import get_backend_settings  # noqa: E402
 
@@ -74,12 +77,33 @@ async def lifespan(app: FastAPI):
     from vendor.services.whatsapp_bridge import manager as bridge_manager
 
     reaper_task = asyncio.create_task(bridge_manager.reaper_loop())
+
+    # Builder runs: with BUILDER_QUEUE_BACKEND=inline this process is also the
+    # worker (local dev); with redis, separate `python -m builder.worker`
+    # processes run them and this one only enqueues and streams events.
+    from builder.config import get_builder_settings
+    from builder.runs.events import get_event_bus
+    from builder.runs.queue import get_run_queue
+    from builder.runs.worker import Worker
+
+    run_worker = None
+    if get_builder_settings().BUILDER_QUEUE_BACKEND == "inline":
+        run_worker = Worker()
+        await run_worker.start()
+        with contextlib.suppress(Exception):
+            await run_worker.reap()  # resume runs a previous process left behind
     try:
         yield
     finally:
+        if run_worker is not None:
+            await run_worker.stop()
+        await get_run_queue().close()
+        await get_event_bus().close()
         reaper_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await reaper_task
+        # Stop every pooled MCP tool session (and its stdio process).
+        await shutdown_pool()
         await bridge_manager.shutdown_all()
 
 
@@ -118,6 +142,11 @@ def create_app() -> FastAPI:
         knowledge_router,
         prefix=f"{_backend_settings.BACKEND_API_V1_PREFIX}/knowledge-bases",
         tags=["knowledge-bases"],
+    )
+    app.include_router(
+        builder_router,
+        prefix=f"{_backend_settings.BACKEND_API_V1_PREFIX}/builder",
+        tags=["builder"],
     )
     return app
 

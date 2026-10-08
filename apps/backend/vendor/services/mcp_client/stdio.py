@@ -409,17 +409,25 @@ def _sanitize_stdio_env(env: dict[str, str]) -> dict[str, str]:
     return cleaned
 
 
-async def _connect_stdio(
+async def build_stdio_params(
     command: str,
     credentials: dict[str, str] | None,
     source_repo_url: str | None = None,
     env_vars: dict[str, str] | None = None,
-) -> dict:
-    """Spawn a stdio MCP server process and run initialize + tools/list."""
+    home_dir: Path | None = None,
+) -> StdioServerParameters:
+    """Resolve how to launch a stdio MCP server: binary, args, cwd and env.
 
-    # Import _session_details lazily or from transport module
-    from vendor.services.mcp_client.transport import _session_details
+    Shared by the connect/verify handshake (``_connect_stdio``) and the
+    builder tool runtime, which keeps the process running and calls tools.
 
+    ``home_dir`` (runtime only) isolates the spawned process per user: OAuth
+    key/credential files are written there — never into the shared repo
+    checkout or the backend's own home — and the child gets ``HOME`` pointed
+    at it, while package-manager caches stay shared so a per-user home does
+    not mean re-downloading every npm/uv package. Without it (vendor
+    connect/verify), files go where they always have.
+    """
     env = _sanitize_stdio_env({**os.environ})
     if isinstance(env_vars, dict):
         env.update(
@@ -456,6 +464,9 @@ async def _connect_stdio(
     prep_fn = getattr(mcp_client, "_prepare_local_repo_stdio", _prepare_local_repo_stdio)
     cmd_binary, cmd_args, cwd = await prep_fn(command, source_repo_url)
 
+    if home_dir is not None:
+        _isolate_home(env, home_dir)
+
     if client_id or client_secret or refresh_token or access_token:
         import json
 
@@ -477,39 +488,46 @@ async def _connect_stdio(
                 "redirect_uris": ["http://localhost:3000/oauth2callback"],
             },
         }
+        creds_data = {
+            "access_token": access_token or "placeholder_token",
+            "refresh_token": refresh_token or "",
+            "token_type": "Bearer",
+        }
 
-        cwd_path = Path(cwd) if cwd else Path.cwd()
-        cwd_oauth_file = cwd_path / "gcp-oauth.keys.json"
-        cwd_creds_file = cwd_path / "credentials.json"
+        if home_dir is not None:
+            # Per-user: always (re)write this user's own files, so a changed
+            # credential takes effect and nobody inherits someone else's.
+            for conf_dir in (home_dir / ".gmail-mcp", home_dir / ".config" / "google-drive-mcp", home_dir / ".mcp"):
+                conf_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+                if client_id and client_secret:
+                    _write_private(conf_dir / "gcp-oauth.keys.json", json.dumps(oauth_json_data, indent=2))
+                if refresh_token or access_token:
+                    _write_private(conf_dir / "credentials.json", json.dumps(creds_data, indent=2))
+            target_oauth_path = str(home_dir / ".gmail-mcp" / "gcp-oauth.keys.json")
+            target_creds_path = str(home_dir / ".gmail-mcp" / "credentials.json")
+        else:
+            cwd_path = Path(cwd) if cwd else Path.cwd()
+            cwd_oauth_file = cwd_path / "gcp-oauth.keys.json"
+            cwd_creds_file = cwd_path / "credentials.json"
 
-        if client_id and client_secret and not cwd_oauth_file.exists():
-            cwd_oauth_file.write_text(json.dumps(oauth_json_data, indent=2), encoding="utf-8")
+            if client_id and client_secret and not cwd_oauth_file.exists():
+                cwd_oauth_file.write_text(json.dumps(oauth_json_data, indent=2), encoding="utf-8")
 
-        if (refresh_token or access_token) and not cwd_creds_file.exists():
-            creds_data = {
-                "access_token": access_token or "placeholder_token",
-                "refresh_token": refresh_token or "",
-                "token_type": "Bearer",
-            }
-            cwd_creds_file.write_text(json.dumps(creds_data, indent=2), encoding="utf-8")
+            if (refresh_token or access_token) and not cwd_creds_file.exists():
+                cwd_creds_file.write_text(json.dumps(creds_data, indent=2), encoding="utf-8")
 
-        home = Path.home()
-        for conf_dir in (home / ".gmail-mcp", home / ".config" / "google-drive-mcp", home / ".mcp"):
-            conf_dir.mkdir(parents=True, exist_ok=True)
-            o_file = conf_dir / "gcp-oauth.keys.json"
-            c_file = conf_dir / "credentials.json"
-            if client_id and client_secret and not o_file.exists():
-                o_file.write_text(json.dumps(oauth_json_data, indent=2), encoding="utf-8")
-            if (refresh_token or access_token) and not c_file.exists():
-                creds_data = {
-                    "access_token": access_token or "placeholder_token",
-                    "refresh_token": refresh_token or "",
-                    "token_type": "Bearer",
-                }
-                c_file.write_text(json.dumps(creds_data, indent=2), encoding="utf-8")
+            home = Path.home()
+            for conf_dir in (home / ".gmail-mcp", home / ".config" / "google-drive-mcp", home / ".mcp"):
+                conf_dir.mkdir(parents=True, exist_ok=True)
+                o_file = conf_dir / "gcp-oauth.keys.json"
+                c_file = conf_dir / "credentials.json"
+                if client_id and client_secret and not o_file.exists():
+                    o_file.write_text(json.dumps(oauth_json_data, indent=2), encoding="utf-8")
+                if (refresh_token or access_token) and not c_file.exists():
+                    c_file.write_text(json.dumps(creds_data, indent=2), encoding="utf-8")
 
-        target_oauth_path = str(cwd_oauth_file if cwd_oauth_file.exists() else home / ".gmail-mcp" / "gcp-oauth.keys.json")
-        target_creds_path = str(cwd_creds_file if cwd_creds_file.exists() else home / ".gmail-mcp" / "credentials.json")
+            target_oauth_path = str(cwd_oauth_file if cwd_oauth_file.exists() else home / ".gmail-mcp" / "gcp-oauth.keys.json")
+            target_creds_path = str(cwd_creds_file if cwd_creds_file.exists() else home / ".gmail-mcp" / "credentials.json")
 
         env.setdefault("GMAIL_OAUTH_PATH", target_oauth_path)
         env.setdefault("GOOGLE_DRIVE_OAUTH_CREDENTIALS", target_oauth_path)
@@ -518,15 +536,49 @@ async def _connect_stdio(
         env.setdefault("GMAIL_CREDENTIALS_PATH", target_creds_path)
         env.setdefault("CREDENTIALS_PATH", target_creds_path)
 
+    # Never log env values — they hold credentials.
     logger.info(
-        "starting_mcp_stdio",
-        command=cmd_binary,
-        args=cmd_args,
-        cwd=cwd,
-        env_keys=list(env.keys()),
+        "starting_mcp_stdio command=%s args=%s cwd=%s env_keys=%d",
+        cmd_binary,
+        cmd_args,
+        cwd,
+        len(env),
     )
+    return StdioServerParameters(command=cmd_binary, args=cmd_args, env=env, cwd=cwd)
 
-    params = StdioServerParameters(command=cmd_binary, args=cmd_args, env=env, cwd=cwd)
+
+def _write_private(path: Path, text: str) -> None:
+    path.write_text(text, encoding="utf-8")
+    path.chmod(0o600)
+
+
+def _isolate_home(env: dict[str, str], home_dir: Path) -> None:
+    """Point the child's HOME at ``home_dir``, keeping shared package caches."""
+    home_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    original_home = Path(env.get("HOME") or Path.home())
+    env.setdefault("npm_config_cache", str(original_home / ".npm"))
+    env.setdefault("UV_CACHE_DIR", str(original_home / ".cache" / "uv"))
+    env.setdefault("GOPATH", str(original_home / "go"))
+    env.setdefault("GOMODCACHE", str(original_home / "go" / "pkg" / "mod"))
+    env.setdefault("GOCACHE", str(original_home / ".cache" / "go-build"))
+    env["HOME"] = str(home_dir)
+    env["USERPROFILE"] = str(home_dir)
+
+
+async def _connect_stdio(
+    command: str,
+    credentials: dict[str, str] | None,
+    source_repo_url: str | None = None,
+    env_vars: dict[str, str] | None = None,
+) -> dict:
+    """Spawn a stdio MCP server process and run initialize + tools/list."""
+
+    # Import _session_details lazily or from transport module
+    from vendor.services.mcp_client.transport import _session_details
+
+    params = await build_stdio_params(
+        command, credentials, source_repo_url=source_repo_url, env_vars=env_vars
+    )
     from vendor.services import mcp_client
     stdio_fn = getattr(mcp_client, "stdio_client", stdio_client)
     session_details_fn = getattr(mcp_client, "_session_details", _session_details)

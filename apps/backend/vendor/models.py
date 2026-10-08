@@ -334,6 +334,10 @@ class MCPTool(Base, TimestampMixin):
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     input_schema: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     output_schema: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    # The server's own behaviour hints from tools/list (``read_only_hint``,
+    # ``destructive_hint``, ``idempotent_hint``, ``open_world_hint``). Hints,
+    # not guarantees — the builder combines them with the tool's name.
+    annotations: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
     # Semantic search — embedding of "name. description" (+ input_schema
     # property names) for tool-level catalog matching. See VendorMCPServer

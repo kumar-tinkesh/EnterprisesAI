@@ -84,6 +84,7 @@ from src.models import *  # noqa: E402,F403
 
 __import__("vendor.models")
 __import__("knowledge.models")
+__import__("builder.models")
 
 _test_engine = create_async_engine(_TEST_URL, echo=False)
 _TestSessionLocal = async_sessionmaker(

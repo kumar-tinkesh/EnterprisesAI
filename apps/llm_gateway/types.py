@@ -14,6 +14,11 @@ from typing import Any, Optional
 class Role(str, Enum):
     SYSTEM = "system"
     USER = "user"
+    # Multi-turn tool calling: the model's own turn (possibly asking for tool
+    # calls) and the result of one of those calls, in OpenAI's message format
+    # (litellm translates it for every other provider).
+    ASSISTANT = "assistant"
+    TOOL = "tool"
 
 
 # ── Message ──────────────────────────────────────────────────────────────────
@@ -26,6 +31,9 @@ class Message:
     content: str
     name: Optional[str] = None
     tool_call_id: Optional[str] = None
+    # Set on an ASSISTANT message that asked for tool calls; each answer then
+    # follows as a TOOL message with the matching tool_call_id.
+    tool_calls: Optional[list["ToolCall"]] = None
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"role": self.role.value, "content": self.content}
@@ -33,6 +41,11 @@ class Message:
             d["name"] = self.name
         if self.tool_call_id:
             d["tool_call_id"] = self.tool_call_id
+        if self.tool_calls:
+            d["tool_calls"] = [tc.to_dict() for tc in self.tool_calls]
+            # OpenAI wants null, not "", for a turn that only calls tools.
+            if not self.content:
+                d["content"] = None
         return d
 
 
@@ -66,6 +79,9 @@ class ToolCall:
     id: str
     name: str
     arguments: str  # JSON string
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"id": self.id, "type": "function", "function": {"name": self.name, "arguments": self.arguments}}
 
 
 # ── Token usage ──────────────────────────────────────────────────────────────

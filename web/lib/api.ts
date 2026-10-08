@@ -13,14 +13,17 @@ const API_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8001/api/v1";
 
 // Base URL of the EnterpriseAI Backend (Vendor Resources / AI Compiler).
-const BACKEND_API_URL =
+export const BACKEND_API_URL =
   process.env.NEXT_PUBLIC_BACKEND_API_URL ?? "http://localhost:8002/api/v1";
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** The parsed error body, when there was one (e.g. a builder 422's `problems`). */
+  body: unknown;
+  constructor(status: number, message: string, body?: unknown) {
     super(message);
     this.status = status;
+    this.body = body;
   }
 }
 
@@ -52,7 +55,7 @@ async function tryRefreshToken(): Promise<string | null> {
   return data.access_token;
 }
 
-async function request<T>(
+export async function request<T>(
   path: string,
   init: RequestInit = {},
   token?: string,
@@ -79,13 +82,16 @@ async function request<T>(
 
   if (!res.ok) {
     let detail: string = `Request failed (${res.status})`;
+    let body: unknown;
     try {
-      const body = await res.json();
-      if (typeof body?.detail === "string") detail = body.detail;
+      body = await res.json();
+      const d = (body as { detail?: unknown })?.detail;
+      if (typeof d === "string") detail = d;
+      else if (d && typeof (d as { message?: unknown }).message === "string") detail = (d as { message: string }).message;
     } catch {
       /* ignore parse errors */
     }
-    throw new ApiError(res.status, detail);
+    throw new ApiError(res.status, detail, body);
   }
   if (res.status === 204) return {} as T;
   return (await res.json()) as T;

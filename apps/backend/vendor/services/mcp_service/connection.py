@@ -132,6 +132,24 @@ async def _resolve_and_build_config(
     return config
 
 
+async def build_runtime_config(
+    db: AsyncSession,
+    *,
+    server: VendorMCPServer,
+    user_id: str,
+    tenant_id: str | None,
+) -> dict:
+    """The MCP client config to *run* tools with, as ``user_id``.
+
+    Same resolution as that user's self-service connect (their own stored
+    credential, OAuth token refresh, their own device-pairing bridge), with no
+    request-supplied credentials. Used by the builder tool runtime.
+    """
+    return await _resolve_and_build_config(
+        db, server=server, request_credentials=None, tenant_id=tenant_id, user_id=user_id
+    )
+
+
 async def test_mcp_connection(
     db: AsyncSession,
     *,
@@ -163,6 +181,7 @@ async def test_mcp_connection(
             name=tool_data["name"],
             description=tool_data.get("description") or "",
             input_schema=tool_data.get("input_schema"),
+            annotations=tool_data.get("annotations"),
         )
         await embed_tool_fn(tool)
         db.add(tool)
