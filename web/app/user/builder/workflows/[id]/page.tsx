@@ -315,7 +315,7 @@ function WorkflowEditor() {
   return (
     <div className="flex h-screen flex-col bg-zinc-50">
       <header className="flex items-center gap-2 border-b border-zinc-200 bg-white px-3 py-2">
-        <a href="/user/builder" className="rounded-md p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900" aria-label="Back to the studio">
+        <a href="/user/projects" className="rounded-md p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900" aria-label="Back to projects">
           <ArrowLeft className="h-4 w-4" />
         </a>
         <Input

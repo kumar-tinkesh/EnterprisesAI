@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import {
   ReactFlow,
@@ -14,7 +14,7 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Bot, CheckCircle2, Send, Server, Link2 } from "lucide-react";
+import { Bot, CheckCircle2, Network, Search, Send, Server, Link2 } from "lucide-react";
 
 import {
   vendorApi,
@@ -24,6 +24,7 @@ import {
   type ToolSearchResult,
   type MCPServerEntry,
 } from "@/lib/api";
+import { useBuilderActions } from "@/lib/builder/use-builder-actions";
 import { useAuthStore } from "@/stores/auth-store";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
@@ -204,6 +205,15 @@ function buildGraph(
   return { nodes, edges };
 }
 
+// ─── Prompt modes ───────────────────────────────────────────────────────────
+type PromptMode = "compile" | "agent" | "workflow";
+const MODE_KEY = "compiler.mode";
+const MODES: { id: PromptMode; label: string; icon: typeof Bot; placeholder: string }[] = [
+  { id: "compile", label: "Compile", icon: Search, placeholder: "Describe what you want to do…" },
+  { id: "agent", label: "Agent", icon: Bot, placeholder: "An inbox assistant that reads my Gmail and drafts replies" },
+  { id: "workflow", label: "Workflow", icon: Network, placeholder: "Every morning summarize my unread Gmail and post it to Slack #team" },
+];
+
 // ─── Main component ─────────────────────────────────────────────────────────
 export default function AgentCanvasBuilder({
   serverById,
@@ -221,6 +231,26 @@ export default function AgentCanvasBuilder({
   const [submittedQuery, setSubmittedQuery] = useState("");
   const [searchResult, setSearchResult] = useState<ToolSearchResponse | null>(null);
   const [planResult, setPlanResult] = useState<ToolCallPlanResponse | null>(null);
+  const [mode, setMode] = useState<PromptMode>("compile");
+  const builder = useBuilderActions();
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(MODE_KEY);
+      if (saved === "compile" || saved === "agent" || saved === "workflow") setMode(saved);
+    } catch {
+      /* default */
+    }
+  }, []);
+  const pickMode = (m: PromptMode) => {
+    setMode(m);
+    builder.setError(null);
+    try {
+      window.localStorage.setItem(MODE_KEY, m);
+    } catch {
+      /* ignore */
+    }
+  };
 
   const searchMutation = useMutation({
     mutationFn: (q: string) =>
@@ -233,8 +263,9 @@ export default function AgentCanvasBuilder({
     onSuccess: setPlanResult,
   });
 
-  const isLoading = searchMutation.isPending || planMutation.isPending;
+  const isLoading = searchMutation.isPending || planMutation.isPending || builder.createWithAi.isPending;
   const error =
+    builder.error ||
     (searchMutation.isError &&
       (searchMutation.error instanceof ApiError ? searchMutation.error.message : "Search failed")) ||
     (planMutation.isError &&
@@ -245,6 +276,10 @@ export default function AgentCanvasBuilder({
     e.preventDefault();
     const q = query.trim();
     if (!q) return;
+    if (mode !== "compile") {
+      if (q.length >= 3) builder.createWithAi.mutate({ mode, description: q });
+      return;
+    }
     setSubmittedQuery(q);
     setSearchResult(null);
     setPlanResult(null);
@@ -293,13 +328,37 @@ export default function AgentCanvasBuilder({
       </div>
 
       {error && <p className="bg-zinc-950 px-6 pt-3 text-xs text-red-400">{error}</p>}
+      {builder.createWithAi.isPending && (
+        <p className="bg-zinc-950 px-6 pt-3 text-xs text-zinc-400">
+          Designing the {mode} and matching tools… this can take a few seconds.
+        </p>
+      )}
 
       <form
         onSubmit={handleSubmit}
         className="flex items-center gap-2 border-t border-white/10 bg-zinc-950 p-4"
       >
+        <div className="inline-flex shrink-0 rounded-lg border border-white/10 bg-white/5 p-1" role="tablist" aria-label="What to do">
+          {MODES.map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              role="tab"
+              aria-selected={mode === m.id}
+              disabled={isLoading}
+              onClick={() => pickMode(m.id)}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium cursor-pointer disabled:cursor-not-allowed",
+                mode === m.id ? "bg-indigo-600 text-white" : "text-zinc-400 hover:text-zinc-100",
+              )}
+            >
+              <m.icon className="h-3.5 w-3.5" />
+              {m.label}
+            </button>
+          ))}
+        </div>
         <Input
-          placeholder="Describe what you want to do…"
+          placeholder={MODES.find((m) => m.id === mode)!.placeholder}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           className="border-white/10 bg-white/5 text-zinc-100 placeholder:text-zinc-500 focus-visible:ring-indigo-500"
@@ -310,7 +369,7 @@ export default function AgentCanvasBuilder({
           className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50 cursor-pointer"
         >
           {isLoading ? <Spinner className="h-4 w-4" /> : <Send className="h-4 w-4" />}
-          Send
+          {mode === "compile" ? "Send" : "Create"}
         </button>
       </form>
     </div>
