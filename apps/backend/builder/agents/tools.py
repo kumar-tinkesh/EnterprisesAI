@@ -97,8 +97,12 @@ async def resolve_agent_tools(db: AsyncSession, tool_ids: list[str]) -> list[Age
     return out
 
 
-async def search_knowledge(db: AsyncSession, *, tenant_id: str, kb_ids: list[str], query: str, top_k: int = 6) -> str:
-    """Retrieve across the agent's knowledge bases and format the passages for the model."""
+async def search_knowledge(
+    db: AsyncSession, *, tenant_id: str, kb_ids: list[str], query: str, top_k: int = 6
+) -> tuple[str, list[dict]]:
+    """Retrieve across the agent's knowledge bases -> (passages formatted for the
+    model, the passages themselves: [{filename, content}] — what the answer can
+    later be checked against)."""
     from knowledge.services.retrieval import retrieve
 
     hits: list[dict] = []
@@ -106,8 +110,10 @@ async def search_knowledge(db: AsyncSession, *, tenant_id: str, kb_ids: list[str
         hits.extend(await retrieve(db, knowledge_base_id=kb_id, tenant_id=tenant_id, query=query, k=top_k))
     hits.sort(key=lambda h: h["score"], reverse=True)
     if not hits:
-        return "No relevant passages found in the knowledge base."
-    return "\n\n".join(f"[{i}] (source: {h['filename']})\n{h['content']}" for i, h in enumerate(hits[:top_k], start=1))
+        return "No relevant passages found in the knowledge base.", []
+    top = hits[:top_k]
+    text = "\n\n".join(f"[{i}] (source: {h['filename']})\n{h['content']}" for i, h in enumerate(top, start=1))
+    return text, [{"filename": h["filename"], "content": h["content"]} for h in top]
 
 
 __all__ = ["AgentTool", "KNOWLEDGE_TOOL", "function_definitions", "resolve_agent_tools", "search_knowledge"]

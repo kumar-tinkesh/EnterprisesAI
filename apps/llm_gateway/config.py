@@ -76,8 +76,10 @@ class GatewaySettings:
     GEMINI_API_KEY, GEMINI_BASE_URL, GEMINI_DEFAULT_MODEL
     LLM_GATEWAY_DEFAULT_PROVIDER   (azure | openai | groq | gemini) — when unset,
                                     azure if it's configured, else openai
-    LLM_GATEWAY_EMBEDDING_PROVIDER when unset, azure if it has an embedding
-                                    deployment, else gemini
+    LLM_GATEWAY_EMBEDDING_PROVIDER (fastembed | gemini | openai | azure), default
+                                    fastembed (local, no key); a hosted one that
+                                    isn't configured falls back to fastembed
+    FASTEMBED_MODEL                default BAAI/bge-small-en-v1.5
     LLM_GATEWAY_TIMEOUT            seconds, applies to all providers
     LLM_GATEWAY_MAX_RETRIES        retry count, applies to all providers
     LLM_GATEWAY_ENABLE_CACHE       1 | true | yes → enable response cache
@@ -89,7 +91,7 @@ class GatewaySettings:
     gemini: ProviderConfig = field(default_factory=ProviderConfig)
     azure: ProviderConfig = field(default_factory=ProviderConfig)
     default_provider: str = "openai"
-    embedding_provider: str = "gemini"
+    embedding_provider: str = "fastembed"
     enable_cache: bool = False
     cache_ttl_seconds: int = 3600
 
@@ -162,9 +164,8 @@ class GatewaySettings:
         default_provider = os.getenv("LLM_GATEWAY_DEFAULT_PROVIDER", "").strip().lower() or (
             "azure" if azure_cfg.is_configured else "openai"
         )
-        embedding_provider = os.getenv("LLM_GATEWAY_EMBEDDING_PROVIDER", "").strip().lower() or (
-            "azure" if azure_cfg.is_configured and azure_embedding else "gemini"
-        )
+        # What was asked for; the gateway swaps in fastembed when it isn't usable.
+        embedding_provider = os.getenv("LLM_GATEWAY_EMBEDDING_PROVIDER", "").strip().lower() or "fastembed"
 
         return cls(
             openai=openai_cfg,

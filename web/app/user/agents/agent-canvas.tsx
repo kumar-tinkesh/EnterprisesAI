@@ -24,7 +24,7 @@ import {
   type ToolSearchResult,
   type MCPServerEntry,
 } from "@/lib/api";
-import { useBuilderActions } from "@/lib/builder/use-builder-actions";
+import { useBuilderActions, type BuildTarget } from "@/lib/builder/use-builder-actions";
 import { useAuthStore } from "@/stores/auth-store";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
@@ -220,11 +220,14 @@ export default function AgentCanvasBuilder({
   onConnect,
   hasAnyConnectedServer,
   onScrollToCatalog,
+  onOpen,
 }: {
   serverById: Record<string, MCPServerEntry>;
   onConnect: (serverId: string) => void;
   hasAnyConnectedServer: boolean;
   onScrollToCatalog: () => void;
+  /** Show an agent/workflow the AI just built, in this page. */
+  onOpen: (target: BuildTarget) => void;
 }) {
   const accessToken = useAuthStore((s) => s.accessToken) || "";
   const [query, setQuery] = useState("");
@@ -232,7 +235,7 @@ export default function AgentCanvasBuilder({
   const [searchResult, setSearchResult] = useState<ToolSearchResponse | null>(null);
   const [planResult, setPlanResult] = useState<ToolCallPlanResponse | null>(null);
   const [mode, setMode] = useState<PromptMode>("compile");
-  const builder = useBuilderActions();
+  const builder = useBuilderActions({ open: onOpen });
 
   useEffect(() => {
     try {

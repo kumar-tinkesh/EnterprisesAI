@@ -31,7 +31,6 @@ from src.core.security import decode_token
 from src.db.session import get_db
 from src.models import User
 
-from builder.agents.config import AgentConfig
 from builder.api.v1.agents import get_agent
 from builder.api.v1.deps import get_end_user, problems_response
 from builder.models import BuilderApproval, BuilderRun
@@ -47,7 +46,7 @@ from builder.runs.service import (
     decide_approval,
     run_view,
 )
-from builder.services.references import agent_config_problems
+from builder.runs.start import agent_run_problems, workflow_run_problems
 
 router = APIRouter()
 
@@ -56,6 +55,8 @@ class RunStart(BaseModel):
     # May be empty for a workflow started by a manual trigger with only variables.
     input: str = Field(default="", max_length=20_000)
     variables: dict[str, Any] = Field(default_factory=dict)
+    # How much answer: "auto" sizes it to the question.
+    depth: Literal["auto", "short", "detailed"] = "auto"
 
 
 class Decision(BaseModel):
@@ -82,10 +83,10 @@ async def start_agent_run(
     agent = await get_agent(db, agent_id, user)
     if not payload.input.strip():
         raise HTTPException(status_code=422, detail="Tell the agent what to do.")
-    problems = await agent_config_problems(db, user, AgentConfig.model_validate(agent.config or {}), check_connection=True)
+    problems = await agent_run_problems(db, user, agent)
     if problems:
         return problems_response("This agent can't run yet.", problems)
-    run = await create_agent_run(db, user, agent, text=payload.input, variables=payload.variables)
+    run = await create_agent_run(db, user, agent, text=payload.input, variables=payload.variables, depth=payload.depth)
     return await run_view(db, run, detail=False)
 
 
@@ -96,26 +97,15 @@ async def start_workflow_run(
     user: CurrentUser = Depends(get_end_user),
     db: AsyncSession = Depends(get_db),
 ):
-    from builder.api.v1.workflows import _get_workflow, check_workflow
-    from builder.graph.schema import WorkflowConfig, WorkflowEdge, WorkflowNode
-    from builder.graph.validation import GraphProblem
+    from builder.api.v1.workflows import _get_workflow
 
     wf = await _get_workflow(db, workflow_id, user)
-    nodes = [WorkflowNode.model_validate(n) for n in wf.nodes or []]
-    if not nodes:
+    if not wf.nodes:
         raise HTTPException(status_code=422, detail="This workflow has no steps yet.")
-    problems = await check_workflow(
-        db, user, workflow_id=wf.id, nodes=nodes,
-        edges=[WorkflowEdge.model_validate(e) for e in wf.edges or []],
-        config=WorkflowConfig.model_validate(wf.config or {}), check_connection=True,
-    )
-    for node in nodes:
-        for var in node.variables or []:
-            if var.required and payload.variables.get(var.name) in (None, ""):
-                problems.append(GraphProblem("missing_variable", f'Fill in "{var.label or var.name}" to run this workflow.', node.id))
+    problems = await workflow_run_problems(db, user, wf, payload.variables)
     if problems:
         return problems_response("This workflow can't run yet.", problems)
-    run = await create_workflow_run(db, user, wf, text=payload.input, variables=payload.variables)
+    run = await create_workflow_run(db, user, wf, text=payload.input, variables=payload.variables, depth=payload.depth)
     return await run_view(db, run, detail=False)
 
 
@@ -124,11 +114,13 @@ async def list_runs(
     agent_id: str | None = None,
     workflow_id: str | None = None,
     status_: str | None = Query(default=None, alias="status"),
+    # Test-case and public (published-key) runs are kept out of run history unless asked for.
+    purpose: str = Query(default="run", pattern="^(run|test|public)$"),
     limit: int = Query(default=50, ge=1, le=200),
     user: CurrentUser = Depends(get_end_user),
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(BuilderRun).where(BuilderRun.owner_id == user.id)
+    query = select(BuilderRun).where(BuilderRun.owner_id == user.id, BuilderRun.purpose == purpose)
     if agent_id:
         query = query.where(BuilderRun.agent_id == agent_id)
     if workflow_id:

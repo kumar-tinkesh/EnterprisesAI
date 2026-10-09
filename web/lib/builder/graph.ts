@@ -4,6 +4,7 @@
  */
 
 import type { Agent, NodeType, Problem, WorkflowEdge, WorkflowNode } from "@/lib/builder/types";
+import { describeSchedule } from "@/lib/builder/schedule";
 
 /** Session-storage key for an AI draft handed from the studio to the editor. */
 export const draftKey = (id: string) => `builder.draft.${id}`;
@@ -90,6 +91,8 @@ export function stepSubtitle(node: WorkflowNode, agents: Record<string, Agent>):
       return `Answer as ${node.output_config?.format ?? "markdown"}`;
     case "input":
       return node.variables?.length ? `${node.variables.length} field(s)` : "The request";
+    case "schedule_trigger":
+      return describeSchedule(node.schedule);
     default:
       return NODE_META[node.type].hint;
   }

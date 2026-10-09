@@ -9,3 +9,55 @@ body {
   background-color: var(--background);
   color: var(--foreground);
 }
+/* ── Builder dark theme ───────────────────────────────────────────────────────
+   The builder canvas (AI Compiler page) is dark, like the compiler canvas it
+   lives in. Its panels reuse the light components, so inside .builder-dark the
+   light palette is remapped here instead of every component carrying dark:
+   variants. Keep to the classes the builder actually uses. */
+.builder-dark { color-scheme: dark; color: #e4e4e7; }
+.builder-dark .bg-white { background-color: #18181b; }
+.builder-dark .bg-zinc-50 { background-color: #1f1f23; }
+.builder-dark .bg-zinc-100 { background-color: #27272a; }
+.builder-dark .bg-white\/90 { background-color: rgb(24 24 27 / 0.9); }
+.builder-dark .text-zinc-950, .builder-dark .text-zinc-900 { color: #f4f4f5; }
+.builder-dark .text-zinc-800 { color: #e4e4e7; }
+.builder-dark .text-zinc-700 { color: #d4d4d8; }
+.builder-dark .text-zinc-600, .builder-dark .text-zinc-500 { color: #a1a1aa; }
+.builder-dark .text-zinc-400 { color: #71717a; }
+.builder-dark .border-zinc-100, .builder-dark .border-zinc-200, .builder-dark .border-zinc-300 { border-color: rgb(255 255 255 / 0.09); }
+.builder-dark .divide-zinc-100 > :not(:last-child) { border-color: rgb(255 255 255 / 0.07); }
+.builder-dark .hover\:bg-zinc-50:hover { background-color: #1f1f23; }
+.builder-dark .hover\:bg-zinc-100:hover { background-color: #27272a; }
+.builder-dark .hover\:text-zinc-900:hover, .builder-dark .hover\:text-zinc-800:hover, .builder-dark .hover\:text-zinc-700:hover { color: #fafafa; }
+.builder-dark .placeholder\:text-zinc-400::placeholder { color: #52525b; }
+.builder-dark button.bg-zinc-900 { background-color: #4f46e5; }
+.builder-dark button.bg-zinc-900:hover, .builder-dark .hover\:bg-zinc-700:hover { background-color: #6366f1; }
+.builder-dark .focus-visible\:ring-zinc-900:focus-visible { --tw-ring-color: #6366f1; }
+.builder-dark .focus-visible\:ring-offset-2:focus-visible { --tw-ring-offset-color: #18181b; }
+.builder-dark select option { background-color: #18181b; color: #f4f4f5; }
+/* tinted panels: a wash of the hue instead of a pastel fill */
+.builder-dark .bg-indigo-50, .builder-dark .bg-indigo-50\/60, .builder-dark .bg-indigo-50\/30 { background-color: rgb(99 102 241 / 0.12); }
+.builder-dark .bg-emerald-50, .builder-dark .bg-emerald-50\/40, .builder-dark .bg-emerald-50\/50 { background-color: rgb(16 185 129 / 0.12); }
+.builder-dark .bg-emerald-100 { background-color: rgb(16 185 129 / 0.2); }
+.builder-dark .bg-amber-50, .builder-dark .bg-amber-50\/50 { background-color: rgb(245 158 11 / 0.12); }
+.builder-dark .bg-amber-100 { background-color: rgb(245 158 11 / 0.2); }
+.builder-dark .bg-red-50 { background-color: rgb(239 68 68 / 0.12); }
+.builder-dark .bg-red-100 { background-color: rgb(239 68 68 / 0.2); }
+.builder-dark .bg-sky-50 { background-color: rgb(14 165 233 / 0.12); }
+.builder-dark .bg-sky-100 { background-color: rgb(14 165 233 / 0.2); }
+.builder-dark .bg-violet-50 { background-color: rgb(139 92 246 / 0.12); }
+.builder-dark .bg-rose-50 { background-color: rgb(244 63 94 / 0.12); }
+.builder-dark .text-indigo-900, .builder-dark .text-indigo-800, .builder-dark .text-indigo-700 { color: #a5b4fc; }
+.builder-dark .text-indigo-600, .builder-dark .hover\:text-indigo-800:hover, .builder-dark .hover\:text-indigo-600:hover { color: #818cf8; }
+.builder-dark .text-emerald-950, .builder-dark .text-emerald-900, .builder-dark .text-emerald-800, .builder-dark .text-emerald-700 { color: #6ee7b7; }
+.builder-dark .text-amber-950, .builder-dark .text-amber-900, .builder-dark .text-amber-800, .builder-dark .text-amber-700 { color: #fcd34d; }
+.builder-dark .text-red-800, .builder-dark .text-red-700, .builder-dark .text-red-600 { color: #fca5a5; }
+.builder-dark .hover\:text-red-600:hover { color: #f87171; }
+.builder-dark .text-sky-700 { color: #7dd3fc; }
+.builder-dark .text-violet-700 { color: #c4b5fd; }
+.builder-dark .text-rose-700 { color: #fda4af; }
+.builder-dark .border-indigo-200, .builder-dark .border-indigo-400 { border-color: rgb(99 102 241 / 0.4); }
+.builder-dark .border-emerald-200 { border-color: rgb(16 185 129 / 0.35); }
+.builder-dark .border-amber-200, .builder-dark .border-amber-300 { border-color: rgb(245 158 11 / 0.35); }
+.builder-dark .border-red-200, .builder-dark .border-red-100 { border-color: rgb(239 68 68 / 0.35); }
+.builder-dark .shadow-lg, .builder-dark .shadow-sm, .builder-dark .shadow-md { --tw-shadow-color: rgb(0 0 0 / 0.5); }

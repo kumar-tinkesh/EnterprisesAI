@@ -37,6 +37,7 @@ from apps.llm_gateway.providers.openai_client import OpenAIClient
 from apps.llm_gateway.providers.groq_client import GroqClient
 from apps.llm_gateway.providers.gemini_client import GeminiClient
 from apps.llm_gateway.providers.azure_client import AzureOpenAIClient
+from apps.llm_gateway.providers.fastembed_client import FastEmbedClient
 
 logger = logging.getLogger("llm_gateway.gateway")
 
@@ -59,6 +60,7 @@ class LLMGateway:
     def __init__(self, settings: GatewaySettings) -> None:
         self._settings = settings
         self._clients: dict[str, BaseLLMClient] = {}
+        self._fastembed = FastEmbedClient()
         # In-memory TTL response cache: key -> (last_stored_ts, response).
         self._cache: dict[str, tuple[float, CompletionResponse]] = {}
         self._init_clients()
@@ -166,6 +168,20 @@ class LLMGateway:
             f"No configured provider available. Tried: {providers_to_try}"
         )
 
+    @property
+    def embedding_provider(self) -> str:
+        """The provider every embedding comes from: ``fastembed`` (local, the
+        default) unless LLM_GATEWAY_EMBEDDING_PROVIDER names a hosted one that
+        is configured here. One provider for everything, because vectors from
+        different models can't be compared."""
+        wanted = self._settings.embedding_provider
+        client = self._clients.get(wanted)
+        if client is None or not getattr(client, "EMBEDDINGS_SUPPORTED", True):
+            return "fastembed"
+        if wanted == "azure" and not self._settings.azure.azure_embedding_deployment:
+            return "fastembed"
+        return wanted
+
     async def embed(
         self,
         texts: list[str],
@@ -174,33 +190,21 @@ class LLMGateway:
         provider: Optional[str] = None,
     ) -> EmbeddingResponse:
         """
-        Generate embeddings.
+        Generate embeddings with :attr:`embedding_provider` (or ``provider``).
 
-        Defaults to OpenAI (text-embedding-3-small) or Gemini (text-embedding-004).
-        Groq does not support embeddings and is skipped.
+        No fallback to another provider: a vector from a different model
+        would silently mismatch the vectors already stored, so a failure is
+        raised and callers degrade to keyword-only search instead.
         """
-        primary = provider or self._settings.embedding_provider
-        # For embeddings, prefer providers that actually support them
-        embed_order = [
-            p for p in self._build_try_order(primary, fallback=True) if p != "groq"
-        ]
-
-        last_error: Optional[LLMGatewayError] = None
-        for name in embed_order:
-            client = self._clients.get(name)
-            if client is None:
-                continue
-            try:
-                logger.info("embed → %s (%s)", name, model or "default")
-                return await client.embed(texts, model=model)
-            except LLMGatewayError as exc:
-                last_error = exc
-                logger.warning("Provider %s embedding failed, trying next: %s", name, exc)
-                continue
-
-        raise last_error or ProviderNotConfiguredError(
-            "No provider configured that supports embeddings."
-        )
+        name = provider or self.embedding_provider
+        if name == "fastembed":
+            logger.info("embed → fastembed (%s)", model or self._fastembed.model_name)
+            return await self._fastembed.embed(texts, model=model)
+        client = self._clients.get(name)
+        if client is None:
+            raise ProviderNotConfiguredError(f"Embedding provider '{name}' is not configured.")
+        logger.info("embed → %s (%s)", name, model or "default")
+        return await client.embed(texts, model=model)
 
     async def list_models(self, provider: Optional[str] = None) -> dict[str, list[str]]:
         """

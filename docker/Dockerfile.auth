@@ -2,21 +2,29 @@
 # EnterpriseAI Auth Service (FastAPI) — built from the repo root context
 #   docker build -f docker/Dockerfile.auth -t enterpriseai-auth .
 # ---------------------------------------------------------------------------
-FROM python:3.12-slim AS base
+ARG PYTHON_IMAGE=python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.12.24
+
+FROM ${UV_IMAGE} AS uv
+
+# base + deps are instruction-for-instruction the same as Dockerfile.backend's,
+# so BuildKit runs `uv sync` once for both images. Base images are pinned
+# (see Dockerfile.backend for how to bump them).
+FROM ${PYTHON_IMAGE} AS base
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+COPY --from=uv /uv /uvx /bin/
 
 WORKDIR /app
 
 # --- Dependencies (cached layer) -------------------------------------------
+# Install only runtime deps; the app itself is imported via --app-dir.
 FROM base AS deps
 COPY pyproject.toml uv.lock .python-version ./
-# Install only runtime deps; the app itself is imported via --app-dir.
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project
 

@@ -31,9 +31,18 @@ dependencies = [
     "pytesseract>=0.3.13",
     "pillow>=10.4.0",
     "redis>=5.2",
+    "croniter>=2.0.5",
+    "tzdata>=2025.2",
 ]
 
 [dependency-groups]
+# What the LLM gateway container needs (docker/Dockerfile.llm_gateway installs
+# only this group); a plain `uv sync` still installs everything.
+gateway = [
+    "fastapi>=0.141.1",
+    "uvicorn[standard]>=0.52.4",
+    "litellm>=1.98.0",
+]
 dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",

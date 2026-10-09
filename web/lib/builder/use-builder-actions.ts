@@ -11,9 +11,17 @@ import type { Problem } from "@/lib/builder/types";
 import { useAuthStore } from "@/stores/auth-store";
 
 export type BuildMode = "agent" | "workflow";
+export type BuildTarget = { kind: BuildMode; id: string };
 
-/** Create (with AI or blank) and delete agents/workflows; shared by the AI Compiler and Projects. */
-export function useBuilderActions() {
+/** Where an agent or workflow is edited: inside the AI Compiler page. */
+export const editorHref = ({ kind, id }: BuildTarget) => `/user/agents?${kind}=${encodeURIComponent(id)}`;
+
+/**
+ * Create (with AI or blank) and delete agents/workflows; shared by the AI
+ * Compiler and Projects. ``open`` shows the new one in place (the compiler
+ * page); without it the browser goes to the compiler page with it open.
+ */
+export function useBuilderActions({ open }: { open?: (target: BuildTarget) => void } = {}) {
   const router = useRouter();
   const token = useAuthStore((s) => s.accessToken) || "";
   const queryClient = useQueryClient();
@@ -31,7 +39,7 @@ export function useBuilderActions() {
         const draft = await builderApi.draftWorkflow(token, description);
         const wf = await builderApi.createWorkflow(token, { name: draft.name, description });
         window.sessionStorage.setItem(draftKey(wf.id), JSON.stringify(draft));
-        return `/user/builder/workflows/${wf.id}`;
+        return { kind: "workflow", id: wf.id } as BuildTarget;
       }
       const draft = await builderApi.draftAgent(token, description);
       const agent = await builderApi.createAgent(token, {
@@ -46,9 +54,9 @@ export function useBuilderActions() {
           detail: connect.length ? [`Connect before running: ${connect.join(", ")}`] : undefined,
         }),
       );
-      return `/user/builder/agents/${agent.id}`;
+      return { kind: "agent", id: agent.id } as BuildTarget;
     },
-    onSuccess: (href) => router.push(href),
+    onSuccess: (target) => (open ? open(target) : router.push(editorHref(target))),
     onError: fail,
   });
 
@@ -64,12 +72,12 @@ export function useBuilderActions() {
           ],
           edges: [{ id: "e1", source: "in", target: "out" }],
         });
-        return `/user/builder/workflows/${wf.id}`;
+        return { kind: "workflow", id: wf.id } as BuildTarget;
       }
       const agent = await builderApi.createAgent(token, { name: "New agent", role: "Assistant", goal: "Describe what this agent does" });
-      return `/user/builder/agents/${agent.id}`;
+      return { kind: "agent", id: agent.id } as BuildTarget;
     },
-    onSuccess: (href) => router.push(href),
+    onSuccess: (target) => (open ? open(target) : router.push(editorHref(target))),
     onError: fail,
   });
 

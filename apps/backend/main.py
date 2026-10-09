@@ -30,7 +30,7 @@ for _p in (ROOT, ROOT / "apps" / "auth", ROOT / "apps" / "backend"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from fastapi import FastAPI  # noqa: E402
+from fastapi import FastAPI, Response  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
 from src.config import get_settings as get_auth_settings  # noqa: E402
@@ -39,6 +39,7 @@ from src.db.session import create_db_tables  # noqa: E402
 from vendor.api.v1.router import router as vendor_router  # noqa: E402
 from user.api.v1.router import router as user_router  # noqa: E402
 from knowledge.api.v1.router import router as knowledge_router  # noqa: E402
+from builder.api.v1.public import router as public_router  # noqa: E402
 from builder.api.v1.router import router as builder_router  # noqa: E402
 from builder.services.tool_runtime import shutdown_pool  # noqa: E402
 
@@ -74,6 +75,18 @@ async def lifespan(app: FastAPI):
     except Exception as exc:  # pragma: no cover - best-effort startup path
         logger.warning("knowledge startup cleanup skipped: %s", exc)
 
+    from vendor.services.embedding import reembed_stale
+
+    async def _reembed():
+        try:
+            servers, tools = await reembed_stale()
+            if servers or tools:
+                logger.info("embedded %d MCP server(s) and %d tool(s) for catalog search", servers, tools)
+        except Exception as exc:  # pragma: no cover - best-effort startup path
+            logger.warning("MCP embedding backfill skipped: %s", exc)
+
+    reembed_task = asyncio.create_task(_reembed())
+
     from vendor.services.whatsapp_bridge import manager as bridge_manager
 
     reaper_task = asyncio.create_task(bridge_manager.reaper_loop())
@@ -100,6 +113,7 @@ async def lifespan(app: FastAPI):
         await get_run_queue().close()
         await get_event_bus().close()
         reaper_task.cancel()
+        reembed_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await reaper_task
         # Stop every pooled MCP tool session (and its stdio process).
@@ -123,6 +137,27 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # The public API is called from any website (the chat widget) with a
+    # publishable key, not a cookie: answer its CORS here, before the
+    # credentialed CORSMiddleware above (each key enforces its own origins).
+    public_prefix = f"{_backend_settings.BACKEND_API_V1_PREFIX}/public"
+
+    @app.middleware("http")
+    async def public_cors(request, call_next):
+        if not request.url.path.startswith(public_prefix):
+            return await call_next(request)
+        headers = {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Authorization, Content-Type",
+            "Access-Control-Max-Age": "600",
+        }
+        if request.method == "OPTIONS":
+            return Response(status_code=204, headers=headers)
+        response = await call_next(request)
+        response.headers.update(headers)
+        return response
 
     @app.get("/health", tags=["system"])
     async def health():
@@ -148,6 +183,7 @@ def create_app() -> FastAPI:
         prefix=f"{_backend_settings.BACKEND_API_V1_PREFIX}/builder",
         tags=["builder"],
     )
+    app.include_router(public_router, prefix=public_prefix, tags=["public"])
     return app
 
 

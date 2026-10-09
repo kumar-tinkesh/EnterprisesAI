@@ -90,11 +90,25 @@ async def _finish_node(node_run_id: str, status: str, outcome: NodeOutcome | Non
             # outcome carries the same totals, so this sets rather than adds.
             row.prompt_tokens = outcome.prompt_tokens or row.prompt_tokens
             row.completion_tokens = outcome.completion_tokens or row.completion_tokens
+            if outcome.guardrails:
+                row.output = {**(row.output or {}), "guardrails": outcome.guardrails}
         if error:
             row.error = error
         if status != states.WAITING:
             row.finished_at = utcnow()
         await db.commit()
+
+
+def _step_summary(state: dict, graph: S.Graph, agents: dict) -> str:
+    """WorkflowConfig.include_step_summary: each agent/tool step's output, in graph order, under the answer."""
+    parts = []
+    for node_id, node in graph.nodes.items():
+        n = state["nodes"].get(node_id) or {}
+        if node.get("type") not in ("agent", "tool") or n.get("status") != S.DONE or not n.get("output"):
+            continue
+        name = node.get("label") or (agents.get(node.get("agent_id") or "") or {}).get("name") or node.get("type").title()
+        parts.append(f"**{name}**\n{n['output'][:2000]}")
+    return "\n\n---\n**Step by step**\n\n" + "\n\n".join(parts) if parts else ""
 
 
 async def execute_workflow(run: BuilderRun, user: CurrentUser, worker_id: str) -> None:
@@ -119,6 +133,15 @@ async def execute_workflow(run: BuilderRun, user: CurrentUser, worker_id: str) -
     async def emit_event(type_: str, **data) -> None:
         await emit(run.id, type_, **data)
 
+    dry_run = run.purpose == "test"
+    # Agent steps whose answer goes straight to an output get the asked-for answer depth.
+    feeds_output = {e["source"] for e in graph.edges.values() if graph.nodes.get(e["target"], {}).get("type") == "output"}
+    depth = (run.input or {}).get("depth") or "auto"
+    step_extras = dict(
+        dry_run=dry_run, approval_overrides=config.approval_overrides,
+        knowledge_base_ids=config.knowledge_base_ids(),
+    )
+
     async def run_step(node_id: str, node_run_id: str, attempt: int) -> NodeOutcome:
         node = graph.nodes[node_id]
         n = state["nodes"][node_id]
@@ -126,13 +149,13 @@ async def execute_workflow(run: BuilderRun, user: CurrentUser, worker_id: str) -
             return await run_trigger(StepContext(
                 run_id=run.id, node=node, node_run_id=node_run_id, attempt=attempt, user=user, graph=graph,
                 input_text=n["input"], parts=[tuple(p) for p in n["parts"]], original_input=original,
-                failed_inputs=[], agents=agents, approvals=config.approvals, emit=emit_event,
+                failed_inputs=[], agents=agents, approvals=config.approvals, emit=emit_event, **step_extras,
             ), variables)
         ctx = StepContext(
             run_id=run.id, node=node, node_run_id=node_run_id, attempt=attempt, user=user, graph=graph,
             input_text=n["input"] or "", parts=[tuple(p) for p in n["parts"]], original_input=original,
             failed_inputs=state["failed_inputs"].get(node_id, []), agents=agents, approvals=config.approvals,
-            emit=emit_event,
+            emit=emit_event, **step_extras, depth=depth if node_id in feeds_output else "auto",
         )
         return await RUNNERS[node["type"]](ctx)
 
@@ -155,13 +178,15 @@ async def execute_workflow(run: BuilderRun, user: CurrentUser, worker_id: str) -
         await stop_all()
         state["active_seconds"] = active_before + (time.monotonic() - session_started)
         await _save(run.id, worker_id, state)
-        if await lease.release(run.id, worker_id, status=states.FAILED, error=message):
+        # What the guardrails found stays visible on a failed run too.
+        extra = {"output": {"text": None, "guardrails": state["guardrails"]}} if state.get("guardrails") else {}
+        if await lease.release(run.id, worker_id, status=states.FAILED, error=message, **extra):
             await emit(run.id, "run_status", status=states.FAILED, error=message)
 
     try:
         while True:
             elapsed = active_before + (time.monotonic() - session_started)
-            if elapsed > config.max_run_seconds:
+            if config.max_run_seconds and elapsed > config.max_run_seconds:
                 await fail_run(f"Stopped: the workflow ran longer than its limit of {config.max_run_seconds}s.")
                 return
 
@@ -201,6 +226,8 @@ async def execute_workflow(run: BuilderRun, user: CurrentUser, worker_id: str) -
 
                 state["prompt_tokens"] += outcome.prompt_tokens
                 state["completion_tokens"] += outcome.completion_tokens
+                if outcome.guardrails:
+                    state.setdefault("guardrails", []).extend({**f, "node_id": node_id} for f in outcome.guardrails)
                 if outcome.ok:
                     await _finish_node(node_run_id, states.SUCCEEDED, outcome)
                     state["sources"] = list(dict.fromkeys(state["sources"] + outcome.sources))
@@ -216,7 +243,10 @@ async def execute_workflow(run: BuilderRun, user: CurrentUser, worker_id: str) -
                     S.retry(state, node_id)
                 elif S.tolerant(graph, node_id) and not outcome.never_skip:
                     S.fail_tolerated(state, graph, node_id, outcome.error or "failed")
-                elif config.on_node_failure == "skip" and not outcome.never_skip:
+                elif not outcome.never_skip and (
+                    config.on_node_failure == "skip"
+                    or (config.on_node_failure == "retry" and config.node_retry_fallback == "skip")
+                ):
                     S.complete(state, graph, node_id, n["input"] or "")
                 else:
                     await fail_run(f'Step "{graph.label(node_id)}" failed: {outcome.error}')
@@ -241,7 +271,9 @@ async def execute_workflow(run: BuilderRun, user: CurrentUser, worker_id: str) -
     text = final.get("text")
     if text is None:
         text = "\n\n".join(t for _, t in S.sinks_done(state, graph) if t)
-    output = {"text": text, "sources": state["sources"], "final_node": final.get("node_id")}
+    if config.include_step_summary:
+        text = (text or "") + _step_summary(state, graph, agents)
+    output = {"text": text, "sources": state["sources"], "final_node": final.get("node_id"), "guardrails": state.get("guardrails") or []}
     await emit(run.id, "output", text=text, sources=state["sources"])
     if await lease.release(
         run.id, worker_id, status=states.SUCCEEDED, output_text=text, output=output,

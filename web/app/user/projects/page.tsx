@@ -8,7 +8,7 @@ import ProtectedDashboard from "@/components/protected-dashboard";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { builderApi } from "@/lib/builder/api";
-import { useBuilderActions, type BuildMode } from "@/lib/builder/use-builder-actions";
+import { editorHref, useBuilderActions, type BuildMode } from "@/lib/builder/use-builder-actions";
 import { useAuthStore } from "@/stores/auth-store";
 import { cn } from "@/lib/utils";
 
@@ -42,8 +42,8 @@ export default function ProjectsPage() {
 
   const items =
     tab === "agent"
-      ? (agents.data ?? []).map((a) => ({ id: a.id, name: a.name, sub: a.goal, updated: a.updated_at, canManage: a.can_manage, href: `/user/builder/agents/${a.id}` }))
-      : (workflows.data ?? []).map((w) => ({ id: w.id, name: w.name, sub: `${w.node_count} steps${w.description ? ` · ${w.description}` : ""}`, updated: w.updated_at, canManage: w.can_manage, href: `/user/builder/workflows/${w.id}` }));
+      ? (agents.data ?? []).map((a) => ({ id: a.id, name: a.name, sub: a.goal, updated: a.updated_at, canManage: a.can_manage, href: editorHref({ kind: "agent", id: a.id }) }))
+      : (workflows.data ?? []).map((w) => ({ id: w.id, name: w.name, sub: `${w.node_count} steps${w.description ? ` · ${w.description}` : ""}`, updated: w.updated_at, canManage: w.can_manage, href: editorHref({ kind: "workflow", id: w.id }) }));
   const loading = tab === "agent" ? agents.isLoading : workflows.isLoading;
 
   return (

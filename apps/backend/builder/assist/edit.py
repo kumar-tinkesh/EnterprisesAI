@@ -29,6 +29,8 @@ from builder.assist.drafts import agent_spec
 from builder.assist.llm import Usage
 from builder.assist.tools import pick_agent_tools, pick_tool
 from builder.graph.schema import NODE_TYPES, TRIGGER_TYPES, WorkflowConfig
+from builder.schedules.cron import ScheduleError, describe
+from builder.schedules.cron import validate as validate_cron
 
 MAX_EDIT_NODES = 40
 ADDABLE = NODE_TYPES - TRIGGER_TYPES
@@ -88,8 +90,9 @@ async def resolve(
 
 
 class Editor:
-    def __init__(self, name: str, nodes: list[dict], edges: list[dict], config: dict, resolved: Resolved):
+    def __init__(self, name: str, nodes: list[dict], edges: list[dict], config: dict, resolved: Resolved, *, timezone: str = "UTC"):
         self.name = name
+        self.timezone = timezone
         self.nodes = copy.deepcopy(nodes)
         self.edges = copy.deepcopy(edges)
         self.config = copy.deepcopy(config or {})
@@ -304,10 +307,27 @@ class Editor:
         trigger = next((n for n in self.nodes if n["type"] in TRIGGER_TYPES), None)
         if trigger is None:
             raise EditError("This workflow has no trigger to replace.")
+        schedule = self._schedule(op.get("schedule")) if ntype == "schedule_trigger" else None
         if trigger["type"] != ntype:
-            replacement = {"id": trigger["id"], "type": ntype, "position": trigger.get("position")}
+            replacement = {"id": trigger["id"], "type": ntype, "position": trigger.get("position"), "schedule": schedule}
             self.nodes[self.nodes.index(trigger)] = {k: v for k, v in replacement.items() if v is not None}
             self.changes.append(f"The workflow now starts with a {ntype.replace('_', ' ')}")
+        elif schedule is not None:
+            trigger["schedule"] = {**(trigger.get("schedule") or {}), **schedule}
+        if schedule is not None:
+            when = describe(schedule["cron"])
+            self.changes.append(f"It runs {when[:1].lower()}{when[1:]} ({schedule['timezone']})")
+
+    def _schedule(self, raw: Any) -> dict | None:
+        """{"cron": .., "timezone": ..} from the model, checked; timezone defaults to the user's."""
+        if not isinstance(raw, dict) or not _s(raw.get("cron")):
+            return None
+        sched = {"cron": _s(raw["cron"]), "timezone": _s(raw.get("timezone")) or self.timezone, "enabled": True}
+        try:
+            validate_cron(sched["cron"], sched["timezone"])
+        except ScheduleError as exc:
+            raise EditError(f"schedule: {exc}") from exc
+        return sched
 
     def rename_workflow(self, index: int, op: dict) -> None:
         name = _s(op.get("name"))

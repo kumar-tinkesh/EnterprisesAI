@@ -9,11 +9,12 @@ the AI Marketplace's ``engines/agent_settings.py``. Two deliberate changes:
 * ``approvals`` (ask before running read / edit / delete tools) lives on the
   agent, matching the tool runtime's risk levels.
 
-``guardrails`` stays an open object until the guardrails phase defines it.
+* ``guardrails`` (``builder.guardrails.engine``) are off unless switched on,
+  so existing agents behave exactly as before.
 """
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -54,6 +55,44 @@ class ReliabilitySettings(_Strict):
     )
 
 
+class GuardrailSettings(_Strict):
+    """Safety checks around every run of the agent (see builder.guardrails.engine)."""
+
+    # The request: refuse ones that try to override the agent's instructions.
+    injection: bool = False
+    # Tool results (an email, a web page, a document): fence off instructions
+    # hidden in them so the model treats them as data.
+    tool_injection: bool = False
+    # Replace personal data (emails, phones, cards, Aadhaar, PAN, …) before
+    # the model sees the request / before anyone sees the answer.
+    pii_input: bool = False
+    pii_output: bool = False
+    # Check the answer against what the knowledge base returned: "fast" =
+    # local similarity (catches answers that left the documents), "llm" = a
+    # claim-by-claim check (catches made-up details; one extra model call).
+    groundedness: bool = False
+    groundedness_mode: Literal["fast", "llm"] = "fast"
+    groundedness_min: float = Field(default=0.45, ge=0, le=1)
+    # Plain-language policies the answer must follow; told to the agent up
+    # front and checked on every answer (one extra model call).
+    custom_rules: list[str] = Field(default_factory=list, max_length=10)
+    # A broken rule or an unsupported claim: deliver the answer with a warning
+    # ("flag") or withhold it and fail the step ("block").
+    on_violation: Literal["flag", "block"] = "flag"
+
+    @field_validator("custom_rules")
+    @classmethod
+    def _rules(cls, value: list[str]) -> list[str]:
+        rules = [r.strip() for r in value if r and r.strip()]
+        too_long = [r for r in rules if len(r) > 300]
+        if too_long:
+            raise ValueError("each rule must be at most 300 characters")
+        return list(dict.fromkeys(rules))
+
+    def any_on(self) -> bool:
+        return any((self.injection, self.tool_injection, self.pii_input, self.pii_output, self.groundedness, self.custom_rules))
+
+
 class AgentConfig(_Strict):
     llm: LLMSettings = Field(default_factory=LLMSettings)
     # mcp:<server_id>:<tool_name>
@@ -63,7 +102,7 @@ class AgentConfig(_Strict):
     tools: ToolSettings = Field(default_factory=ToolSettings)
     reliability: ReliabilitySettings = Field(default_factory=ReliabilitySettings)
     approvals: ToolApprovalPolicy = Field(default_factory=ToolApprovalPolicy)
-    guardrails: dict[str, Any] = Field(default_factory=dict)
+    guardrails: GuardrailSettings = Field(default_factory=GuardrailSettings)
 
     @field_validator("tool_ids")
     @classmethod
@@ -97,5 +136,6 @@ __all__ = [
     "ResponseSettings",
     "ToolSettings",
     "ReliabilitySettings",
+    "GuardrailSettings",
     "merge_config",
 ]

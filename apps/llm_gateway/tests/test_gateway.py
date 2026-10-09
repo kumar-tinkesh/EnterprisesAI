@@ -1,3 +1,4 @@
+import dataclasses
 """
 Unit & Integration Tests for LLM Gateway (apps/llm_gateway).
 Run with: uv run pytest apps/llm_gateway/tests
@@ -80,8 +81,8 @@ def test_azure_from_marketplace_variables_becomes_default(clean_llm_env):
     assert settings.azure.is_configured and settings.azure.is_azure
     assert settings.azure.api_version == "2025-01-01-preview"
     assert settings.default_provider == "azure"
-    # no embedding deployment -> embeddings stay where they were
-    assert settings.embedding_provider == "gemini"
+    # embeddings stay on the local default
+    assert settings.embedding_provider == "fastembed"
 
 
 def test_azure_defaults_and_explicit_provider_wins(clean_llm_env):
@@ -96,7 +97,7 @@ def test_azure_defaults_and_explicit_provider_wins(clean_llm_env):
     assert settings.azure.api_version == "2024-06-01"
     assert settings.azure.azure_chat_deployment == "gpt-4o-mini"
     assert settings.default_provider == "openai"
-    assert settings.embedding_provider == "azure"
+    assert settings.embedding_provider == "fastembed"  # only an explicit setting picks a hosted one
 
 
 def test_no_azure_keeps_old_defaults(clean_llm_env):
@@ -107,7 +108,7 @@ def test_no_azure_keeps_old_defaults(clean_llm_env):
 
     assert settings.azure.is_configured is False
     assert settings.default_provider == "openai"
-    assert settings.embedding_provider == "gemini"
+    assert settings.embedding_provider == "fastembed"
 
 
 # ── Gateway Routing & Fallback Tests ─────────────────────────────────────────
@@ -190,6 +191,41 @@ async def test_llm_gateway_embeddings_skip_groq(mock_env_settings):
 
         assert len(resp.embeddings) == 1
         assert resp.provider == "openai"
+
+
+@pytest.mark.asyncio
+async def test_embeddings_use_fastembed_when_requested_provider_missing(mock_env_settings):
+    """gemini asked for but not configured -> fastembed, not another hosted provider."""
+    settings = dataclasses.replace(mock_env_settings, gemini=ProviderConfig(), embedding_provider="gemini")
+    fake = AsyncMock()
+    fake.model_name = "BAAI/bge-small-en-v1.5"
+    fake.embed.return_value = EmbeddingResponse(embeddings=[[0.5] * 4], model=fake.model_name, provider="fastembed")
+
+    with patch("apps.llm_gateway.gateway.OpenAIClient") as openai_cls, \
+         patch("apps.llm_gateway.gateway.GroqClient"), \
+         patch("apps.llm_gateway.gateway.FastEmbedClient", return_value=fake):
+        gw = LLMGateway(settings)
+        assert gw.embedding_provider == "fastembed"
+        resp = await gw.embed(["hello"])
+
+    assert resp.provider == "fastembed"
+    openai_cls.return_value.embed.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_embedding_failure_does_not_switch_provider(mock_env_settings):
+    """Another provider's vectors wouldn't match the stored ones, so a failure is raised."""
+    from apps.llm_gateway.exceptions import ProviderAPIError
+
+    failing = AsyncMock()
+    failing.embed.side_effect = ProviderAPIError("down", provider="openai", status_code=503, retryable=True)
+    with patch("apps.llm_gateway.gateway.OpenAIClient", return_value=failing), \
+         patch("apps.llm_gateway.gateway.GroqClient"), \
+         patch("apps.llm_gateway.gateway.GeminiClient") as gemini_cls:
+        gw = LLMGateway(mock_env_settings)
+        with pytest.raises(ProviderAPIError):
+            await gw.embed(["hello"])
+    gemini_cls.return_value.embed.assert_not_called()
 
 
 # ── FastAPI Endpoint Tests ────────────────────────────────────────────────────

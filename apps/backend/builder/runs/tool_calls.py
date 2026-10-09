@@ -10,6 +10,9 @@ and workflow tool steps.
   returned; nothing is sent again.
 * Needs a yes (the site's approval policy for the tool's risk) -> a
   ``tool_call`` approval; approved / edited -> runs, rejected -> declined.
+* In a test run (``site.dry_run``) a data-changing call is recorded and
+  answered as if it worked, without being sent or asking anyone: testing an
+  agent is no reason to change real records. Read calls run for real.
 * Left ``started`` by an interruption, or the connection broke mid-call
   (``may_have_run``): a read tool simply runs again; a data-changing one
   becomes an ``uncertain_call`` approval — "this may already have run, run
@@ -54,6 +57,14 @@ class CallSite:
     # Shown to the approver: "<requester> wants to run <tool> on <server>".
     requester: str
     emit: Callable[..., Awaitable[None]]
+    # A test run: don't send data-changing calls, answer them as if they worked.
+    dry_run: bool = False
+
+
+DRY_RUN_RESULT = (
+    "[Test run] This action was not actually performed, because this is a test. "
+    "Carry on as if it succeeded."
+)
 
 
 @dataclass
@@ -122,7 +133,18 @@ async def ledgered_call(site: CallSite, tool: AgentTool, call_key: str, argument
 
         if ledger is None:
             validate_arguments(tool.input_schema, arguments)
-            needs_yes = getattr(site.approvals, risk.risk)
+            if site.dry_run and risk.risk != "read":
+                db.add(BuilderToolCall(
+                    run_id=site.run_id, node_run_id=site.node_run_id, node_id=site.node_id, call_key=call_key,
+                    server_id=tool.server_id, tool_name=tool.tool_name, risk=risk.risk, arguments=arguments,
+                    status=states.CALL_SUCCEEDED, result_text=DRY_RUN_RESULT, is_error=False, finished_at=utcnow(),
+                ))
+                await db.commit()
+                await site.emit("tool_call", phase="started", tool=tool.tool_name, server=tool.server_name, risk=risk.risk,
+                                arguments=arguments, node_id=site.node_id, simulated=True)
+                await site.emit("tool_call", phase="finished", tool=tool.tool_name, is_error=False, node_id=site.node_id, simulated=True)
+                return CallOutcome(text=DRY_RUN_RESULT)
+            needs_yes = getattr(site.approvals, risk.risk) and not site.dry_run
             ledger = BuilderToolCall(
                 run_id=site.run_id, node_run_id=site.node_run_id, node_id=site.node_id, call_key=call_key,
                 server_id=tool.server_id, tool_name=tool.tool_name, risk=risk.risk, arguments=arguments,

@@ -7,6 +7,8 @@
   ``RUN_HEARTBEAT_SECONDS``. If renewal fails — the run was cancelled, or this
   worker stalled long enough for another to take over — the execution is
   cancelled at once; whatever it checkpointed stays for the next holder.
+* The schedule loop (every ``SCHEDULE_POLL_SECONDS``) starts due scheduled
+  runs; every worker runs one, and each occurrence is claimed by exactly one.
 * The reaper (every ``RUN_REAPER_INTERVAL_SECONDS``) re-enqueues runs whose
   lease lapsed (their worker died) and queued runs whose message was lost.
   Every worker runs one; duplicates are harmless because of the lease.
@@ -42,11 +44,15 @@ class Worker:
 
     # ── lifecycle ──
 
-    async def start(self, *, reaper: bool = True) -> None:
+    async def start(self, *, reaper: bool = True, schedules: bool | None = None) -> None:
         self._stopping = False
         self._loops.append(asyncio.create_task(self._consume_loop(), name=f"worker-consume:{self.worker_id}"))
         if reaper:
             self._loops.append(asyncio.create_task(self._reaper_loop(), name=f"worker-reaper:{self.worker_id}"))
+        if schedules is None:
+            schedules = get_builder_settings().BUILDER_SCHEDULER_ENABLED
+        if schedules:
+            self._loops.append(asyncio.create_task(self._schedule_loop(), name=f"worker-schedules:{self.worker_id}"))
         logger.info("builder worker %s started (concurrency=%d)", self.worker_id, self.concurrency)
 
     async def stop(self) -> None:
@@ -93,6 +99,23 @@ class Worker:
             await asyncio.sleep(interval)
             with contextlib.suppress(Exception):
                 await self.reap()
+            with contextlib.suppress(Exception):
+                from builder.quality.suite import sweep
+
+                await sweep()
+
+    async def _schedule_loop(self) -> None:
+        from builder.schedules.service import fire_due
+
+        interval = get_builder_settings().SCHEDULE_POLL_SECONDS
+        while not self._stopping:
+            try:
+                await fire_due()
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 — e.g. DB briefly unreachable; try next tick
+                logger.warning("schedule check failed; retrying", exc_info=True)
+            await asyncio.sleep(interval)
 
     async def reap(self) -> int:
         stuck = await lease.stuck_run_ids()
@@ -118,10 +141,18 @@ class Worker:
                 raise
             # Only the execution was cancelled — by the heartbeat, on losing the
             # lease. Whoever holds it now (if anyone) continues; nothing to do.
+            return
         finally:
             heartbeat.cancel()
             with contextlib.suppress(BaseException):
                 await heartbeat
+        # A test case's run: grade it now (the reaper's sweep catches any we miss).
+        try:
+            from builder.quality.suite import on_run_finished
+
+            await on_run_finished(run_id)
+        except Exception:  # noqa: BLE001 — grading must never take the worker down
+            logger.warning("grading test run failed run=%s", run_id, exc_info=True)
 
     async def _heartbeat(self, run_id: str, execution: asyncio.Task) -> None:
         every = get_builder_settings().RUN_HEARTBEAT_SECONDS

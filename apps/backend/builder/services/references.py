@@ -31,7 +31,8 @@ from vendor.services.mcp_service.crud import is_server_visible_to_user
 
 from builder.agents.config import AgentConfig, merge_config
 from builder.graph.schema import WorkflowConfig, WorkflowNode, parse_tool_id
-from builder.graph.validation import GraphProblem
+from builder.graph.schema import WorkflowEdge
+from builder.graph.validation import GraphProblem, validate_graph
 from builder.models import BuilderAgent
 
 
@@ -187,10 +188,29 @@ async def workflow_reference_problems(
     return _dedupe(problems)
 
 
+async def check_workflow(
+    db: AsyncSession,
+    user: CurrentUser,
+    *,
+    workflow_id: str | None,
+    nodes: list[WorkflowNode],
+    edges: list[WorkflowEdge],
+    config: WorkflowConfig,
+    check_connection: bool,
+) -> list[GraphProblem]:
+    """Structure + references (+ this user's connections, for preflight)."""
+    problems = validate_graph(nodes, edges)
+    problems += await workflow_reference_problems(
+        db, user, workflow_id=workflow_id, nodes=nodes, config=config, check_connection=check_connection
+    )
+    return problems
+
+
 __all__ = [
     "config_errors",
     "tool_problems",
     "knowledge_problems",
     "agent_config_problems",
     "workflow_reference_problems",
+    "check_workflow",
 ]

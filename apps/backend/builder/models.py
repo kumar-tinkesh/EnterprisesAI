@@ -127,6 +127,13 @@ class BuilderRun(Base, TimestampMixin):
     completion_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Set when a schedule started it (NULL = a person did).
+    schedule_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    # "run" (a person or a schedule) | "test" (a test case: data-changing tool
+    # calls are simulated, approval steps pass on their own — see builder.quality).
+    purpose: Mapped[str] = mapped_column(String(20), default="run", server_default="run", index=True)
+    # Started through the public API with this publishable key (purpose "public").
+    public_key_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
 
 
 class BuilderNodeRun(Base, TimestampMixin):
@@ -217,7 +224,218 @@ class BuilderApproval(Base, TimestampMixin):
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class BuilderSchedule(Base, TimestampMixin):
+    """Run an agent or a workflow automatically, on a cron schedule.
+
+    A workflow's schedule comes from its Schedule trigger step (kept in sync on
+    every save, keyed by ``node_id``); an agent's is made directly. Either way
+    it runs as ``owner_id`` with *their* connected tools, exactly like a run
+    they started — and is checked the same way first: if it can't run (a tool
+    got disconnected, a required input is empty) that occurrence is skipped
+    and ``last_error`` says why, instead of a run that fails half-way.
+
+    Fired by every worker's schedule loop; a conditional update on
+    ``next_run_at`` makes sure each occurrence starts exactly one run however
+    many workers see it. ``next_run_at`` is UTC, recomputed from the cron in
+    the schedule's own timezone each time (DST-correct). NULL = paused.
+    """
+
+    __tablename__ = "builder_schedules"
+    __table_args__ = (
+        Index("ix_builder_schedules_due", "enabled", "next_run_at"),
+        UniqueConstraint("workflow_id", "node_id", name="uq_builder_schedule_workflow_node"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    owner_id: Mapped[str] = mapped_column(String(36), index=True)
+    kind: Mapped[str] = mapped_column(String(20))  # agent | workflow
+    agent_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("builder_agents.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    workflow_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("builder_workflows.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    # The workflow's Schedule trigger step this row mirrors (NULL for agents).
+    node_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    cron: Mapped[str] = mapped_column(String(100))
+    timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    # What each run is asked: {"text": "...", "variables": {...}}.
+    input: Mapped[dict] = mapped_column(JSON, default=dict)
+    enabled: Mapped[bool] = mapped_column(default=True)
+    next_run_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_run_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_run_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    # started | skipped | error
+    last_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class BuilderVersion(Base, TimestampMixin):
+    """A saved version of an agent or a workflow: the full definition as it
+    was right after that save, so any earlier state can be looked at again or
+    brought back.
+
+    One row per save (``version`` = the definition's version number after
+    it). A restore is itself a new save, so history only ever grows forward.
+    A workflow's snapshot also carries the workflow's own agents (the ones its
+    steps created), since restoring the graph without them would point at
+    agents that may since have been changed or removed; shared standalone
+    agents keep their own history.
+    """
+
+    __tablename__ = "builder_versions"
+    __table_args__ = (
+        UniqueConstraint("agent_id", "version", name="uq_builder_version_agent"),
+        UniqueConstraint("workflow_id", "version", name="uq_builder_version_workflow"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(20))  # agent | workflow
+    agent_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("builder_agents.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    workflow_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("builder_workflows.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    version: Mapped[int] = mapped_column(Integer)
+    # agent: name, role, goal, instructions, llm_provider, llm_model, config.
+    # workflow: name, description, nodes, edges, config, agents {id: agent fields}.
+    snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Why it exists ("Created", "Saved", "Restored from v3") and what changed
+    # since the version before it, in words.
+    note: Mapped[str] = mapped_column(String(255), default="")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    author_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+
+
+class BuilderTestCase(Base, TimestampMixin):
+    """One test of an agent or workflow: what it's asked, and what a good
+    response does (a behaviour to look for, not an exact answer)."""
+
+    __tablename__ = "builder_test_cases"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    agent_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("builder_agents.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    workflow_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("builder_workflows.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    title: Mapped[str] = mapped_column(String(255))
+    input: Mapped[str] = mapped_column(Text)
+    # A workflow's input fields, by name.
+    variables: Mapped[dict] = mapped_column(JSON, default=dict)
+    expectation: Mapped[str] = mapped_column(Text)
+    # normal | ambiguous | knowledge_gap | tools | safety | injection | out_of_scope
+    category: Mapped[str] = mapped_column(String(30), default="normal")
+    # manual | generated
+    source: Mapped[str] = mapped_column(String(20), default="manual")
+    created_by: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+
+
+class BuilderTestRun(Base, TimestampMixin):
+    """Running a set of test cases against one version of an agent/workflow.
+
+    Each case is a real run (``BuilderRun.purpose == "test"``) through the same
+    worker, graded by a model judge when it finishes; the score is the mean of
+    the case scores, also broken down by what each category tests.
+    """
+
+    __tablename__ = "builder_test_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    owner_id: Mapped[str] = mapped_column(String(36), index=True)
+    kind: Mapped[str] = mapped_column(String(20))  # agent | workflow
+    agent_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("builder_agents.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    workflow_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("builder_workflows.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    definition_version: Mapped[int] = mapped_column(Integer, default=1)
+    # running | done | cancelled
+    status: Mapped[str] = mapped_column(String(20), default="running", index=True)
+    score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 0-100
+    passed: Mapped[int] = mapped_column(Integer, default=0)
+    total: Mapped[int] = mapped_column(Integer, default=0)
+    # {"behaviour": 80, "safety": 100, ...}
+    dimensions: Mapped[dict] = mapped_column(JSON, default=dict)
+    judge_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class BuilderTestResult(Base, TimestampMixin):
+    """One case within a test run: its run, and the judge's verdict on it.
+    The case's text is copied in, so results survive the case being edited."""
+
+    __tablename__ = "builder_test_results"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    test_run_id: Mapped[str] = mapped_column(ForeignKey("builder_test_runs.id", ondelete="CASCADE"), index=True)
+    case_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    run_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    category: Mapped[str] = mapped_column(String(30))
+    input: Mapped[str] = mapped_column(Text)
+    expectation: Mapped[str] = mapped_column(Text)
+    # running | passed | failed | error (it couldn't run at all)
+    status: Mapped[str] = mapped_column(String(20), default="running", index=True)
+    score: Mapped[Optional[float]] = mapped_column(nullable=True)  # 0-1
+    reasoning: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    answer: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class BuilderPublicKey(Base, TimestampMixin):
+    """A publishable key: lets apps and websites run ONE agent or workflow
+    through the public API (``/api/v1/public``) without a login.
+
+    Runs as the person who created the key, with *their* connected tools —
+    data-changing calls still wait for their approval unless they turned that
+    off — so publishing is theirs to decide (creator or tenant admin, and an
+    explicit yes when write tools are exposed). Only a SHA-256 hash of the
+    key is stored; the key itself is shown once, at creation.
+
+    ``version`` pins a saved version (later edits don't change what callers
+    get until the key is moved to a newer one); NULL = the latest saved.
+    """
+
+    __tablename__ = "builder_public_keys"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    owner_id: Mapped[str] = mapped_column(String(36), index=True)
+    kind: Mapped[str] = mapped_column(String(20))  # agent | workflow
+    agent_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("builder_agents.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    workflow_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("builder_workflows.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    name: Mapped[str] = mapped_column(String(120))
+    key_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    # "eai_pk_ab12" — enough to recognise a key in a list, useless for calling.
+    key_prefix: Mapped[str] = mapped_column(String(20))
+    # active | paused | revoked
+    status: Mapped[str] = mapped_column(String(20), default="active")
+    version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Browser origins allowed to use it ("https://acme.com"); empty = any (server-to-server too).
+    allowed_origins: Mapped[list] = mapped_column(JSON, default=list)
+    requests_per_minute: Mapped[int] = mapped_column(Integer, default=20)
+    daily_quota: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 __all__ = [
+    "BuilderPublicKey",
+    "BuilderTestCase",
+    "BuilderTestRun",
+    "BuilderTestResult",
+    "BuilderVersion",
+    "BuilderSchedule",
     "BuilderWorkflow",
     "BuilderAgent",
     "BuilderRun",

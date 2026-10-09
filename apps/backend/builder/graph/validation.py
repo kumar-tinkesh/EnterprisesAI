@@ -181,6 +181,14 @@ def validate_graph(nodes: list[WorkflowNode], edges: list[WorkflowEdge]) -> list
     for n in by_id.values():
         outs = outgoing.get(n.id, [])
         ins = incoming.get(n.id, [])
+        if n.type == "schedule_trigger" and n.schedule and (n.schedule.get("cron") or "").strip():
+            # No cron yet is fine (saved, just not scheduled); a bad one isn't.
+            from builder.schedules.cron import ScheduleError, validate as validate_cron
+
+            try:
+                validate_cron(str(n.schedule["cron"]), str(n.schedule.get("timezone") or "UTC"))
+            except ScheduleError as exc:
+                problems.append(GraphProblem("bad_schedule", f"Schedule: {exc}", n.id))
         if n.type == "agent" and not n.agent_id and n.draft_agent is None:
             problems.append(GraphProblem("agent_missing", f"Agent step {_name(n)} has no agent selected.", n.id))
         elif n.type == "tool":

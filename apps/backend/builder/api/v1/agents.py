@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import CurrentUser
@@ -19,7 +19,9 @@ from src.db.session import get_db
 from builder.agents.config import AgentConfig
 from builder.api.v1.definitions import AgentCreate, AgentOut, AgentUpdate, CheckResult, Problem
 from builder.api.v1.deps import can_manage, get_end_user, problems_response, version_conflict
-from builder.models import BuilderAgent, BuilderWorkflow
+from builder.models import BuilderAgent, BuilderPublicKey, BuilderSchedule, BuilderTestCase, BuilderTestRun, BuilderVersion, BuilderWorkflow
+from builder.quality.cleanup import delete_tests
+from builder.versions.service import ensure_baseline, record_version
 from builder.services.references import agent_config_problems
 
 router = APIRouter()
@@ -111,6 +113,7 @@ async def create_agent(
         config=payload.config.model_dump(),
     )
     db.add(agent)
+    await record_version(db, "agent", agent, author_id=user.id, note="Created")
     await db.commit()
     await db.refresh(agent)
     return agent_out(agent, user)
@@ -133,6 +136,7 @@ async def update_agent(
         raise HTTPException(status_code=403, detail="Only the agent's creator or a tenant admin can change it.")
     if payload.expected_version is not None and payload.expected_version != agent.version:
         raise version_conflict(agent.version)
+    await ensure_baseline(db, "agent", agent)
 
     if payload.config is not None:
         problems = await agent_config_problems(db, user, payload.config, check_connection=False)
@@ -144,6 +148,7 @@ async def update_agent(
         if value is not None:
             setattr(agent, field, value.strip())
     agent.version += 1
+    await record_version(db, "agent", agent, author_id=user.id, note="Saved")
     await db.commit()
     await db.refresh(agent)
     return agent_out(agent, user)
@@ -158,6 +163,10 @@ async def delete_agent(agent_id: str, user: CurrentUser = Depends(get_end_user),
     if users:
         names = ", ".join(f'"{wf.name}"' for wf in users[:5])
         raise HTTPException(status_code=409, detail=f"This agent is used by workflow {names}. Remove those steps first.")
+    await db.execute(delete(BuilderSchedule).where(BuilderSchedule.agent_id == agent.id))
+    await db.execute(delete(BuilderVersion).where(BuilderVersion.agent_id == agent.id))
+    await delete_tests(db, BuilderTestCase.agent_id == agent.id, BuilderTestRun.agent_id == agent.id)
+    await db.execute(delete(BuilderPublicKey).where(BuilderPublicKey.agent_id == agent.id))
     await db.delete(agent)
     await db.commit()
 

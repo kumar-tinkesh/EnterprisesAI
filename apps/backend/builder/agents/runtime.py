@@ -18,6 +18,11 @@ again — after an approval, or on another worker after a crash:
 * **Approvals.** The agent's approval policy (read / edit / delete) decides
   which calls need a yes first. The run then pauses (``Paused``) and the
   worker lets go; the decision re-queues it.
+* **Guardrails** (``builder.guardrails``, when the agent has any on): the
+  request is checked before the first model call, each tool result before
+  the model reads it, and the answer once — its outcome is checkpointed, so a
+  resume never re-runs (or re-bills) the answer checks. Every finding is
+  emitted as a ``guardrail`` event and returned on the result.
 
 Model requests go through the LLM gateway with the agent's retry settings.
 """
@@ -36,6 +41,7 @@ from builder.agents.config import AgentConfig
 from builder.agents.prompts import system_prompt
 from builder.agents.tools import KNOWLEDGE_TOOL, AgentTool, function_definitions, resolve_agent_tools, search_knowledge
 from builder.graph.schema import ToolApprovalPolicy
+from builder.guardrails.engine import MAX_EVIDENCE, Flag, check_input, check_output, check_tool_result
 from builder.models import BuilderNodeRun
 from builder.runs.db import session_factory
 from builder.runs.tool_calls import CallSite, Paused, ledgered_call
@@ -57,6 +63,14 @@ class AgentFailed(Exception):
     """The agent can't finish (model unavailable, a tool failed with on_failure=stop, …)."""
 
 
+class GuardrailBlocked(AgentFailed):
+    """A guardrail stopped the run (the request was refused, or the answer withheld)."""
+
+    def __init__(self, message: str, flags: list[dict]):
+        super().__init__(message)
+        self.flags = flags
+
+
 @dataclass
 class AgentContext:
     run_id: str
@@ -69,6 +83,10 @@ class AgentContext:
     input_text: str
     approvals: ToolApprovalPolicy
     emit: Callable[..., Awaitable[None]]
+    # A test run (see builder.runs.tool_calls.CallSite.dry_run).
+    dry_run: bool = False
+    # How much answer the person asked for: "auto" | "short" | "detailed".
+    depth: str = "auto"
 
 
 @dataclass
@@ -78,6 +96,8 @@ class AgentResult:
     completion_tokens: int = 0
     tool_calls: int = 0
     sources: list[str] = field(default_factory=list)
+    # What the guardrails found or did (builder.guardrails.engine.Flag dicts).
+    guardrails: list[dict] = field(default_factory=list)
 
 
 def _gateway():
@@ -152,7 +172,27 @@ def _model_text(text: str) -> str:
     return text[:MAX_TOOL_TEXT_FOR_MODEL] + f"\n… [{len(text) - MAX_TOOL_TEXT_FOR_MODEL} more characters not shown]"
 
 
-async def _run_call(ctx: AgentContext, by_fn: dict[str, AgentTool], turn: int, index: int, call: dict, sources: list[str]) -> str:
+async def _note(ctx: AgentContext, state: dict, flags: list[Flag]) -> None:
+    """Keep guardrail findings on the run's state and show them as they happen."""
+    for f in flags:
+        state.setdefault("guardrails", []).append(f.as_dict())
+        await ctx.emit("guardrail", node_id=ctx.node_id, rule=f.rule, severity=f.severity, message=f.message)
+
+
+async def _judge(ctx: AgentContext, prompt: str) -> tuple[str, int, int]:
+    """One model call for a guardrail check, on the agent's own model."""
+    response = await _complete(ctx, [{"role": "user", "content": prompt}], None)
+    return response.content or "", response.usage.prompt_tokens or 0, response.usage.completion_tokens or 0
+
+
+async def _guard_tool_result(ctx: AgentContext, state: dict, tool: str, text: str) -> str:
+    text, flags = check_tool_result(text, tool, ctx.config.guardrails)
+    await _note(ctx, state, flags)
+    return text
+
+
+async def _run_call(ctx: AgentContext, by_fn: dict[str, AgentTool], turn: int, index: int, call: dict, state: dict) -> str:
+    sources: list[str] = state["sources"]
     name = call["name"]
     try:
         arguments = json.loads(call.get("arguments") or "{}")
@@ -167,10 +207,14 @@ async def _run_call(ctx: AgentContext, by_fn: dict[str, AgentTool], turn: int, i
             return "Error: give a query to search for."
         await ctx.emit("tool_call", phase="started", tool=KNOWLEDGE_TOOL, risk="read", node_id=ctx.node_id)
         async with session_factory() as db:
-            text = await search_knowledge(db, tenant_id=ctx.user.tenant_id, kb_ids=ctx.config.knowledge_base_ids, query=query)
-        sources.extend(line.split("source: ", 1)[1].rstrip(")") for line in text.splitlines() if "(source: " in line)
+            text, passages = await search_knowledge(db, tenant_id=ctx.user.tenant_id, kb_ids=ctx.config.knowledge_base_ids, query=query)
+        sources.extend(p["filename"] for p in passages)
+        if ctx.config.guardrails.groundedness:
+            evidence = state.setdefault("evidence", [])
+            evidence.extend(p["content"][:2000] for p in passages if p["content"] not in evidence)
+            del evidence[:-MAX_EVIDENCE]
         await ctx.emit("tool_call", phase="finished", tool=KNOWLEDGE_TOOL, is_error=False, node_id=ctx.node_id)
-        return text
+        return await _guard_tool_result(ctx, state, "the knowledge base", text)
 
     tool = by_fn.get(name)
     if tool is None:
@@ -178,7 +222,7 @@ async def _run_call(ctx: AgentContext, by_fn: dict[str, AgentTool], turn: int, i
     site = CallSite(
         run_id=ctx.run_id, node_run_id=ctx.node_run_id, node_id=ctx.node_id, user=ctx.user,
         approvals=ctx.approvals, timeout=ctx.config.tools.timeout_seconds,
-        requester=ctx.agent.get("name") or "The agent", emit=ctx.emit,
+        requester=ctx.agent.get("name") or "The agent", emit=ctx.emit, dry_run=ctx.dry_run,
     )
     try:
         outcome = await ledgered_call(site, tool, f"{ctx.node_id}:a{ctx.attempt}:t{turn}:c{index}", arguments)
@@ -186,7 +230,7 @@ async def _run_call(ctx: AgentContext, by_fn: dict[str, AgentTool], turn: int, i
         return "Error: " + exc.message + " " + "; ".join(exc.errors)
     if outcome.is_error and not outcome.declined and ctx.config.tools.on_failure == "stop":
         raise AgentFailed(f"{tool.tool_name} failed: {outcome.error or outcome.text[:500]}")
-    return _model_text(outcome.text)
+    return await _guard_tool_result(ctx, state, tool.tool_name, _model_text(outcome.text))
 
 
 async def run_agent(ctx: AgentContext) -> AgentResult:
@@ -198,18 +242,25 @@ async def run_agent(ctx: AgentContext) -> AgentResult:
     has_knowledge = bool(ctx.config.knowledge_base_ids)
     tool_defs = function_definitions(tools, with_knowledge=has_knowledge)
 
+    guard = ctx.config.guardrails
     if not state.get("messages"):
+        checked = check_input(ctx.input_text, guard)
+        if checked.blocked:
+            await _note(ctx, {}, checked.flags)
+            raise GuardrailBlocked(checked.blocked, [f.as_dict() for f in checked.flags])
         state = {
             "messages": [
-                {"role": "system", "content": system_prompt(ctx.agent, ctx.config, has_tools=bool(tool_defs), has_knowledge=has_knowledge)},
-                {"role": "user", "content": ctx.input_text},
+                {"role": "system", "content": system_prompt(ctx.agent, ctx.config, has_tools=bool(tool_defs), has_knowledge=has_knowledge, depth=ctx.depth)},
+                {"role": "user", "content": checked.text},
             ],
             "turn": 0,
             "tool_calls": 0,
             "prompt_tokens": 0,
             "completion_tokens": 0,
             "sources": [],
+            "guardrails": [],
         }
+        await _note(ctx, state, checked.flags)
         await _checkpoint(ctx, state)
     messages: list[dict] = state["messages"]
     sources: list[str] = state.setdefault("sources", [])
@@ -221,17 +272,30 @@ async def run_agent(ctx: AgentContext) -> AgentResult:
             for index, call in enumerate(last["tool_calls"]):
                 if call["id"] in answered:
                     continue
-                text = await _run_call(ctx, by_fn, state["turn"], index, call, sources)
+                text = await _run_call(ctx, by_fn, state["turn"], index, call, state)
                 messages.append({"role": "tool", "tool_call_id": call["id"], "content": text})
                 state["tool_calls"] += 1
                 await _checkpoint(ctx, state)
         elif last["role"] == "assistant":
+            text = last.get("content") or ""
+            if guard.any_on():
+                if "final" not in state:  # checked once, then saved: a resume reuses the outcome
+                    checked_out = await check_output(text, state.get("evidence") or [], guard, lambda p: _judge(ctx, p))
+                    state["prompt_tokens"] += checked_out.prompt_tokens
+                    state["completion_tokens"] += checked_out.completion_tokens
+                    state["final"] = {"text": checked_out.text, "blocked": checked_out.blocked}
+                    await _note(ctx, state, checked_out.flags)
+                    await _checkpoint(ctx, state)
+                if state["final"]["blocked"]:
+                    raise GuardrailBlocked(state["final"]["blocked"], list(state.get("guardrails") or []))
+                text = state["final"]["text"]
             return AgentResult(
-                text=last.get("content") or "",
+                text=text,
                 prompt_tokens=state["prompt_tokens"],
                 completion_tokens=state["completion_tokens"],
                 tool_calls=state["tool_calls"],
                 sources=list(dict.fromkeys(sources)),
+                guardrails=list(state.get("guardrails") or []),
             )
 
         out_of_budget = state["tool_calls"] >= ctx.config.tools.max_calls
@@ -254,4 +318,4 @@ async def run_agent(ctx: AgentContext) -> AgentResult:
         await ctx.emit("agent_turn", turn=state["turn"], node_id=ctx.node_id, tool_calls=[c["name"] for c in message.get("tool_calls", [])])
 
 
-__all__ = ["AgentContext", "AgentResult", "AgentFailed", "Paused", "run_agent"]
+__all__ = ["AgentContext", "AgentResult", "AgentFailed", "GuardrailBlocked", "Paused", "run_agent"]

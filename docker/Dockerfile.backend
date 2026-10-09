@@ -1,11 +1,24 @@
 # ---------------------------------------------------------------------------
 # Backend Service Dockerfile
 # Builds the EnterpriseAI backend service for MCP server management
+#
+# Build speed: layers are ordered from "almost never changes" to "changes
+# every commit", and base images are pinned by digest, so an ordinary code
+# change only re-runs the final COPY. Bump a digest (and uv's version)
+# deliberately to pick up base-image updates:
+#   docker pull python:3.12-slim && docker image inspect --format '{{index .RepoDigests 0}}' python:3.12-slim
 # ---------------------------------------------------------------------------
+ARG PYTHON_IMAGE=python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
+ARG GOLANG_IMAGE=golang:1.26-bookworm@sha256:d9c68c2c51161e12fd77e4c6320687c9cd86e1af1e3ad6e6cd63ff970641453c
+ARG NODE_IMAGE=node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.12.24
+
+FROM ${UV_IMAGE} AS uv
+FROM ${NODE_IMAGE} AS node
 
 # --- Stage 1 (Parallel): WhatsApp bridge builder (Go) -----------------------
 # Vendored + patched fork of github.com/lharries/whatsapp-mcp's Go bridge.
-FROM golang:1.26-bookworm AS whatsapp_bridge_builder
+FROM ${GOLANG_IMAGE} AS whatsapp_bridge_builder
 WORKDIR /src
 COPY apps/backend/vendor/services/whatsapp_bridge/vendor_src/bridge/go.mod \
      apps/backend/vendor/services/whatsapp_bridge/vendor_src/bridge/go.sum ./
@@ -15,33 +28,41 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     go build -o /out/whatsapp-bridge .
 
-# --- Stage 2 (Parallel): Python dependencies builder ------------------------
-FROM python:3.12-slim AS python_builder
+# --- Stage 2 (Parallel): Python dependencies --------------------------------
+# Instruction-for-instruction the same as Dockerfile.auth's deps stage, so
+# BuildKit runs this `uv sync` once and both images reuse it.
+FROM ${PYTHON_IMAGE} AS base
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     UV_COMPILE_BYTECODE=1 \
-    UV_LINK_MODE=copy \
-    FASTEMBED_CACHE_PATH=/app/.cache/fastembed
+    UV_LINK_MODE=copy
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+COPY --from=uv /uv /uvx /bin/
 
 WORKDIR /app
+
+FROM base AS deps
 COPY pyproject.toml uv.lock .python-version ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project
 
-# Pre-download the hybrid-search reranker's ONNX model (~80MB) in this stage
-# so it is CACHED once and never re-downloaded when application source code changes.
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv run python -c "from fastembed.rerank.cross_encoder import TextCrossEncoder; TextCrossEncoder(model_name='Xenova/ms-marco-MiniLM-L-6-v2')"
+# --- Stage 3 (Parallel): ONNX models (~210MB) -------------------------------
+# The hybrid-search reranker and the knowledge-base embedder. Downloaded into
+# a cache mount, so a dependency change (new uv.lock) re-copies them from
+# disk instead of downloading them again.
+FROM deps AS models
+RUN --mount=type=cache,target=/root/.cache/fastembed-models \
+    FASTEMBED_CACHE_PATH=/root/.cache/fastembed-models .venv/bin/python -c "\
+from fastembed import TextEmbedding; \
+from fastembed.rerank.cross_encoder import TextCrossEncoder; \
+TextCrossEncoder(model_name='Xenova/ms-marco-MiniLM-L-6-v2'); \
+TextEmbedding(model_name='BAAI/bge-small-en-v1.5')" \
+    && mkdir -p /app/.cache \
+    && cp -r /root/.cache/fastembed-models /app/.cache/fastembed
 
-# Same for the knowledge-base embedding model (~130MB, KNOWLEDGE_EMBEDDING_BACKEND=fastembed).
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv run python -c "from fastembed import TextEmbedding; TextEmbedding(model_name='BAAI/bge-small-en-v1.5')"
-
-# --- Stage 3: Runtime --------------------------------------------------------
-FROM python:3.12-slim AS runtime
+# --- Stage 4: Runtime --------------------------------------------------------
+FROM ${PYTHON_IMAGE} AS runtime
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -51,33 +72,40 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
-
-# Install runtime system tools using BuildKit APT cache (without slow build-essential)
+# System tools first: they change least, so this layer stays cached.
+# (Node comes from the official image below, not Debian's nodejs/npm, which
+# pulls in ~300 extra packages.)
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends \
+    rm -f /etc/apt/apt.conf.d/docker-clean \
+    && apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
-    nodejs \
-    npm \
-    tesseract-ocr \
-    && rm -rf /var/lib/apt/lists/*
+    tesseract-ocr
+
+# Node + npm/npx for stdio MCP servers launched with `npx`.
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+
+# uv/uvx for stdio MCP servers launched with `uvx`.
+COPY --from=uv /uv /uvx /bin/
 
 # Copy WhatsApp bridge from Go builder
 COPY --from=whatsapp_bridge_builder /out/whatsapp-bridge /app/bin/whatsapp-bridge
 
-# Copy Python venv and cached FastEmbed model from Python builder
-COPY --from=python_builder /app/.venv /app/.venv
-COPY --from=python_builder /app/.cache /app/.cache
-
-# Copy project files needed for uv and execution
-COPY pyproject.toml uv.lock .python-version alembic.ini ./
-COPY apps/ apps/
+# Python venv and the downloaded models
+COPY --from=deps /app/.venv /app/.venv
+COPY --from=models /app/.cache /app/.cache
 
 # Entrypoint script
 COPY docker/entrypoint.backend.sh entrypoint.sh
 RUN sed -i 's/\r$//' entrypoint.sh && chmod +x entrypoint.sh
+
+# Application code last: an ordinary change re-runs only these layers.
+COPY pyproject.toml uv.lock .python-version alembic.ini ./
+COPY apps/ apps/
 
 EXPOSE 8002
 

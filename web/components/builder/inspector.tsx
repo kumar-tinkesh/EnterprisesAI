@@ -5,10 +5,12 @@ import { AlertTriangle, Plus, Trash2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { AgentFields } from "@/components/builder/agent-fields";
+import { AgentStepConfig } from "@/components/builder/agent-step-config";
 import { Field, JsonField, RiskBadge, Section, Select, Textarea, Toggle } from "@/components/builder/fields";
+import { WorkflowScheduleFields } from "@/components/builder/schedule-fields";
 import { ToolPicker } from "@/components/builder/tool-picker";
-import { builderApi } from "@/lib/builder/api";
+import { builderApi, browserTimezone } from "@/lib/builder/api";
+import { DEFAULT_CRON } from "@/lib/builder/schedule";
 import { NODE_META, isTrigger, serverIdOf, toolName } from "@/lib/builder/graph";
 import type {
   Agent,
@@ -60,11 +62,13 @@ export function StepInspector({
   standaloneAgents,
   problems,
   token,
+  workflowId,
   onChange,
   onEdgeChange,
   onDelete,
   onClose,
 }: {
+  workflowId: string;
   node: WorkflowNode;
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
@@ -110,9 +114,30 @@ export function StepInspector({
           )}
         </Section>
 
+        {isTrigger(node.type) && (
+          <Section title="Starts">
+            <Select
+              value={node.type}
+              onChange={(e) => {
+                const type = e.target.value as WorkflowNode["type"];
+                onChange({
+                  type,
+                  schedule: type === "schedule_trigger" ? node.schedule ?? { cron: DEFAULT_CRON, timezone: browserTimezone(), enabled: true } : node.schedule,
+                });
+              }}
+            >
+              <option value="input">When someone runs it with a request</option>
+              <option value="manual_trigger">When someone presses Run</option>
+              <option value="schedule_trigger">On a schedule</option>
+            </Select>
+          </Section>
+        )}
+        {node.type === "schedule_trigger" && (
+          <WorkflowScheduleFields node={node} token={token} workflowId={workflowId} onChange={onChange} />
+        )}
         {node.type === "input" && <InputFields node={node} onChange={onChange} />}
         {node.type === "agent" && (
-          <AgentStep node={node} agents={agents} standaloneAgents={standaloneAgents} token={token} onChange={onChange} />
+          <AgentStepConfig node={node} agents={agents} standaloneAgents={standaloneAgents} token={token} onChange={onChange} />
         )}
         {node.type === "tool" && <ToolStep node={node} token={token} onChange={onChange} />}
         {node.type === "condition" && (
@@ -208,56 +233,6 @@ function InputFields({ node, onChange }: { node: WorkflowNode; onChange: (p: Par
           </div>
         </div>
       ))}
-    </Section>
-  );
-}
-
-function AgentStep({
-  node,
-  agents,
-  standaloneAgents,
-  token,
-  onChange,
-}: {
-  node: WorkflowNode;
-  agents: Record<string, Agent>;
-  standaloneAgents: Agent[];
-  token: string;
-  onChange: (p: Partial<WorkflowNode>) => void;
-}) {
-  const saved = node.agent_id ? agents[node.agent_id] : undefined;
-  if (node.draft_agent) {
-    return (
-      <>
-        <div className="mx-4 mt-3 rounded-lg bg-indigo-50 px-3 py-2 text-xs text-indigo-800">
-          {node.agent_id ? "Changes here apply to this workflow only; the original agent stays as it is." : "A new agent for this workflow — it's created when you save."}
-        </div>
-        <AgentFields value={node.draft_agent} token={token} onChange={(draft) => onChange({ draft_agent: draft })} />
-      </>
-    );
-  }
-  return (
-    <Section title="Agent">
-      <Field label="Use an agent">
-        <Select value={node.agent_id ?? ""} onChange={(e) => onChange({ agent_id: e.target.value || null })}>
-          <option value="">Choose…</option>
-          {saved && !standaloneAgents.some((a) => a.id === saved.id) && <option value={saved.id}>{saved.name} (this workflow)</option>}
-          {standaloneAgents.map((a) => (
-            <option key={a.id} value={a.id}>{a.name}</option>
-          ))}
-        </Select>
-      </Field>
-      {saved && <p className="text-xs text-zinc-500">{saved.goal}</p>}
-      <div className="flex gap-2">
-        {saved && (
-          <Button variant="outline" size="sm" onClick={() => onChange({ draft_agent: { name: saved.name, role: saved.role, goal: saved.goal, instructions: saved.instructions, llm_provider: saved.llm_provider, llm_model: saved.llm_model, config: saved.config } })}>
-            Customize here
-          </Button>
-        )}
-        <Button variant="outline" size="sm" onClick={() => onChange({ agent_id: null, draft_agent: { name: "New agent", role: "Assistant", goal: "Describe what this step does", instructions: "", config: {} } })}>
-          New agent
-        </Button>
-      </div>
     </Section>
   );
 }

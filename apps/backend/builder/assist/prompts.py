@@ -180,7 +180,10 @@ EDIT_OPS_DOC = """Operations (each an object with an "op" key):
 - {"op":"add_edge","source":"<id>","target":"<id>","condition":"<label, only out of a condition>"}
 - {"op":"remove_edge","source":"<id>","target":"<id>"}
 - {"op":"update_edge","source":"<id>","target":"<id>","condition":"<label or null>"}
-- {"op":"replace_trigger","type":"input|manual_trigger|schedule_trigger"}
+- {"op":"replace_trigger","type":"input|manual_trigger|schedule_trigger","schedule":{"cron":"<5-field cron>","timezone":"<IANA>"}}
+    "schedule" only with schedule_trigger, whenever the user says when it should run ("every weekday at 9am" ->
+    "0 9 * * 1-5", "every Monday 8:30" -> "30 8 * * 1", "every 2 hours" -> "0 */2 * * *"). Omit "timezone"
+    unless the user names one (the user's own is used). Also use it to change an existing schedule. At most every 5 minutes.
 - {"op":"rename_workflow","name":"<new name>"}
 - {"op":"set_config","config":{...}}: max_run_seconds, max_steps, on_node_failure ("abort"|"skip"|"retry"),
     node_retry_count (0-5), approvals {"read":bool,"edit":bool,"delete":bool}
@@ -197,11 +200,12 @@ Return ONLY JSON: {"summary": "<one short sentence saying what you changed>", "a
 """
 
 
-def edit_prompt(name: str, node_lines: str, edge_lines: str, settings: dict, instruction: str) -> str:
+def edit_prompt(name: str, node_lines: str, edge_lines: str, settings: dict, instruction: str, timezone: str = "UTC") -> str:
     return (
         "You are editing an EXISTING AI workflow on a visual canvas. The user gave ONE instruction. Return the\n"
         "smallest list of operations that carries it out.\n\n"
         f'Workflow name: "{name}"\n'
+        f"The user's timezone: {timezone}\n"
         f"Steps (use these exact ids):\n{node_lines}\n\n"
         f"Connections (source -> target):\n{edge_lines}\n\n"
         f"Workflow settings: {json.dumps(settings) if settings else '(defaults)'}\n\n"

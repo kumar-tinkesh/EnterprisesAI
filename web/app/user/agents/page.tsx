@@ -36,7 +36,19 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { AgentEditor } from "@/components/builder/agent-editor";
+import { WorkflowEditor } from "@/components/builder/workflow-editor";
+import { editorHref, type BuildTarget } from "@/lib/builder/use-builder-actions";
 import AgentCanvasBuilder from "./agent-canvas";
+
+/** ?agent=<id> / ?workflow=<id> -> the agent or workflow open in the editor. */
+function targetFromUrl(): BuildTarget | null {
+  if (typeof window === "undefined") return null;
+  const params = new URLSearchParams(window.location.search);
+  const agent = params.get("agent");
+  const workflow = params.get("workflow");
+  return workflow ? { kind: "workflow", id: workflow } : agent ? { kind: "agent", id: agent } : null;
+}
 
 export default function UserAgentsPage() {
   const accessToken = useAuthStore((s) => s.accessToken) || "";
@@ -51,6 +63,25 @@ export default function UserAgentsPage() {
   const [expandedToolsId, setExpandedToolsId] = useState<string | null>(null);
   const [bridgeServer, setBridgeServer] = useState<MCPServerEntry | null>(null);
   const catalogSectionRef = useRef<HTMLDivElement>(null);
+
+  // An agent or workflow open in place of the canvas — built here, or opened
+  // from Projects. Kept in the URL so reload / the back button behave.
+  const [editing, setEditing] = useState<BuildTarget | null>(null);
+  useEffect(() => {
+    setEditing(targetFromUrl());
+    const onPop = () => setEditing(targetFromUrl());
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+  const openEditor = (target: BuildTarget) => {
+    window.history.pushState(null, "", editorHref(target));
+    setEditing(target);
+  };
+  const closeEditor = () => {
+    window.history.pushState(null, "", "/user/agents");
+    setEditing(null);
+    setView("canvas");
+  };
 
   // Authorized catalog (semantic when catalogQuery set)
   const { data: catalog, isLoading: catalogLoading } = useQuery({
@@ -155,6 +186,18 @@ export default function UserAgentsPage() {
       : "Failed to plan a tool call"
     : null;
 
+  if (editing) {
+    return (
+      <ProtectedDashboard path="/user" title="AI Compiler" description="Build and test an agent or workflow" fullBleed>
+        {editing.kind === "workflow" ? (
+          <WorkflowEditor key={editing.id} id={editing.id} onBack={closeEditor} onSwitch={(workflowId) => openEditor({ kind: "workflow", id: workflowId })} />
+        ) : (
+          <AgentEditor key={editing.id} id={editing.id} onBack={closeEditor} />
+        )}
+      </ProtectedDashboard>
+    );
+  }
+
   return (
     <ProtectedDashboard
       path="/user"
@@ -187,6 +230,7 @@ export default function UserAgentsPage() {
               setView("list");
               setTimeout(scrollToCatalog, 50);
             }}
+            onOpen={openEditor}
           />
         </div>
       )}

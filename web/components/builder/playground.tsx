@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Circle, Play, Radio, Square, X } from "lucide-react";
+import { AlertTriangle, Circle, Play, Radio, ShieldAlert, Square, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -117,6 +117,8 @@ export function Playground({
             {(history.data ?? []).slice(0, 15).map((r) => (
               <option key={r.id} value={r.id}>
                 {new Date(r.created_at).toLocaleString()} · {r.status}
+                {r.definition_version ? ` · v${r.definition_version}` : ""}
+                {r.schedule_id ? " · scheduled" : ""}
               </option>
             ))}
           </Select>
@@ -199,6 +201,22 @@ export function Playground({
           </div>
         )}
         {view.status === "failed" && view.error && <p className="rounded-lg bg-red-50 p-3 text-xs text-red-700">{view.error}</p>}
+
+        {view.guardrails.length > 0 && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-3">
+            <p className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-amber-900">
+              <ShieldAlert className="h-3.5 w-3.5" /> Guardrails
+            </p>
+            <ul className="space-y-1">
+              {view.guardrails.map((g, i) => (
+                <li key={i} className={cn("text-xs", g.severity === "high" ? "text-red-700" : g.severity === "medium" ? "text-amber-800" : "text-zinc-600")}>
+                  {kind === "workflow" && g.node_id && <span className="font-medium">{stepName(g.node_id)}: </span>}
+                  {g.message}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         {view.timeline.length > 0 && (
           <div>

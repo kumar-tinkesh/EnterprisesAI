@@ -4,7 +4,7 @@
  * component only feeds events in.
  */
 
-import type { Approval, Run, RunEvent, RunStatus } from "@/lib/builder/types";
+import type { Approval, GuardrailFlag, Run, RunEvent, RunStatus } from "@/lib/builder/types";
 
 export type StepState = "running" | "succeeded" | "failed" | "waiting" | "skipped";
 
@@ -37,6 +37,8 @@ export interface RunView {
   output: string | null;
   sources: string[];
   error: string | null;
+  /** What the guardrails found or did, in order. */
+  guardrails: GuardrailFlag[];
 }
 
 export const emptyRunView: RunView = {
@@ -50,6 +52,7 @@ export const emptyRunView: RunView = {
   output: null,
   sources: [],
   error: null,
+  guardrails: [],
 };
 
 const TERMINAL: RunStatus[] = ["succeeded", "failed", "cancelled"];
@@ -81,6 +84,7 @@ function fromSnapshot(view: RunView, run: Run): RunView {
     output: run.output_text ?? view.output,
     sources: run.output?.sources ?? view.sources,
     error: run.error,
+    guardrails: run.output?.guardrails ?? view.guardrails,
   };
 }
 
@@ -149,6 +153,14 @@ export function reduceRunEvent(view: RunView, event: RunEvent | ApprovalsRefresh
       return { ...view, timeline: add(view, { tone: "info", text: `took the "${event.branch}" line`, nodeId: event.node_id }) };
     case "approval_requested":
       return { ...view, timeline: add(view, { tone: "warn", text: "is waiting for your decision", nodeId: event.node_id }) };
+    case "guardrail": {
+      const flag: GuardrailFlag = { rule: event.rule, severity: event.severity, message: event.message, node_id: event.node_id };
+      return {
+        ...view,
+        guardrails: [...view.guardrails, flag],
+        timeline: add(view, { tone: event.severity === "high" ? "error" : "warn", text: `guardrail: ${event.message}`, nodeId: event.node_id }),
+      };
+    }
     case "output":
       return { ...view, output: event.text, sources: event.sources ?? [] };
     default:

@@ -17,7 +17,7 @@ from src.api.deps import CurrentUser
 from src.models import User
 
 from builder.agents.config import AgentConfig
-from builder.agents.runtime import AgentContext, AgentFailed, Paused, run_agent
+from builder.agents.runtime import AgentContext, AgentFailed, GuardrailBlocked, Paused, run_agent
 from builder.config import get_builder_settings
 from builder.models import BuilderApproval, BuilderNodeRun, BuilderRun
 from builder.runs import lease, states
@@ -135,6 +135,7 @@ async def _execute_agent(run: BuilderRun, user: CurrentUser, worker_id: str) -> 
     ctx = AgentContext(
         run_id=run.id, node_run_id=node_run.id, node_id=AGENT_NODE_ID, attempt=node_run.attempt,
         user=user, agent=agent, config=config, input_text=input_text, approvals=config.approvals, emit=emit_event,
+        dry_run=run.purpose == "test", depth=(run.input or {}).get("depth") or "auto",
     )
     try:
         result = await run_agent(ctx)
@@ -142,6 +143,11 @@ async def _execute_agent(run: BuilderRun, user: CurrentUser, worker_id: str) -> 
         await _set_node(node_run.id, status=states.WAITING)
         await _finish(run.id, worker_id, states.WAITING)
         await requeue_if_decided(run.id)
+    except GuardrailBlocked as exc:
+        # Keep what the guardrails found on the run, so it shows after a reload too.
+        output = {"text": None, "guardrails": exc.flags}
+        await _set_node(node_run.id, status=states.FAILED, error=str(exc), output=output, finished_at=utcnow())
+        await _finish(run.id, worker_id, states.FAILED, error=str(exc), output=output)
     except AgentFailed as exc:
         await _set_node(node_run.id, status=states.FAILED, error=str(exc), finished_at=utcnow())
         await _finish(run.id, worker_id, states.FAILED, error=str(exc))
@@ -152,7 +158,7 @@ async def _execute_agent(run: BuilderRun, user: CurrentUser, worker_id: str) -> 
         await _set_node(node_run.id, status=states.FAILED, error=f"Unexpected error: {exc}", finished_at=utcnow())
         await _finish(run.id, worker_id, states.FAILED, error=f"Unexpected error: {exc}")
     else:
-        output = {"text": result.text, "sources": result.sources, "tool_calls": result.tool_calls}
+        output = {"text": result.text, "sources": result.sources, "tool_calls": result.tool_calls, "guardrails": result.guardrails}
         await _set_node(node_run.id, status=states.SUCCEEDED, output_text=result.text, output=output, finished_at=utcnow())
         # Before the final status: listeners stop at a terminal run_status.
         await emit(run.id, "output", text=result.text, sources=result.sources)

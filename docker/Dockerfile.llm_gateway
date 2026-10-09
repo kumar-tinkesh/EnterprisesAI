@@ -2,22 +2,30 @@
 # EnterpriseAI LLM Gateway Service (FastAPI) — built from the repo root context
 #   docker build -f docker/Dockerfile.llm_gateway -t enterpriseai-llm-gateway .
 # ─────────────────────────────────────────────────────────────────────────────
-FROM python:3.12-slim AS base
+ARG PYTHON_IMAGE=python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.12.24
+
+FROM ${UV_IMAGE} AS uv
+
+FROM ${PYTHON_IMAGE} AS base
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+COPY --from=uv /uv /uvx /bin/
 
 WORKDIR /app
 
 # --- Dependencies (cached layer) -------------------------------------------
 FROM base AS deps
 COPY pyproject.toml uv.lock .python-version ./
+# Only the gateway's own dependencies (the "gateway" group in pyproject.toml):
+# a fraction of the full set, which is mostly backend-only (fastembed, onnx,
+# document parsers, MCP).
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-install-project
+    uv sync --frozen --only-group gateway --no-install-project
 
 # --- Runtime -----------------------------------------------------------------
 FROM base AS runtime

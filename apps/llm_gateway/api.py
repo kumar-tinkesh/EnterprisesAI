@@ -122,6 +122,7 @@ async def health():
         "status": "ok",
         "configured_providers": gw.configured_providers,
         "default_provider": gw.default_provider,
+        "embedding_provider": gw.embedding_provider,
     }
 
 

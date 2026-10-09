@@ -53,6 +53,16 @@ class BuilderSettings(BaseSettings):
     # Times a run may be picked up again after its worker died, before it is
     # failed (a run that crashes every worker must not loop forever).
     RUN_MAX_ATTEMPTS: int = 5
+    # ── Schedules ──
+    # Every worker checks for due schedules this often (a schedule fires at
+    # most this late); off = this process never starts scheduled runs.
+    BUILDER_SCHEDULER_ENABLED: bool = True
+    SCHEDULE_POLL_SECONDS: float = 30.0
+    # The most often a schedule may run.
+    SCHEDULE_MIN_INTERVAL_MINUTES: int = 5
+    # ── Versions ──
+    # Saved versions kept per agent/workflow (the oldest go first).
+    BUILDER_VERSIONS_KEEP: int = 100
     # Model calls: how many times to retry a failing model request.
     AGENT_MODEL_RETRY_DELAY_SECONDS: float = 2.0
 

@@ -7,6 +7,7 @@ import { Plus, Sparkles, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Field, Section, Select, Textarea, Toggle } from "@/components/builder/fields";
+import { GuardrailFields } from "@/components/builder/guardrail-fields";
 import { ToolPicker } from "@/components/builder/tool-picker";
 import { knowledgeApi } from "@/lib/api";
 import { builderApi } from "@/lib/builder/api";
@@ -15,18 +16,28 @@ import type { AgentConfig, ApprovalPolicy, DraftAgent } from "@/lib/builder/type
 
 const DEFAULT_APPROVALS: ApprovalPolicy = { read: false, edit: true, delete: true };
 
-/** Everything an owner sets on an agent. Works on a saved agent or a draft. */
+export type AgentSection = "identity" | "model" | "answers" | "tools" | "knowledge" | "approvals" | "guardrails";
+export const ALL_SECTIONS: AgentSection[] = ["identity", "model", "answers", "tools", "knowledge", "approvals", "guardrails"];
+
+/** Everything an owner sets on an agent. Works on a saved agent or a draft.
+ *  ``only`` shows some sections (the node popup's accordion and wizard);
+ *  ``stepOverride`` hides what a workflow step can't override (provider and model name). */
 export function AgentFields({
   value,
   onChange,
   token,
   readOnly = false,
+  only = ALL_SECTIONS,
+  stepOverride = false,
 }: {
   value: DraftAgent;
   onChange: (next: DraftAgent) => void;
   token: string;
   readOnly?: boolean;
+  only?: AgentSection[];
+  stepOverride?: boolean;
 }) {
+  const show = (section: AgentSection) => only.includes(section);
   const [adding, setAdding] = useState(false);
   const config: AgentConfig = value.config ?? {};
   const toolIds = config.tool_ids ?? [];
@@ -59,7 +70,7 @@ export function AgentFields({
 
   return (
     <fieldset disabled={readOnly} className="contents">
-      <Section title="Identity">
+      {show("identity") && <Section title="Identity">
         <Field label="Name">
           <Input className="h-9" value={value.name} onChange={(e) => set({ name: e.target.value })} />
         </Field>
@@ -75,10 +86,10 @@ export function AgentFields({
           <ImproveButton field="instructions" />
         </Field>
         {improve.isError && <p className="text-xs text-red-600">Couldn&apos;t improve the text right now.</p>}
-      </Section>
+      </Section>}
 
-      <Section title="Model">
-        <div className="grid grid-cols-2 gap-2">
+      {show("model") && <Section title="Model">
+        {!stepOverride && <div className="grid grid-cols-2 gap-2">
           <Field label="Provider">
             <Select value={value.llm_provider ?? ""} onChange={(e) => set({ llm_provider: e.target.value })}>
               <option value="">Default</option>
@@ -91,7 +102,7 @@ export function AgentFields({
           <Field label="Model">
             <Input className="h-9" placeholder="Provider default" value={value.llm_model ?? ""} onChange={(e) => set({ llm_model: e.target.value })} />
           </Field>
-        </div>
+        </div>}
         <Field label="Temperature" hint="Lower = more predictable.">
           <Input
             className="h-9"
@@ -106,9 +117,50 @@ export function AgentFields({
             }
           />
         </Field>
-      </Section>
+        <Field label="Longest answer (tokens)" hint="Empty = the model's default.">
+          <Input
+            className="h-9"
+            type="number"
+            min={64}
+            max={32000}
+            placeholder="Default"
+            value={config.llm?.max_output_tokens ?? ""}
+            onChange={(e) => setConfig({ llm: { ...(config.llm ?? {}), max_output_tokens: e.target.value === "" ? null : Number(e.target.value) } })}
+          />
+        </Field>
+        <Field label="Retries if the model fails">
+          <Select value={config.reliability?.retries ?? 0} onChange={(e) => setConfig({ reliability: { ...(config.reliability ?? {}), retries: Number(e.target.value) } })}>
+            {[0, 1, 2, 3].map((n) => <option key={n} value={n}>{n === 0 ? "Don't retry" : `${n} ${n === 1 ? "time" : "times"}`}</option>)}
+          </Select>
+        </Field>
+      </Section>}
 
-      <Section
+      {show("answers") && <Section title="How it answers">
+        <Field label="Tone" hint="professional, friendly, concise, technical — or your own words.">
+          <Input className="h-9" value={config.response?.tone ?? ""} placeholder="Default" onChange={(e) => setConfig({ response: { ...(config.response ?? {}), tone: e.target.value } })} />
+        </Field>
+        <div className="grid grid-cols-2 gap-2">
+          <Field label="Length">
+            <Select value={config.response?.verbosity ?? "balanced"} onChange={(e) => setConfig({ response: { ...(config.response ?? {}), verbosity: e.target.value } })}>
+              <option value="concise">Short</option>
+              <option value="balanced">Balanced</option>
+              <option value="detailed">Detailed</option>
+            </Select>
+          </Field>
+          <Field label="Citations">
+            <Select value={config.response?.citations ?? "always"} onChange={(e) => setConfig({ response: { ...(config.response ?? {}), citations: e.target.value } })}>
+              <option value="always">Always</option>
+              <option value="when_used">When it used a source</option>
+              <option value="off">Off</option>
+            </Select>
+          </Field>
+        </div>
+        <Field label="Language" hint="auto = the language of the question.">
+          <Input className="h-9" value={config.response?.language ?? "auto"} onChange={(e) => setConfig({ response: { ...(config.response ?? {}), language: e.target.value || "auto" } })} />
+        </Field>
+      </Section>}
+
+      {show("tools") && <Section
         title={`Tools (${toolIds.length})`}
         action={
           !readOnly && (
@@ -144,9 +196,9 @@ export function AgentFields({
             onChange={(e) => setConfig({ tools: { ...(config.tools ?? {}), max_calls: Number(e.target.value) || 8 } })}
           />
         </Field>
-      </Section>
+      </Section>}
 
-      <Section title="Knowledge">
+      {show("knowledge") && <Section title="Knowledge">
         {kbs.isLoading ? (
           <Spinner className="h-4 w-4 text-zinc-400" />
         ) : (kbs.data ?? []).length === 0 ? (
@@ -163,13 +215,22 @@ export function AgentFields({
             ))}
           </div>
         )}
-      </Section>
+      </Section>}
 
-      <Section title="Ask me before it runs">
+      {show("approvals") && <Section title="Ask me before it runs">
         <Toggle label="Tools that only read" checked={approvals.read} onChange={(v) => setConfig({ approvals: { ...approvals, read: v } })} />
         <Toggle label="Tools that change data" checked={approvals.edit} onChange={(v) => setConfig({ approvals: { ...approvals, edit: v } })} />
         <Toggle label="Tools that delete" checked={approvals.delete} onChange={(v) => setConfig({ approvals: { ...approvals, delete: v } })} />
-      </Section>
+      </Section>}
+
+      {show("guardrails") && <GuardrailFields
+        agent={value}
+        value={config.guardrails ?? {}}
+        hasKnowledge={kbIds.length > 0}
+        token={token}
+        readOnly={readOnly}
+        onChange={(guardrails) => setConfig({ guardrails })}
+      />}
     </fieldset>
   );
 }

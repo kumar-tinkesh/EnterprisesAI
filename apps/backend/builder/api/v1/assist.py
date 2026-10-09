@@ -5,6 +5,7 @@
     POST /assist/workflow          description -> workflow draft (steps, lines, agents, tools)
     POST /assist/workflow-edit     instruction + the open graph -> edited draft
     POST /assist/improve-text      polish one field's rough text
+    POST /assist/guardrails        an agent's definition -> the guardrails it should have, and why
 
 Drafts are never saved here. The canvas shows them; saving goes through the
 agent/workflow endpoints, which check everything again (and turn each new
@@ -48,6 +49,8 @@ class EditRequest(BaseModel):
     edges: list[dict] = Field(default_factory=list, max_length=500)
     config: dict = Field(default_factory=dict)
     workflow_id: str | None = None
+    # The browser's IANA timezone: what "every day at 9" means for a schedule.
+    timezone: str = Field(default="UTC", max_length=64)
 
 
 class ImproveRequest(BaseModel):
@@ -134,7 +137,7 @@ async def assist_workflow_edit(payload: EditRequest, user: CurrentUser = Depends
     } if agent_ids else {}
     node_lines, edge_lines = _describe(payload.nodes, payload.edges, agents)
     usage = Usage()
-    prompt = prompts.edit_prompt(payload.name, node_lines, edge_lines, payload.config, payload.instruction)
+    prompt = prompts.edit_prompt(payload.name, node_lines, edge_lines, payload.config, payload.instruction, payload.timezone)
     try:
         answer = await ask_json(prompt, usage)
         editor = None
@@ -142,7 +145,7 @@ async def assist_workflow_edit(payload: EditRequest, user: CurrentUser = Depends
         for attempt in range(2):
             ops = answer.get("ops") if isinstance(answer.get("ops"), list) else []
             resolved = await resolve(db, user, ops, payload.nodes, agents, usage, payload.name)
-            editor = Editor(payload.name, payload.nodes, payload.edges, payload.config, resolved)
+            editor = Editor(payload.name, payload.nodes, payload.edges, payload.config, resolved, timezone=payload.timezone)
             try:
                 editor.apply(ops)
                 error = None
@@ -192,3 +195,44 @@ async def improve_text(payload: ImproveRequest, user: CurrentUser = Depends(get_
     except AssistUnavailable as exc:
         raise _unavailable(exc) from exc
     return {"text": text.strip().strip('"') or payload.text}
+
+
+class GuardrailSuggestRequest(BaseModel):
+    name: str = Field(default="", max_length=255)
+    role: str = Field(default="", max_length=255)
+    goal: str = Field(default="", max_length=4000)
+    instructions: str = Field(default="", max_length=20_000)
+    tool_ids: list[str] = Field(default_factory=list, max_length=50)
+    has_knowledge: bool = False
+
+
+@router.post("/assist/guardrails")
+async def suggest_guardrails(payload: GuardrailSuggestRequest, user: CurrentUser = Depends(get_end_user), db: AsyncSession = Depends(get_db)):
+    """Suggested settings only — nothing is saved; the person reviews them on the agent."""
+    from builder.agents.config import GuardrailSettings
+    from builder.agents.tools import resolve_agent_tools
+    from builder.guardrails.prompts import suggest_prompt
+
+    tools = await resolve_agent_tools(db, payload.tool_ids)
+    tool_lines = [f"{t.server_name}.{t.tool_name}" + (f" ({t.description.strip()[:120]})" if t.description else "") for t in tools]
+    usage = Usage()
+    try:
+        data = await ask_json(
+            suggest_prompt(payload.name, payload.role, payload.goal, payload.instructions, tool_lines, payload.has_knowledge), usage
+        )
+    except AssistUnavailable as exc:
+        raise _unavailable(exc) from exc
+    raw = {k: data.get(k) for k in GuardrailSettings.model_fields if k in data and data.get(k) is not None}
+    if not payload.has_knowledge:
+        raw["groundedness"] = False
+    raw["custom_rules"] = [str(r).strip()[:300] for r in (raw.get("custom_rules") or []) if str(r).strip()][:6]
+    # Field by field: one value the model got wrong is dropped, not the whole suggestion.
+    accepted: dict = {}
+    for key, value in raw.items():
+        try:
+            GuardrailSettings.model_validate({**accepted, key: value})
+        except ValueError:
+            continue
+        accepted[key] = value
+    settings = GuardrailSettings.model_validate(accepted)
+    return {"guardrails": settings.model_dump(), "reasoning": str(data.get("reasoning") or "")[:500]}

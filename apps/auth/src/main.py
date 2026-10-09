@@ -59,6 +59,25 @@ def create_app() -> FastAPI:
                 await create_db_tables()
             except Exception as exc2:
                 print(f"[auth] DB init skipped: {exc2}")
+        # The first platform admin and tenant, from .env (each skipped if it exists).
+        try:
+            from src.core.bootstrap import ensure_admin, ensure_tenant
+            from src.db.session import SessionLocal
+
+            async with SessionLocal() as db:
+                outcome = await ensure_admin(db, settings)
+            if outcome == "created":
+                print(f"[auth] created the platform admin {settings.ADMIN_EMAIL.strip().lower()}", flush=True)
+            elif outcome == "exists":
+                print(f"[auth] platform admin {settings.ADMIN_EMAIL.strip().lower()} already exists; left as is", flush=True)
+            async with SessionLocal() as db:
+                outcome = await ensure_tenant(db, settings)
+            if outcome == "created":
+                print(f"[auth] created tenant {settings.TENANT_NAME.strip()!r} with admin {settings.TENANT_ADMIN_EMAIL.strip().lower()}", flush=True)
+            elif outcome == "exists":
+                print(f"[auth] tenant admin {settings.TENANT_ADMIN_EMAIL.strip().lower()} already exists; left as is", flush=True)
+        except Exception as exc:  # pragma: no cover - never block startup on this
+            print(f"[auth] admin bootstrap skipped: {exc}")
         if settings.SHOW_LOADED_ENV:
             from pprint import pprint
 

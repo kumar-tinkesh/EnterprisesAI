@@ -27,11 +27,11 @@ from sqlalchemy import select
 from src.api.deps import CurrentUser
 
 from builder.agents.config import AgentConfig, merge_config
-from builder.agents.runtime import AgentContext, AgentFailed, run_agent
+from builder.agents.runtime import AgentContext, AgentFailed, GuardrailBlocked, run_agent
 from builder.agents.tools import resolve_agent_tools
 from builder.graph.condition_rules import eval_rule, normalize_condition_config
 from builder.graph.output_config import normalize_output_config
-from builder.graph.schema import ToolApprovalPolicy
+from builder.graph.schema import ApprovalOverrides, ToolApprovalPolicy
 from builder.models import BuilderApproval, BuilderNodeRun
 from builder.runs import states
 from builder.runs.db import session_factory
@@ -54,9 +54,10 @@ class NodeOutcome:
     take: set[str] | None = None  # condition: targets to go on to
     final: bool = False  # output step: this is the run's answer
     sources: list[str] = field(default_factory=list)
-    never_skip: bool = False  # a person said no: don't paper over it with "skip"
+    never_skip: bool = False  # a person (or a guardrail) said no: don't paper over it with "skip"
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    guardrails: list[dict] = field(default_factory=list)  # an agent step's guardrail findings
 
 
 @dataclass
@@ -74,6 +75,15 @@ class StepContext:
     agents: dict[str, dict]
     approvals: ToolApprovalPolicy
     emit: Callable[..., Awaitable[None]]
+    # A test run: data-changing tool calls are simulated and approval steps
+    # pass on their own (nobody is there to approve).
+    dry_run: bool = False
+    # The workflow's always/never on asking before tools run (WorkflowConfig.approval_overrides).
+    approval_overrides: ApprovalOverrides | None = None
+    # The workflow's knowledge (defaults + its own), searched by every agent step.
+    knowledge_base_ids: list[str] = field(default_factory=list)
+    # How much answer: "auto" | "short" | "detailed" (only steps that answer the run).
+    depth: str = "auto"
 
     @property
     def node_id(self) -> str:
@@ -128,12 +138,17 @@ async def run_agent_step(ctx: StepContext) -> NodeOutcome:
     if agent is None:
         return NodeOutcome(ok=False, error="The agent for this step is missing from the run's definition.")
     config = AgentConfig.model_validate(merge_config(agent.get("config") or {}, ctx.node.get("config_overrides") or {}))
-    # The stricter of the agent's and the workflow's approval rules applies.
+    if ctx.knowledge_base_ids:
+        config.knowledge_base_ids = list(dict.fromkeys(config.knowledge_base_ids + ctx.knowledge_base_ids))[:20]
+    # The stricter of the agent's and the workflow's approval rules applies,
+    # unless the workflow says always/never for a risk.
     approvals = ToolApprovalPolicy(
         read=config.approvals.read or ctx.approvals.read,
         edit=config.approvals.edit or ctx.approvals.edit,
         delete=config.approvals.delete or ctx.approvals.delete,
     )
+    if ctx.approval_overrides is not None:
+        approvals = ctx.approval_overrides.apply(approvals)
     if ctx.input_text.strip() and ctx.input_text.strip() != ctx.original_input.strip():
         task = f"The request: {ctx.original_input}\n\nInput from the previous step:\n{ctx.input_text}"
     else:
@@ -141,14 +156,19 @@ async def run_agent_step(ctx: StepContext) -> NodeOutcome:
     agent_ctx = AgentContext(
         run_id=ctx.run_id, node_run_id=ctx.node_run_id, node_id=ctx.node_id, attempt=ctx.attempt,
         user=ctx.user, agent=agent, config=config, input_text=task, approvals=approvals, emit=ctx.emit,
+        dry_run=ctx.dry_run, depth=ctx.depth,
     )
     try:
         result = await run_agent(agent_ctx)
+    except GuardrailBlocked as exc:
+        # Retrying or skipping would just route around the guardrail.
+        return NodeOutcome(ok=False, error=str(exc), never_skip=True, guardrails=exc.flags)
     except AgentFailed as exc:
         return NodeOutcome(ok=False, error=str(exc))
     return NodeOutcome(
         ok=True, output=result.text, sources=result.sources,
         prompt_tokens=result.prompt_tokens, completion_tokens=result.completion_tokens,
+        guardrails=result.guardrails,
     )
 
 
@@ -245,6 +265,9 @@ async def run_tool_step(ctx: StepContext) -> NodeOutcome:
             validate_arguments(tool.input_schema, arguments)
         except InvalidArguments as exc:
             problems = exc.errors
+    if (missing or problems) and ctx.dry_run:
+        detail = f"needs {', '.join(missing)}" if missing else "; ".join(problems)
+        return NodeOutcome(ok=False, error=f"{tool.tool_name} {detail}, and a test run can't ask for it.", never_skip=True)
     if missing or problems:
         async with session_factory() as db:
             ask = BuilderApproval(
@@ -266,8 +289,8 @@ async def run_tool_step(ctx: StepContext) -> NodeOutcome:
 
     site = CallSite(
         run_id=ctx.run_id, node_run_id=ctx.node_run_id, node_id=ctx.node_id, user=ctx.user,
-        approvals=ctx.approvals, timeout=float((ctx.node.get("config_overrides") or {}).get("timeout_seconds") or 60),
-        requester=f'Workflow step "{ctx.graph.label(ctx.node_id)}"', emit=ctx.emit,
+        approvals=ctx.approval_overrides.apply(ctx.approvals) if ctx.approval_overrides else ctx.approvals, timeout=float((ctx.node.get("config_overrides") or {}).get("timeout_seconds") or 60),
+        requester=f'Workflow step "{ctx.graph.label(ctx.node_id)}"', emit=ctx.emit, dry_run=ctx.dry_run,
     )
     outcome = await ledgered_call(site, tool, f"{ctx.node_id}:a{ctx.attempt}:tool", arguments)
     if outcome.declined:
@@ -339,6 +362,9 @@ async def run_join(ctx: StepContext) -> NodeOutcome:
 
 
 async def run_human_approval(ctx: StepContext) -> NodeOutcome:
+    if ctx.dry_run:
+        await ctx.emit("node_note", node_id=ctx.node_id, message="Approved automatically: this is a test run.")
+        return NodeOutcome(ok=True, output=ctx.input_text)
     async with session_factory() as db:
         asks = (
             await db.execute(

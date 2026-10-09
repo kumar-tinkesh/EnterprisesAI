@@ -13,7 +13,7 @@ from src.api.deps import CurrentUser
 
 from builder.models import BuilderAgent, BuilderApproval, BuilderNodeRun, BuilderRun, BuilderToolCall
 from builder.runs import states
-from builder.runs.db import utcnow
+from builder.runs.db import as_utc, utcnow
 from builder.runs.events import emit
 from builder.runs.queue import enqueue_run
 from builder.services.tool_runtime import validate_arguments
@@ -42,19 +42,26 @@ def agent_snapshot(agent: BuilderAgent) -> dict:
     }
 
 
-async def create_agent_run(
-    db: AsyncSession, user: CurrentUser, agent: BuilderAgent, *, text: str, variables: dict | None = None
+async def create_run(
+    db: AsyncSession, user: CurrentUser, kind: str, target_id: str, *, definition: dict, version: int, text: str,
+    variables: dict | None = None, schedule_id: str | None = None, purpose: str = "run", public_key_id: str | None = None,
+    depth: str = "auto",
 ) -> BuilderRun:
+    """Queue a run of an already-frozen ``definition`` (see agent_snapshot /
+    workflow_definition), executing as ``user``."""
     run = BuilderRun(
         tenant_id=user.tenant_id,
         owner_id=user.id,
-        kind="agent",
-        agent_id=agent.id,
-        definition_version=agent.version,
-        definition={"agent": agent_snapshot(agent)},
-        input={"text": text, "variables": variables or {}},
+        kind=kind,
+        **({"agent_id": target_id} if kind == "agent" else {"workflow_id": target_id}),
+        definition_version=version,
+        definition=definition,
+        input={"text": text, "variables": variables or {}, **({"depth": depth} if depth != "auto" else {})},
         status=states.QUEUED,
         state={},
+        schedule_id=schedule_id,
+        purpose=purpose,
+        public_key_id=public_key_id,
     )
     db.add(run)
     await db.commit()
@@ -62,6 +69,16 @@ async def create_agent_run(
     await enqueue_run(run.id)
     await emit(run.id, "run_status", status=states.QUEUED)
     return run
+
+
+async def create_agent_run(
+    db: AsyncSession, user: CurrentUser, agent: BuilderAgent, *, text: str, variables: dict | None = None,
+    schedule_id: str | None = None, purpose: str = "run", depth: str = "auto",
+) -> BuilderRun:
+    return await create_run(
+        db, user, "agent", agent.id, definition={"agent": agent_snapshot(agent)}, version=agent.version,
+        text=text, variables=variables, schedule_id=schedule_id, purpose=purpose, depth=depth,
+    )
 
 
 def workflow_snapshot(workflow) -> dict:
@@ -75,32 +92,30 @@ def workflow_snapshot(workflow) -> dict:
     }
 
 
+async def workflow_definition(db: AsyncSession, tenant_id: str, workflow: dict, frozen_agents: dict | None = None) -> dict:
+    """A workflow (as a snapshot dict) plus every agent its steps use, frozen:
+    the ones in ``frozen_agents`` as given (a saved version's own agents),
+    the rest as they are now."""
+    frozen_agents = dict(frozen_agents or {})
+    agent_ids = {n.get("agent_id") for n in workflow.get("nodes") or [] if n.get("type") == "agent" and n.get("agent_id")}
+    missing = agent_ids - set(frozen_agents)
+    agents = (
+        await db.execute(select(BuilderAgent).where(BuilderAgent.id.in_(missing), BuilderAgent.tenant_id == tenant_id))
+    ).scalars().all() if missing else []
+    return {"workflow": workflow, "agents": {**{a.id: agent_snapshot(a) for a in agents}, **frozen_agents}}
+
+
 async def create_workflow_run(
-    db: AsyncSession, user: CurrentUser, workflow, *, text: str, variables: dict | None = None
+    db: AsyncSession, user: CurrentUser, workflow, *, text: str, variables: dict | None = None,
+    schedule_id: str | None = None, purpose: str = "run", depth: str = "auto",
 ) -> BuilderRun:
     """Freezes the workflow and every agent its steps use, so edits made while
     it runs (or before a resume) don't change what this run does."""
-    agent_ids = {n.get("agent_id") for n in workflow.nodes or [] if n.get("type") == "agent" and n.get("agent_id")}
-    agents = (
-        await db.execute(select(BuilderAgent).where(BuilderAgent.id.in_(agent_ids), BuilderAgent.tenant_id == user.tenant_id))
-    ).scalars().all() if agent_ids else []
-    run = BuilderRun(
-        tenant_id=user.tenant_id,
-        owner_id=user.id,
-        kind="workflow",
-        workflow_id=workflow.id,
-        definition_version=workflow.version,
-        definition={"workflow": workflow_snapshot(workflow), "agents": {a.id: agent_snapshot(a) for a in agents}},
-        input={"text": text, "variables": variables or {}},
-        status=states.QUEUED,
-        state={},
+    definition = await workflow_definition(db, user.tenant_id, workflow_snapshot(workflow))
+    return await create_run(
+        db, user, "workflow", workflow.id, definition=definition, version=workflow.version,
+        text=text, variables=variables, schedule_id=schedule_id, purpose=purpose, depth=depth,
     )
-    db.add(run)
-    await db.commit()
-    await db.refresh(run)
-    await enqueue_run(run.id)
-    await emit(run.id, "run_status", status=states.QUEUED)
-    return run
 
 
 async def cancel_run(db: AsyncSession, run: BuilderRun) -> bool:
@@ -198,8 +213,11 @@ async def run_view(db: AsyncSession, run: BuilderRun, *, detail: bool = True) ->
         "definition_version": run.definition_version, "status": run.status, "input": run.input,
         "output_text": run.output_text, "output": run.output, "error": run.error,
         "prompt_tokens": run.prompt_tokens, "completion_tokens": run.completion_tokens,
-        "recoveries": run.attempts, "created_at": run.created_at, "started_at": run.started_at, "finished_at": run.finished_at,
+        "recoveries": run.attempts, "created_at": as_utc(run.created_at), "started_at": as_utc(run.started_at),
+        "finished_at": as_utc(run.finished_at),
         "name": ((run.definition or {}).get("agent") or (run.definition or {}).get("workflow") or {}).get("name"),
+        "schedule_id": run.schedule_id,
+        "purpose": run.purpose,
     }
     if not detail:
         return view
@@ -231,5 +249,5 @@ async def run_view(db: AsyncSession, run: BuilderRun, *, detail: bool = True) ->
 
 
 __all__ = [
-    "RunActionError", "agent_snapshot", "workflow_snapshot", "create_agent_run", "create_workflow_run", "cancel_run", "decide_approval", "run_view", "approval_view",
+    "RunActionError", "agent_snapshot", "workflow_snapshot", "workflow_definition", "create_run", "create_agent_run", "create_workflow_run", "cancel_run", "decide_approval", "run_view", "approval_view",
 ]

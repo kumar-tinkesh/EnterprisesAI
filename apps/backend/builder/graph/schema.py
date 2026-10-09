@@ -102,7 +102,9 @@ class WorkflowNode(BaseModel):
     approval_message: str | None = Field(default=None, max_length=2000)
     # output (builder.graph.output_config)
     output_config: dict[str, Any] | None = None
-    # schedule_trigger: cron expression + timezone (the scheduler lands later).
+    # schedule_trigger: {"cron": "0 9 * * 1-5", "timezone": "Asia/Kolkata",
+    # "enabled": true, "input": "what each run is asked", "variables": {...}}
+    # — mirrored into builder_schedules on save (builder.schedules.service).
     schedule: dict[str, Any] | None = None
 
 
@@ -124,16 +126,50 @@ class ToolApprovalPolicy(BaseModel):
     delete: bool = True
 
 
+Override = Literal["default", "always", "never"]
+
+
+class ApprovalOverrides(BaseModel):
+    """This workflow's say on asking before tools run, per risk: "default"
+    leaves it to each step (its agent's setting, or the workflow's
+    ``approvals``); "always"/"never" decide it for every step."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    read: Override = "default"
+    edit: Override = "default"
+    delete: Override = "default"
+
+    def apply(self, base: ToolApprovalPolicy) -> ToolApprovalPolicy:
+        pick = lambda o, b: True if o == "always" else False if o == "never" else b  # noqa: E731
+        return ToolApprovalPolicy(read=pick(self.read, base.read), edit=pick(self.edit, base.edit), delete=pick(self.delete, base.delete))
+
+
 class WorkflowConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    max_run_seconds: int = Field(default=1800, ge=30, le=86_400)
+    # None = no time limit (max_steps still stops a loop that never ends).
+    max_run_seconds: int | None = Field(default=None, ge=30, le=86_400)
     # Guards a condition loop that never exits.
     max_steps: int = Field(default=50, ge=1, le=500)
     on_node_failure: Literal["abort", "skip", "retry"] = "abort"
     node_retry_count: int = Field(default=0, ge=0, le=5)
+    # With on_node_failure "retry": what to do once the retries are used up.
+    node_retry_fallback: Literal["abort", "skip"] = "abort"
+    # Add each step's output under the final answer.
+    include_step_summary: bool = False
+    # Searched by every agent step, on top of the agent's own knowledge.
     default_knowledge_base_ids: list[str] = Field(default_factory=list, max_length=10)
+    # This workflow's own knowledge base (Settings -> Knowledge); searched like the defaults.
+    own_knowledge_base_id: str | None = None
     approvals: ToolApprovalPolicy = Field(default_factory=ToolApprovalPolicy)
+    approval_overrides: ApprovalOverrides = Field(default_factory=ApprovalOverrides)
+
+    def knowledge_base_ids(self) -> list[str]:
+        ids = list(self.default_knowledge_base_ids)
+        if self.own_knowledge_base_id:
+            ids.append(self.own_knowledge_base_id)
+        return list(dict.fromkeys(ids))
 
 
 def parse_tool_id(tool_id: str | None) -> tuple[str, str] | None:

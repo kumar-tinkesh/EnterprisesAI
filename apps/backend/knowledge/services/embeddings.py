@@ -5,7 +5,8 @@ the JSON ``embedding`` column) never depends on which backend is active.
 Selected via ``KNOWLEDGE_EMBEDDING_BACKEND``:
 
 * ``fastembed`` (default) — local ONNX model, no API key, works offline. The
-  model downloads once and is cached (``FASTEMBED_CACHE_PATH`` in Docker).
+  model downloads once and is cached (``FASTEMBED_CACHE_PATH`` in Docker). It
+  is the same loaded model the LLM gateway embeds the MCP catalog with.
 * ``gateway`` — the LLM gateway's configured embedding provider (the same
   path ``vendor.services.embedding`` uses for MCP tools).
 
@@ -52,9 +53,9 @@ class Embedder(ABC):
 
 class FastEmbedEmbedder(Embedder):
     def __init__(self, model_name: str):
-        from fastembed import TextEmbedding
+        from apps.llm_gateway.providers.fastembed_client import load_text_embedding
 
-        self._model = TextEmbedding(model_name=model_name)
+        self._model = load_text_embedding(model_name)
         self.model_name = model_name
         self.max_input_tokens = 512
 

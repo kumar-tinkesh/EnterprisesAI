@@ -35,6 +35,20 @@ class Settings(BaseSettings):
     ENV: str = "development"
     SHOW_LOADED_ENV: bool = False
 
+    # ── First admin ────────────────────────────────────────────────────────
+    # The platform (vendor) admin created at startup if no account with this
+    # email exists yet; an existing one is left untouched (its password too).
+    # Both empty = no bootstrap.
+    ADMIN_EMAIL: str = ""
+    ADMIN_PASSWORD: str = ""
+    ADMIN_FULL_NAME: str = "Platform Admin"
+    # The first tenant (a company) and its tenant admin, created the same way:
+    # only if no account with TENANT_ADMIN_EMAIL exists yet.
+    TENANT_NAME: str = ""
+    TENANT_ADMIN_EMAIL: str = ""
+    TENANT_ADMIN_PASSWORD: str = ""
+    TENANT_ADMIN_FULL_NAME: str = "Tenant Admin"
+
     # --- HTTP / CORS ------------------------------------------------------
     API_V1_PREFIX: str = "/api/v1"
     BACKEND_CORS_ORIGINS: list[str] = Field(

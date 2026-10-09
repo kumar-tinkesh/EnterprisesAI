@@ -93,6 +93,17 @@ describe("run view", () => {
     expect(displayTool("demo__send_note")).toBe("send_note");
   });
 
+  it("collects guardrail findings live and from a snapshot", () => {
+    let view = reduceRunEvent(emptyRunView, { type: "guardrail", node_id: "a", rule: "pii_input", severity: "medium", message: "Hid 1 email" });
+    expect(view.guardrails).toEqual([{ rule: "pii_input", severity: "medium", message: "Hid 1 email", node_id: "a" }]);
+    expect(view.timeline.at(-1)).toMatchObject({ tone: "warn", text: "guardrail: Hid 1 email", nodeId: "a" });
+    view = reduceRunEvent(view, {
+      type: "snapshot",
+      run: { ...snapshot, output: { text: null, guardrails: [{ rule: "injection_blocked", severity: "high", message: "Blocked" }] } },
+    });
+    expect(view.guardrails.map((g) => g.rule)).toEqual(["injection_blocked"]);
+  });
+
   it("drops an approval once it's decided", () => {
     let view = reduceRunEvent(emptyRunView, { type: "snapshot", run: snapshot });
     view = reduceRunEvent(view, { type: "approval_resolved", approval_id: "p1", status: "approved" });

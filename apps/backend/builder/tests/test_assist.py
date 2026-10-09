@@ -251,6 +251,23 @@ async def test_replacing_a_shared_agent_only_changes_this_workflow(db, tenant_cl
     assert shared.instructions == "" and shared.workflow_id is None  # the shared agent is untouched
 
 
+async def test_edit_puts_the_workflow_on_a_schedule_in_the_users_timezone(tenant_client, llm, catalog):
+    wf, _ = await _saved_flow(tenant_client)
+    llm.on("You are editing an EXISTING AI workflow", [
+        {"summary": "x", "answer": None, "ops": [{"op": "replace_trigger", "type": "schedule_trigger", "schedule": {"cron": "* * * * *"}}]},
+        {"summary": "Runs on weekdays.", "answer": None,
+         "ops": [{"op": "replace_trigger", "type": "schedule_trigger", "schedule": {"cron": "0 9 * * 1-5"}}]},
+    ])
+    body = {"instruction": "run this every weekday at 9am", "timezone": "Asia/Kolkata", **{k: wf[k] for k in ("name", "nodes", "edges", "config")}}
+    out = (await tenant_client.post("/api/v1/builder/assist/workflow-edit", json=body)).json()
+    assert "The user's timezone: Asia/Kolkata" in llm.seen("You are editing")[0]
+    assert "at most every 5 minutes" in llm.seen("Your operations failed")[0]  # too frequent -> repaired
+    trigger = next(n for n in out["nodes"] if n["id"] == "in")
+    assert trigger["type"] == "schedule_trigger"
+    assert trigger["schedule"] == {"cron": "0 9 * * 1-5", "timezone": "Asia/Kolkata", "enabled": True}
+    assert any("weekdays at 9:00 am" in c.lower() for c in out["changes"]) and out["problems"] == []
+
+
 async def test_question_returns_an_answer_and_no_changes(tenant_client, llm, catalog):
     wf, _ = await _saved_flow(tenant_client)
     llm.on("You are editing an EXISTING AI workflow", {"summary": None, "answer": "It writes, then outputs.", "ops": []})
