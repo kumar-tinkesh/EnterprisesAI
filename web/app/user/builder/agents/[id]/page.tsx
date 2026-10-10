@@ -1,16 +1,14 @@
 "use client";
 
+import { useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 
-import ProtectedDashboard from "@/components/protected-dashboard";
-import { AgentEditor } from "@/components/builder/agent-editor";
+import { editorHref } from "@/lib/builder/use-builder-actions";
 
-export default function AgentEditorPage() {
+/** Old link: agents open on the AI Compiler canvas now. */
+export default function AgentRedirect() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  return (
-    <ProtectedDashboard path="/user" title="Agent" description="Build and test an agent" fullBleed>
-      <AgentEditor id={id} onBack={() => router.push("/user/projects")} />
-    </ProtectedDashboard>
-  );
+  useEffect(() => router.replace(editorHref({ kind: "agent", id })), [id, router]);
+  return null;
 }

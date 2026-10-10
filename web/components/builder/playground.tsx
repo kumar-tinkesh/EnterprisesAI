@@ -54,6 +54,7 @@ export function Playground({
   onView,
   onClose,
   stepName = (id: string) => id,
+  request,
 }: {
   kind: "agent" | "workflow";
   targetId: string;
@@ -63,6 +64,8 @@ export function Playground({
   onView: (view: RunView) => void;
   onClose: () => void;
   stepName?: (nodeId: string) => string;
+  /** Ask from outside (the bottom bar): fills the request in and runs it. */
+  request?: { text: string; at: number } | null;
 }) {
   const queryClient = useQueryClient();
   const [input, setInput] = useState("");
@@ -80,16 +83,16 @@ export function Playground({
   });
 
   const start = useMutation({
-    mutationFn: async (): Promise<Run | null> => {
+    mutationFn: async (text: string): Promise<Run | null> => {
       setProblems([]);
       if (beforeRun && !(await beforeRun())) return null;
-      if (kind === "agent") return builderApi.startAgentRun(token, targetId, input);
+      if (kind === "agent") return builderApi.startAgentRun(token, targetId, text);
       const variables: Record<string, unknown> = {};
       for (const f of fields) {
         const v = coerce(f, values[f.name] ?? "");
         if (v !== undefined) variables[f.name] = v;
       }
-      return builderApi.startWorkflowRun(token, targetId, input, variables);
+      return builderApi.startWorkflowRun(token, targetId, text, variables);
     },
     onSuccess: (run) => {
       if (!run) return;
@@ -101,6 +104,12 @@ export function Playground({
       setProblems(list.length ? list : [{ code: "error", message: err instanceof Error ? err.message : "Couldn't start the run." }]);
     },
   });
+
+  useEffect(() => {
+    if (!request) return;
+    setInput(request.text);
+    start.mutate(request.text);
+  }, [request?.at]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const cancel = useMutation({ mutationFn: () => builderApi.cancelRun(token, runId!) });
   const active = runId !== null && !isFinished(view.status);
@@ -133,7 +142,7 @@ export function Playground({
           className="space-y-3"
           onSubmit={(e) => {
             e.preventDefault();
-            if (!start.isPending) start.mutate();
+            if (!start.isPending) start.mutate(input);
           }}
         >
           <Field label={kind === "agent" ? "Ask the agent" : "Request"}>

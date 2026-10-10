@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { AgentFields } from "@/components/builder/agent-fields";
+import { BuildBar, barButton, barInput } from "@/components/builder/build-bar";
 import { AgentSchedules } from "@/components/builder/schedule-fields";
 import { RiskBadge } from "@/components/builder/fields";
 import { Playground } from "@/components/builder/playground";
@@ -23,6 +24,7 @@ import { builderApi } from "@/lib/builder/api";
 import { serverIdOf, toolName } from "@/lib/builder/graph";
 import { emptyRunView, type RunView } from "@/lib/builder/run-state";
 import type { DraftAgent, Problem } from "@/lib/builder/types";
+import type { BuildTarget } from "@/lib/builder/use-builder-actions";
 import { useAuthStore } from "@/stores/auth-store";
 import { cn } from "@/lib/utils";
 
@@ -32,15 +34,15 @@ type Notice = { tone: "ok" | "warn" | "error"; text: string; detail?: string[]; 
 const NOTICE_KEY = (id: string) => `builder.agent-notice.${id}`;
 
 /** The agent editor (canvas, settings, schedules, playground) for one saved agent. */
-export function AgentEditor({ id, onBack }: { id: string; onBack: () => void }) {
+export function AgentEditor({ id, onBack, onOpen }: { id: string; onBack: () => void; onOpen: (target: BuildTarget) => void }) {
   return (
     <ReactFlowProvider>
-      <Editor id={id} onBack={onBack} />
+      <Editor id={id} onBack={onBack} onOpen={onOpen} />
     </ReactFlowProvider>
   );
 }
 
-function Editor({ id, onBack }: { id: string; onBack: () => void }) {
+function Editor({ id, onBack, onOpen }: { id: string; onBack: () => void; onOpen: (target: BuildTarget) => void }) {
   const token = useAuthStore((s) => s.accessToken) || "";
   const queryClient = useQueryClient();
 
@@ -54,6 +56,8 @@ function Editor({ id, onBack }: { id: string; onBack: () => void }) {
   const [notice, setNotice] = useState<Notice>(null);
   const [playOpen, setPlayOpen] = useState(false);
   const [runView, setRunView] = useState<RunView>(emptyRunView);
+  const [ask, setAsk] = useState("");
+  const [request, setRequest] = useState<{ text: string; at: number } | null>(null);
   const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({});
   const loaded = useRef(false);
   const flow = useReactFlow();
@@ -378,6 +382,7 @@ function Editor({ id, onBack }: { id: string; onBack: () => void }) {
               token={token}
               beforeRun={readOnly ? undefined : ensureSaved}
               onView={setRunView}
+              request={request}
               stepName={() => form.name || "Agent"}
               onClose={() => {
                 setPlayOpen(false);
@@ -387,6 +392,28 @@ function Editor({ id, onBack }: { id: string; onBack: () => void }) {
           }
         />
       </div>
+      <BuildBar
+        current="agent"
+        onOpen={onOpen}
+        edit={
+          <form
+            className="flex min-w-0 flex-1 items-center gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const text = ask.trim();
+              if (!text) return;
+              setPlayOpen(true);
+              setRequest({ text, at: Date.now() });
+              setAsk("");
+            }}
+          >
+            <input aria-label="Ask this agent" className={barInput} placeholder={`Ask ${form.name || "this agent"} something and press Run`} value={ask} onChange={(e) => setAsk(e.target.value)} />
+            <button type="submit" disabled={!ask.trim()} className={cn(barButton, "bg-emerald-600 text-white hover:bg-emerald-500")}>
+              <Play className="h-3.5 w-3.5 fill-current" /> Run
+            </button>
+          </form>
+        }
+      />
     </div>
   );
 }

@@ -1,16 +1,14 @@
 "use client";
 
+import { useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 
-import ProtectedDashboard from "@/components/protected-dashboard";
-import { WorkflowEditor } from "@/components/builder/workflow-editor";
+import { editorHref } from "@/lib/builder/use-builder-actions";
 
-export default function WorkflowEditorPage() {
+/** Old link: workflows open on the AI Compiler canvas now. */
+export default function WorkflowRedirect() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  return (
-    <ProtectedDashboard path="/user" title="Workflow" description="Build and test a workflow" fullBleed>
-      <WorkflowEditor id={id} onBack={() => router.push("/user/projects")} onSwitch={(workflowId) => router.push(`/user/builder/workflows/${workflowId}`)} />
-    </ProtectedDashboard>
-  );
+  useEffect(() => router.replace(editorHref({ kind: "workflow", id })), [id, router]);
+  return null;
 }
