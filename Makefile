@@ -8,7 +8,7 @@
 SHELL := /bin/bash
 
 .PHONY: help install install-api install-web upgrade downgrade stamp revision \
-        seed-admin api web dev test test-api test-web docker-up docker-down clean help
+        seed-admin api web dev test test-api test-web docker-up docker-dev docker-down clean help
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -63,6 +63,9 @@ docker-up: ## Full stack in Docker (web :3001, auth :8001, backend :8002)
 	@echo "  ⚡  Backend API Docs:     http://localhost:8002/docs"
 	@echo "  🤖  LLM Gateway Docs:     http://localhost:4000/docs"
 	@echo "=========================================================================="
+
+docker-dev: ## Full stack in Docker with hot reload (code changes apply live)
+	docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
 
 urls: ## Show all active service URLs
 	@echo ""

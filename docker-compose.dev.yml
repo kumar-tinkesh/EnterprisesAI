@@ -1,0 +1,53 @@
+# ---------------------------------------------------------------------------
+# Dev overlay — hot reload, no rebuilds for code changes
+#
+#   make docker-dev
+#   (= docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build)
+#
+# Source is bind-mounted into every container: Python services restart on
+# *.py changes (uvicorn --reload / watchfiles), the web app runs `next dev`.
+# Rebuild (`make docker-dev` again) only after changing pyproject.toml /
+# uv.lock / package.json / a Dockerfile; for new web deps also pass -V so the
+# node_modules volume is recreated.
+# ---------------------------------------------------------------------------
+services:
+  auth:
+    environment:
+      UVICORN_EXTRA_ARGS: --reload --reload-dir /app/apps
+    volumes:
+      - ./apps:/app/apps
+
+  backend:
+    environment:
+      UVICORN_EXTRA_ARGS: --reload --reload-dir /app/apps
+    volumes:
+      - ./apps:/app/apps
+
+  worker:
+    entrypoint:
+      - sh
+      - -c
+      - cd apps/backend && exec watchfiles --filter python "python -m builder.worker" /app/apps
+    volumes:
+      - ./apps:/app/apps
+
+  llm-gateway:
+    command:
+      - sh
+      - -c
+      - exec uvicorn apps.llm_gateway.api:app --host 0.0.0.0 --port 4000 --reload --reload-dir /app/apps/llm_gateway
+
+  web:
+    build:
+      target: deps  # node_modules + pnpm, no `next build`
+    image: enterpriseai-web-dev
+    command: ["sh", "-c", "exec pnpm dev -H 0.0.0.0 -p $${PORT}"]
+    environment:
+      NODE_ENV: development
+      NEXT_TELEMETRY_DISABLED: "1"
+      NEXT_PUBLIC_API_URL: http://localhost:8001/api/v1
+      NEXT_PUBLIC_BACKEND_API_URL: http://localhost:8002/api/v1
+    volumes:
+      - ./web:/app
+      - /app/node_modules  # keep the image's Linux node_modules, not the host's
+      - /app/.next

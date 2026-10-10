@@ -28,4 +28,5 @@ echo "==========================================================================
 exec uvicorn src.main:app \
     --app-dir apps/auth \
     --host 0.0.0.0 \
-    --port "${PORT:-8001}"
+    --port "${PORT:-8001}" \
+    ${UVICORN_EXTRA_ARGS:-}
