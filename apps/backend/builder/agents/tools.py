@@ -40,16 +40,47 @@ def _slug(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9_]+", "_", text).strip("_").lower() or "tool"
 
 
+# Providers (OpenAI / Azure) reject a function whose parameters use these at
+# the top level, and one bad tool fails the whole request.
+_TOP_LEVEL_BANNED = ("oneOf", "anyOf", "allOf", "enum", "const", "not")
+
+
+def _required_sets(rule: object) -> str:
+    """``[{"required": ["a"]}, {"required": ["b"]}]`` -> "a; or b"."""
+    if not isinstance(rule, list):
+        return ""
+    sets = [", ".join(r["required"]) for r in rule if isinstance(r, dict) and isinstance(r.get("required"), list) and r["required"]]
+    return "; or ".join(sets)
+
+
+def provider_safe_parameters(schema: dict | None) -> tuple[dict, str]:
+    """The tool's JSON Schema in a shape every provider accepts, plus a note
+    describing any top-level rule that had to be dropped (for the description;
+    the MCP server still enforces it on the call)."""
+    if not isinstance(schema, dict) or not schema:
+        return {"type": "object", "properties": {}}, ""
+    out = {k: v for k, v in schema.items() if k not in _TOP_LEVEL_BANNED}
+    out["type"] = "object"
+    if not isinstance(out.get("properties"), dict):
+        out["properties"] = {}
+    notes = []
+    if one_of := _required_sets(schema.get("oneOf")) or _required_sets(schema.get("anyOf")):
+        notes.append(f"Provide {one_of}.")
+    if _required_sets(schema.get("allOf")):
+        notes.append(f"Also required: {_required_sets(schema.get('allOf'))}.")
+    return out, " ".join(notes)
+
+
 def function_definitions(tools: list[AgentTool], *, with_knowledge: bool) -> list[dict]:
     """[{name, description, parameters}] in the order the model sees them."""
-    defs = [
-        {
+    defs = []
+    for t in tools:
+        parameters, note = provider_safe_parameters(t.input_schema)
+        defs.append({
             "name": t.function_name,
-            "description": f"[{t.server_name}] {t.description}".strip(),
-            "parameters": t.input_schema or {"type": "object", "properties": {}},
-        }
-        for t in tools
-    ]
+            "description": " ".join(x for x in (f"[{t.server_name}] {t.description}".strip(), note) if x),
+            "parameters": parameters,
+        })
     if with_knowledge:
         defs.append({
             "name": KNOWLEDGE_TOOL,
