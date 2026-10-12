@@ -144,6 +144,11 @@ export default function VendorMCPPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["vendor-mcp-servers"] }),
   });
 
+  const globalMutation = useMutation({
+    mutationFn: ({ id, isGlobal }: { id: string; isGlobal: boolean }) => vendorApi.setMCPServerGlobal(accessToken, id, isGlobal),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["vendor-mcp-servers"] }),
+  });
+
   const grantMutation = useMutation({
     mutationFn: (vals: { tenant_id: string; resource_id: string }) =>
       vendorApi.grantResource(accessToken, {
@@ -243,18 +248,30 @@ export default function VendorMCPPage() {
                       )}
                     </td>
                     <td className="px-4 py-3">
-                      {s.is_global ? (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
-                          <Globe className="h-3 w-3" /> Global
-                        </span>
-                      ) : (
-                        <span
-                          className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700"
-                          title="Not global — invisible to every tenant/solo user until you explicitly grant it via the Grants action"
-                        >
-                          <Lock className="h-3 w-3" /> Restricted
-                        </span>
-                      )}
+                      <button
+                        type="button"
+                        disabled={globalMutation.isPending && globalMutation.variables?.id === s.id}
+                        onClick={() => globalMutation.mutate({ id: s.id, isGlobal: !s.is_global })}
+                        title={
+                          s.is_global
+                            ? "Every user can see and use this server. Click to restrict it to tenants you grant it to."
+                            : "Hidden from users until you grant it to their tenant. Click to make it available to every user."
+                        }
+                        className={
+                          s.is_global
+                            ? "inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-50 cursor-pointer"
+                            : "inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 hover:bg-amber-100 disabled:opacity-50 cursor-pointer"
+                        }
+                      >
+                        {globalMutation.isPending && globalMutation.variables?.id === s.id ? (
+                          <Spinner className="h-3 w-3" />
+                        ) : s.is_global ? (
+                          <Globe className="h-3 w-3" />
+                        ) : (
+                          <Lock className="h-3 w-3" />
+                        )}
+                        {s.is_global ? "All users" : "Restricted"}
+                      </button>
                     </td>
                     <td className="px-4 py-3 text-xs text-zinc-500">
                       {s.server_url || <span className="text-zinc-400">—</span>}
@@ -447,7 +464,7 @@ function CreateMCPModal({
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [serverUrl, setServerUrl] = useState("");
-  const [isGlobal, setIsGlobal] = useState(false);
+  const [isGlobal, setIsGlobal] = useState(true);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -506,7 +523,7 @@ function CreateMCPModal({
               onChange={(e) => setIsGlobal(e.target.checked)}
               className="h-4 w-4 rounded border-zinc-300"
             />
-            Global (available to all solo users without a tenant grant)
+            Available to all users (untick to show it only to tenants you grant it to)
           </label>
 
           {error && <p className="text-xs text-red-600">{error}</p>}
@@ -1027,7 +1044,7 @@ function AnalyzeRepoModal({
   const [activeTab, setActiveTab] = useState<"remote" | "github">("github");
   const [serverName, setServerName] = useState("");
   const [description, setDescription] = useState("");
-  const [isGlobal, setIsGlobal] = useState(false);
+  const [isGlobal, setIsGlobal] = useState(true);
 
   const handleAnalyze = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1145,7 +1162,7 @@ function AnalyzeRepoModal({
                 onChange={(e) => setIsGlobal(e.target.checked)}
                 className="h-4 w-4 rounded border-zinc-300"
               />
-              Global (available to all solo users without tenant grant)
+              Available to all users (untick to show it only to tenants you grant it to)
             </label>
 
             {error && <p className="text-xs text-red-600">{error}</p>}

@@ -20,6 +20,7 @@ import {
   XCircle,
 } from "lucide-react";
 
+import { ConnectButton } from "@/components/connections/connect-button";
 import { cn } from "@/lib/utils";
 import type { StepState } from "@/lib/builder/run-state";
 import type { NodeType, Problem } from "@/lib/builder/types";
@@ -34,6 +35,10 @@ export type StepData = {
   problems: Problem[];
   state?: StepState;
   detail?: string | null;
+  /** Lines come in at the top and leave at the bottom (narrow, top-to-bottom layouts). */
+  vertical?: boolean;
+  /** A tool whose server isn't connected yet: connect it right on the node. */
+  connect?: { serverId: string; serverName: string; token: string };
 };
 
 export type StepNodeType = Node<StepData, "step">;
@@ -95,7 +100,7 @@ function StepNodeView({ data, selected }: NodeProps<StepNodeType>) {
       )}
       title={hasProblems ? data.problems.map((p) => p.message).join("\n") : undefined}
     >
-      {!NO_INPUT.includes(data.type) && <Handle type="target" position={Position.Left} className="!h-2.5 !w-2.5 !border-2 !border-white !bg-zinc-400" />}
+      {!NO_INPUT.includes(data.type) && <Handle type="target" position={data.vertical ? Position.Top : Position.Left} className="!h-2.5 !w-2.5 !border-2 !border-white !bg-zinc-400" />}
       <div className="flex items-center gap-2">
         <span className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-lg", TONES[data.type])}>
           <Icon className="h-4 w-4" />
@@ -113,7 +118,15 @@ function StepNodeView({ data, selected }: NodeProps<StepNodeType>) {
         )}
       </div>
       {data.detail && <p className="mt-1.5 truncate rounded bg-sky-50 px-1.5 py-0.5 text-[10px] text-sky-700">{data.detail}</p>}
-      {data.type !== "output" && <Handle type="source" position={Position.Right} className="!h-2.5 !w-2.5 !border-2 !border-white !bg-zinc-400" />}
+      {data.connect && (
+        <ConnectButton
+          serverId={data.connect.serverId}
+          serverName={data.connect.serverName}
+          token={data.connect.token}
+          className="mt-2 w-full justify-center"
+        />
+      )}
+      {data.type !== "output" && <Handle type="source" position={data.vertical ? Position.Bottom : Position.Right} className="!h-2.5 !w-2.5 !border-2 !border-white !bg-zinc-400" />}
     </div>
   );
 }

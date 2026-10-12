@@ -15,12 +15,14 @@ from vendor.api.v1.schemas import (
     AddMCPServerResponse,
     ConnectMCPServerRequest,
     MCPServerResponse,
+    SetMCPServerGlobalRequest,
 )
 from vendor.services.mcp_service import (
     add_mcp_server,
     create_mcp_server,
     delete_mcp_server,
     list_mcp_servers,
+    set_mcp_server_global,
 )
 
 logger = logging.getLogger("vendor.servers")
@@ -71,6 +73,26 @@ async def get_list_mcp_servers(
     db: AsyncSession = Depends(get_db),
 ):
     return await list_mcp_servers(db)
+
+
+@router.patch("/mcp/{server_id}/global", response_model=MCPServerResponse)
+async def patch_mcp_server_global(
+    server_id: str,
+    payload: SetMCPServerGlobalRequest,
+    user: CurrentUser = _admin,
+    db: AsyncSession = Depends(get_db),
+):
+    """Make a server available to every user, or only to tenants it is granted to."""
+    server = await set_mcp_server_global(
+        db, server_id=server_id, is_global=payload.is_global, actor_id=user.id
+    )
+    if server is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found"
+        )
+    await db.commit()
+    await db.refresh(server)
+    return server
 
 
 @router.delete("/{server_id}", status_code=status.HTTP_204_NO_CONTENT)

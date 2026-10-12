@@ -7,6 +7,7 @@ import { BACKEND_API_URL, request } from "@/lib/api";
 import type {
   Agent,
   AgentConfig,
+  AgentProfile,
   AnswerDepth,
   AgentDraft,
   Approval,
@@ -149,6 +150,7 @@ export const builderApi = {
   searchTools: (t: string, q: string, limit = 8) =>
     call<ToolCandidate[]>(t, `/tools/search?${new URLSearchParams({ q, limit: String(limit) }).toString()}`),
   serverTools: (t: string, serverId: string) => call<ServerTools>(t, `/servers/${serverId}/tools`),
+  agentProfiles: (t: string) => call<AgentProfile[]>(t, "/assist/agent-profiles"),
   draftAgent: (t: string, description: string) => call<AgentDraft>(t, "/assist/agent", "POST", { description }),
   draftWorkflow: (t: string, description: string) => call<WorkflowDraft>(t, "/assist/workflow", "POST", { description }),
   editWorkflow: (t: string, body: { instruction: string; name: string; nodes: WorkflowNode[]; edges: WorkflowEdge[]; config: WorkflowConfig; workflow_id?: string }) =>

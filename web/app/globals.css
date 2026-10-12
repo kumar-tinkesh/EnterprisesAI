@@ -18,6 +18,7 @@ body {
 .builder-dark .bg-white { background-color: #18181b; }
 .builder-dark .bg-zinc-50 { background-color: #1f1f23; }
 .builder-dark .bg-zinc-100 { background-color: #27272a; }
+.builder-dark .bg-zinc-200 { background-color: #27272a; }
 .builder-dark .bg-white\/90 { background-color: rgb(24 24 27 / 0.9); }
 .builder-dark .text-zinc-950, .builder-dark .text-zinc-900 { color: #f4f4f5; }
 .builder-dark .text-zinc-800 { color: #e4e4e7; }

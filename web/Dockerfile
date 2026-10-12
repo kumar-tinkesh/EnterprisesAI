@@ -17,7 +17,10 @@ FROM base AS deps
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 # Approve esbuild/sharp postinstall scripts explicitly (pnpm 11 requires it).
 RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
-    pnpm install --frozen-lockfile --dangerously-allow-all-builds
+    pnpm install --frozen-lockfile --dangerously-allow-all-builds \
+        --fetch-retries=5 \
+        --fetch-timeout=300000 \
+        --network-concurrency=8
 
 # --- Build -------------------------------------------------------------------
 FROM base AS builder

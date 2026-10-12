@@ -51,7 +51,20 @@ export function Toggle({ checked, onChange, label }: { checked: boolean; onChang
   );
 }
 
+/** Inside a provider set to true, sections drop their own heading and padding —
+ *  for hosts (the guided agent setup) that put each section in their own card. */
+export const BareSections = React.createContext(false);
+
 export function Section({ title, children, action }: { title: string; children: React.ReactNode; action?: React.ReactNode }) {
+  const bare = React.useContext(BareSections);
+  if (bare) {
+    return (
+      <div className="space-y-3">
+        {action && <div className="flex justify-end">{action}</div>}
+        {children}
+      </div>
+    );
+  }
   return (
     <section className="space-y-3 border-b border-zinc-100 px-4 py-4 last:border-0">
       <div className="flex items-center justify-between">

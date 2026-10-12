@@ -1,7 +1,8 @@
 """Builder assistant endpoints (mounted under ``/api/v1/builder``).
 
     GET  /tools/search?q=          tool picker: hybrid search over the caller's tools
-    POST /assist/agent             description -> agent draft (with chosen tools)
+    GET  /assist/agent-profiles    the one-click setting presets the guided agent setup offers
+    POST /assist/agent             description -> agent draft (tools, settings, and why)
     POST /assist/workflow          description -> workflow draft (steps, lines, agents, tools)
     POST /assist/workflow-edit     instruction + the open graph -> edited draft
     POST /assist/improve-text      polish one field's rough text
@@ -71,6 +72,15 @@ async def tool_search(
     db: AsyncSession = Depends(get_db),
 ):
     return [c.as_dict() for c in await search_tools(db, user, q, top_k_tools=limit)]
+
+
+@router.get("/assist/agent-profiles")
+async def agent_profiles(user: CurrentUser = Depends(get_end_user)):
+    """What each profile card writes; the guided setup applies them client-side
+    (and the draft already arrives with one applied)."""
+    from builder.agents.config import AGENT_PROFILES
+
+    return [{"id": key, **value} for key, value in AGENT_PROFILES.items()]
 
 
 @router.post("/assist/agent")

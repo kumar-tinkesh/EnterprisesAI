@@ -21,7 +21,8 @@ from src.api.deps import CurrentUser
 
 from builder.assist import prompts
 from builder.assist.llm import AssistUnavailable, Usage, ask_json
-from builder.assist.tools import Candidate, pick_agent_tools, pick_tool
+from builder.agents.config import AGENT_PROFILES, AgentConfig, apply_profile
+from builder.assist.tools import Candidate, pick_agent_tools, pick_tool, suggest_agent_tools
 from builder.graph.schema import NODE_TYPES, TRIGGER_TYPES, WorkflowConfig, WorkflowEdge, WorkflowNode
 from builder.graph.validation import GraphProblem, validate_graph
 from builder.workflows.scheduler import build_graph
@@ -36,6 +37,8 @@ class Draft:
     tools: dict[str, list[dict]] = field(default_factory=dict)  # step id ("agent" for an agent draft) -> its tools
     problems: list[GraphProblem] = field(default_factory=list)
     usage: Usage = field(default_factory=Usage)
+    # Agent drafts only: why the setup looks the way it does (see draft_agent).
+    insights: dict | None = None
 
     def needs_connection(self) -> list[dict]:
         seen: dict[str, dict] = {}
@@ -52,6 +55,7 @@ class Draft:
             "problems": [p.as_dict() for p in self.problems],
             "needs_connection": self.needs_connection(),
             "usage": {"prompt_tokens": self.usage.prompt_tokens, "completion_tokens": self.usage.completion_tokens},
+            **({"insights": self.insights} if self.insights is not None else {}),
         }
 
 
@@ -72,16 +76,44 @@ def agent_spec(raw: dict) -> dict:
     }
 
 
+def _flag(value) -> bool:
+    return value is True or (isinstance(value, str) and value.strip().lower() in ("true", "yes", "1"))
+
+
 async def draft_agent(db: AsyncSession, user: CurrentUser, description: str) -> Draft:
+    """A complete agent, ready to review: identity, tools (each with why it was
+    picked, plus related ones to add), and settings from a profile chosen for
+    the job. ``insights`` carries the reasons, so the guided setup can say why
+    each thing is there instead of leaving defaults unexplained."""
     usage = Usage()
-    spec = agent_spec(await ask_json(prompts.generate_agent_prompt(description), usage))
+    raw = await ask_json(prompts.generate_agent_prompt(description), usage)
+    spec = agent_spec(raw)
     # No needs = it works only from what it's told: no tools, rather than guessing from the description.
-    chosen = await pick_agent_tools(db, user, f"{spec['role']}: {spec['goal']}\nNeeds: {spec['needs'] or '(none)'}", spec["needs"], usage)
-    data = {
-        "name": spec["name"], "role": spec["role"], "goal": spec["goal"], "instructions": spec["instructions"],
-        "config": {"tool_ids": [c.tool_id for c in chosen]},
+    chosen, related = await suggest_agent_tools(
+        db, user, f"{spec['role']}: {spec['goal']}\nNeeds: {spec['needs'] or '(none)'}", spec["needs"], usage
+    )
+    profile = _text(raw.get("profile"), 20).lower()
+    if profile not in AGENT_PROFILES:
+        profile = "balanced"
+    config = apply_profile({"tool_ids": [c.tool_id for c in chosen]}, profile)
+    tone = _text(raw.get("tone"), 300)
+    if tone:
+        config["response"] = {**config.get("response", {}), "tone": tone}
+    # Delete tools always ask first; the policy defaults already say so — set it
+    # explicitly so the draft shows what will happen.
+    config["approvals"] = AgentConfig().approvals.model_dump()
+    config = AgentConfig.model_validate(config).model_dump()
+    uses_documents = _flag(raw.get("uses_documents"))
+    data = {"name": spec["name"], "role": spec["role"], "goal": spec["goal"], "instructions": spec["instructions"], "config": config}
+    insights = {
+        "needs": spec["needs"],
+        "profile": profile,
+        "profile_reason": _text(raw.get("profile_reason"), 300),
+        "knowledge": {"recommended": uses_documents, "reason": _text(raw.get("documents_reason"), 300) if uses_documents else ""},
+        "try_asking": _text(raw.get("try_asking"), 500),
+        "related_tools": [c.as_dict() for c in related[:6]],
     }
-    return Draft(data=data, tools={"agent": [c.as_dict() for c in chosen]}, usage=usage)
+    return Draft(data=data, tools={"agent": [c.as_dict() for c in chosen]}, usage=usage, insights=insights)
 
 
 def layout(nodes: list[dict], edges: list[dict]) -> None:

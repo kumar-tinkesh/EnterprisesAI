@@ -2,11 +2,12 @@
 
 import { Background, BackgroundVariant, Controls, ReactFlow, ReactFlowProvider } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { ArrowLeft, Bot, Link2, Network, Server, Sparkles } from "lucide-react";
+import { ArrowLeft, Bot, Link2, ListChecks, Network, Server, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { BuildBar } from "@/components/builder/build-bar";
 import type { BuildTarget } from "@/lib/builder/use-builder-actions";
+import { useAgentWizard } from "@/stores/agent-wizard-store";
 
 /**
  * The AI Compiler's empty canvas: describe an agent or workflow in the bar
@@ -29,10 +30,10 @@ export default function BuilderHome({
         </a>
         <Sparkles className="h-4 w-4 text-indigo-600" />
         <span className="text-sm font-semibold text-zinc-900">AI Compiler</span>
-        <span className="text-xs text-zinc-400">Describe an agent or workflow below</span>
+        <span className="hidden text-xs text-zinc-400 sm:inline">Describe an agent or workflow below</span>
         <div className="ml-auto flex gap-2">
-          <Button size="sm" variant="outline" className="h-8" onClick={onConnections}>
-            <Server /> Connections
+          <Button size="sm" variant="outline" className="h-8" onClick={onConnections} aria-label="Connections">
+            <Server /> <span className="hidden sm:inline">Connections</span>
           </Button>
         </div>
       </header>
@@ -53,7 +54,7 @@ export default function BuilderHome({
             <Controls showInteractive={false} />
           </ReactFlow>
         </ReactFlowProvider>
-        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 text-center">
+        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 p-6 text-center">
           <div className="flex gap-2 text-indigo-400">
             <Bot className="h-6 w-6" />
             <Network className="h-6 w-6" />
@@ -62,6 +63,13 @@ export default function BuilderHome({
           <p className="max-w-sm text-xs text-zinc-500">
             Pick Agent or Workflow below and describe it. It&apos;s designed, matched to your tools and opened on this canvas.
           </p>
+          <button
+            type="button"
+            onClick={() => useAgentWizard.getState().start({})}
+            className="pointer-events-auto mt-1 inline-flex items-center gap-1.5 rounded-lg border border-white/15 px-3 py-2 text-xs font-medium text-zinc-200 hover:bg-white/5 cursor-pointer"
+          >
+            <ListChecks className="h-3.5 w-3.5" /> Set up an agent step by step
+          </button>
         </div>
       </div>
 

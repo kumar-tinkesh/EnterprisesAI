@@ -32,6 +32,7 @@ class Candidate:
     description: str
     risk: str
     connected: bool
+    reason: str = ""
 
     def line(self) -> str:
         return f"{self.tool_id} | {self.server_name}.{self.tool_name}: {self.description} [{self.risk}]"
@@ -40,6 +41,7 @@ class Candidate:
         return {
             "tool_id": self.tool_id, "server_id": self.server_id, "server_name": self.server_name,
             "tool_name": self.tool_name, "description": self.description, "risk": self.risk, "connected": self.connected,
+            **({"reason": self.reason} if self.reason else {}),
         }
 
 
@@ -83,4 +85,26 @@ async def pick_agent_tools(db: AsyncSession, user: CurrentUser, step: str, needs
     return [by_id[t] for t in dict.fromkeys(chosen) if t in by_id][:8]
 
 
-__all__ = ["Candidate", "search_tools", "pick_tool", "pick_agent_tools"]
+async def suggest_agent_tools(
+    db: AsyncSession, user: CurrentUser, step: str, needs: str, usage: Usage
+) -> tuple[list[Candidate], list[Candidate]]:
+    """For the guided agent setup: the tools picked for the agent, each with the
+    model's reason, and the rest of the shortlist as optional extras the person
+    may add. Nothing to search for -> neither."""
+    if not needs.strip():
+        return [], []
+    candidates = await search_tools(db, user, needs, top_k_tools=10)
+    if not candidates:
+        return [], []
+    answer = await ask_json(pick_tools_prompt(step, [c.line() for c in candidates], single=False, explain=True), usage)
+    chosen = answer.get("tool_ids") if isinstance(answer.get("tool_ids"), list) else []
+    reasons = answer.get("reasons") if isinstance(answer.get("reasons"), dict) else {}
+    by_id = {c.tool_id: c for c in candidates}
+    picked = [by_id[t] for t in dict.fromkeys(chosen) if isinstance(t, str) and t in by_id][:8]
+    for c in picked:
+        c.reason = str(reasons.get(c.tool_id) or "").strip()[:200]
+    taken = {c.tool_id for c in picked}
+    return picked, [c for c in candidates if c.tool_id not in taken]
+
+
+__all__ = ["Candidate", "search_tools", "pick_tool", "pick_agent_tools", "suggest_agent_tools"]

@@ -20,6 +20,7 @@ from vendor.services.mcp_service.crud import (
     get_mcp_server,
     is_server_visible_to_user,
     list_mcp_servers,
+    set_mcp_server_global,
 )
 from vendor.services.mcp_service.registration import (
     _GRANTABLE_RESOURCE_TYPES,
@@ -37,6 +38,7 @@ __all__ = [
     "list_mcp_servers",
     "get_mcp_server",
     "delete_mcp_server",
+    "set_mcp_server_global",
     "is_server_visible_to_user",
     "_resolve_and_build_config",
     "build_runtime_config",

@@ -4,10 +4,11 @@ import { createContext, memo, useContext } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 import {
-  AlertTriangle, BookOpen, Bot, CalendarClock, CheckCircle2, CircleDot, GitBranch, Hand, Link2, Loader2, LogIn, Merge,
+  AlertTriangle, BookOpen, Bot, CalendarClock, CheckCircle2, CircleDot, GitBranch, Hand, Loader2, LogIn, Merge,
   PlayCircle, Send, Wrench, XCircle,
 } from "lucide-react";
 
+import { ConnectButton } from "@/components/connections/connect-button";
 import { builderApi } from "@/lib/builder/api";
 import { serverIdOf, toolName } from "@/lib/builder/graph";
 import type { StepState } from "@/lib/builder/run-state";
@@ -103,9 +104,7 @@ function ToolBody({ node, ctx }: { node: WorkflowNode; ctx: CanvasCtx }) {
           server.data.connected ? (
             <Chip tone="emerald"><CheckCircle2 className="h-3 w-3" /> {server.data.server_name}</Chip>
           ) : (
-            <a href="/user/agents" className="nodrag" title="Connect your account on the AI Compiler page">
-              <Chip tone="amber"><Link2 className="h-3 w-3" /> Connect {server.data.server_name}</Chip>
-            </a>
+            <ConnectButton serverId={serverId!} serverName={server.data.server_name} token={ctx.token} className="rounded-full px-2 py-0.5 text-[11px]" />
           )
         ) : (
           <Chip>…</Chip>

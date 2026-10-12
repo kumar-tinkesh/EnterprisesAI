@@ -105,14 +105,22 @@ def generate_agent_prompt(description: str) -> str:
 "name" (2-4 words), "role" (one-line professional title), "goal" (one clear sentence: what it should
 accomplish every run), "instructions" (2-4 sentences of relevant expertise, personality and guardrails —
 e.g. what it must never assume or do), "needs" (one sentence naming the outside systems or data it must
-use, e.g. "read Gmail and create Jira tickets"; "" if it only answers from what it's told).
+use, e.g. "read Gmail and create Jira tickets"; "" if it only answers from what it's told),
+"profile" (how it should trade quality for speed: "quality" for careful multi-step research, analysis or
+anything where a wrong answer is costly; "speed" for quick lookups and short replies; "cost" for simple,
+high-volume, repetitive work; "balanced" otherwise), "profile_reason" (one short sentence: why that profile),
+"tone" (2-4 words for how it should sound, e.g. "friendly and clear"; "" if nothing in the description says),
+"uses_documents" (true only if it must answer from the user's own documents — policies, manuals, price
+lists, contracts — rather than from tools or general knowledge), "documents_reason" (one short sentence
+naming which documents, "" when uses_documents is false), "try_asking" (one realistic first request a
+user would send this agent, written as that user, under 25 words).
 
 User's description:
 {description}
 """
 
 
-def pick_tools_prompt(step: str, candidates: list[str], *, single: bool) -> str:
+def pick_tools_prompt(step: str, candidates: list[str], *, single: bool, explain: bool = False) -> str:
     lines = "\n".join(candidates)
     if single:
         shape = '{"tool_id": "<one id from the list>" or null}'
@@ -122,7 +130,10 @@ def pick_tools_prompt(step: str, candidates: list[str], *, single: bool) -> str:
             "nothing in the list performs it — never force a loose fit."
         )
     else:
-        shape = '{"tool_ids": ["<id>", ...]}'
+        shape = (
+            '{"tool_ids": ["<id>", ...], "reasons": {"<id>": "<why this agent needs it, under 15 words>", ...}}'
+            if explain else '{"tool_ids": ["<id>", ...]}'
+        )
         task = (
             "Pick the tools this agent will actually need to do its job (usually 1-6). Include read tools it "
             "needs to look things up and the action tools its goal names; leave out tools for things it doesn't "

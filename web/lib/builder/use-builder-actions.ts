@@ -8,6 +8,7 @@ import { ApiError } from "@/lib/api";
 import { builderApi } from "@/lib/builder/api";
 import { draftKey } from "@/lib/builder/graph";
 import type { Problem } from "@/lib/builder/types";
+import { useAgentWizard } from "@/stores/agent-wizard-store";
 import { useAuthStore } from "@/stores/auth-store";
 
 export type BuildMode = "agent" | "workflow";
@@ -18,7 +19,8 @@ export const editorHref = ({ kind, id }: BuildTarget) => `/user/agents?${kind}=$
 
 /**
  * Create (with AI or blank) and delete agents/workflows; shared by the AI
- * Compiler and Projects. ``open`` shows the new one in place (the compiler
+ * Compiler and Projects. A new agent opens the guided setup
+ * (components/builder/agent-wizard) instead of being saved straight away. ``open`` shows the new one in place (the compiler
  * page); without it the browser goes to the compiler page with it open.
  */
 export function useBuilderActions({ open }: { open?: (target: BuildTarget) => void } = {}) {
@@ -33,51 +35,43 @@ export function useBuilderActions({ open }: { open?: (target: BuildTarget) => vo
   };
 
   const createWithAi = useMutation({
-    mutationFn: async ({ mode, description }: { mode: BuildMode; description: string }) => {
+    mutationFn: async ({ mode, description }: { mode: BuildMode; description: string }): Promise<BuildTarget | null> => {
       setError(null);
-      if (mode === "workflow") {
-        const draft = await builderApi.draftWorkflow(token, description);
-        const wf = await builderApi.createWorkflow(token, { name: draft.name, description });
-        window.sessionStorage.setItem(draftKey(wf.id), JSON.stringify(draft));
-        return { kind: "workflow", id: wf.id } as BuildTarget;
+      if (mode === "agent") {
+        // Agents go through the guided setup: it drafts the agent from the
+        // description and nothing is saved until the person creates it there.
+        useAgentWizard.getState().start({ description });
+        return null;
       }
-      const draft = await builderApi.draftAgent(token, description);
-      const agent = await builderApi.createAgent(token, {
-        name: draft.name, role: draft.role, goal: draft.goal, instructions: draft.instructions, config: draft.config,
-      });
-      const connect = draft.needs_connection.map((s) => s.server_name);
-      window.sessionStorage.setItem(
-        `builder.agent-notice.${agent.id}`,
-        JSON.stringify({
-          tone: connect.length ? "warn" : "ok",
-          text: "Created by AI. Check it, then test it in the playground.",
-          detail: connect.length ? [`Connect before running: ${connect.join(", ")}`] : undefined,
-        }),
-      );
-      return { kind: "agent", id: agent.id } as BuildTarget;
+      const draft = await builderApi.draftWorkflow(token, description);
+      const wf = await builderApi.createWorkflow(token, { name: draft.name, description });
+      window.sessionStorage.setItem(draftKey(wf.id), JSON.stringify(draft));
+      return { kind: "workflow", id: wf.id };
     },
-    onSuccess: (target) => (open ? open(target) : router.push(editorHref(target))),
+    onSuccess: (target) => target && (open ? open(target) : router.push(editorHref(target))),
     onError: fail,
   });
 
   const createBlank = useMutation({
-    mutationFn: async (mode: BuildMode) => {
+    mutationFn: async (mode: BuildMode): Promise<BuildTarget | null> => {
       setError(null);
-      if (mode === "workflow") {
-        const wf = await builderApi.createWorkflow(token, {
-          name: "New workflow",
-          nodes: [
-            { id: "in", type: "input", position: { x: 0, y: 0 } },
-            { id: "out", type: "output", position: { x: 600, y: 0 } },
-          ],
-          edges: [{ id: "e1", source: "in", target: "out" }],
-        });
-        return { kind: "workflow", id: wf.id } as BuildTarget;
+      if (mode === "agent") {
+        // A blank agent is the guided setup without the description step.
+        useAgentWizard.getState().start({ blank: true });
+        return null;
       }
-      const agent = await builderApi.createAgent(token, { name: "New agent", role: "Assistant", goal: "Describe what this agent does" });
-      return { kind: "agent", id: agent.id } as BuildTarget;
+      const wf = await builderApi.createWorkflow(token, {
+        name: "New workflow",
+        nodes: [
+          { id: "in", type: "input", position: { x: 0, y: 0 } },
+          { id: "out", type: "output", position: { x: 600, y: 0 } },
+        ],
+        edges: [{ id: "e1", source: "in", target: "out" }],
+      });
+      return { kind: "workflow", id: wf.id };
     },
-    onSuccess: (target) => (open ? open(target) : router.push(editorHref(target))),
+    // The guided setup lives on the AI Compiler page.
+    onSuccess: (target) => (target ? (open ? open(target) : router.push(editorHref(target))) : !open && router.push("/user/agents")),
     onError: fail,
   });
 

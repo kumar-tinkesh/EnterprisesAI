@@ -118,6 +118,41 @@ class AgentConfig(_Strict):
         return list(dict.fromkeys(value))
 
 
+Profile = Literal["quality", "balanced", "speed", "cost"]
+
+# One-click presets for the guided agent setup: each writes these settings and
+# leaves everything else alone. Speed and cost still allow a few tool calls —
+# an agent with tools that can make only one usually can't finish its job.
+AGENT_PROFILES: dict[str, dict] = {
+    "quality": {
+        "label": "Best quality", "summary": "Thinks harder and double-checks. Slower, costs more.",
+        "config": {"llm": {"temperature": 0.3, "max_output_tokens": 4000, "reasoning_effort": "high"},
+                   "tools": {"max_calls": 12}, "reliability": {"retries": 2}, "response": {"verbosity": "detailed"}},
+    },
+    "balanced": {
+        "label": "Balanced", "summary": "Good answers at a sensible speed. Right for most agents.",
+        "config": {"llm": {"temperature": 0.5, "max_output_tokens": None, "reasoning_effort": "auto"},
+                   "tools": {"max_calls": 8}, "reliability": {"retries": 1}, "response": {"verbosity": "balanced"}},
+    },
+    "speed": {
+        "label": "Fast", "summary": "Short, quick replies. Good for simple lookups.",
+        "config": {"llm": {"temperature": 0.5, "max_output_tokens": 800, "reasoning_effort": "low"},
+                   "tools": {"max_calls": 4}, "reliability": {"retries": 0}, "response": {"verbosity": "concise"}},
+    },
+    "cost": {
+        "label": "Lowest cost", "summary": "Fewest tokens and tool calls. For simple, high-volume work.",
+        "config": {"llm": {"temperature": 0.3, "max_output_tokens": 600, "reasoning_effort": "low"},
+                   "tools": {"max_calls": 3}, "reliability": {"retries": 0}, "response": {"verbosity": "concise"}},
+    },
+}
+
+
+def apply_profile(config: dict | None, profile: str) -> dict:
+    """``config`` with a profile's settings written over it (unknown profile -> balanced)."""
+    preset = AGENT_PROFILES.get(profile) or AGENT_PROFILES["balanced"]
+    return merge_config(config, preset["config"])
+
+
 def merge_config(base: dict | None, overrides: dict | None) -> dict:
     """An agent's config with a workflow step's ``config_overrides`` on top —
     nested sections merge key by key; lists and scalars are replaced."""
@@ -131,11 +166,13 @@ def merge_config(base: dict | None, overrides: dict | None) -> dict:
 
 
 __all__ = [
+    "AGENT_PROFILES",
     "AgentConfig",
     "LLMSettings",
     "ResponseSettings",
     "ToolSettings",
     "ReliabilitySettings",
     "GuardrailSettings",
+    "apply_profile",
     "merge_config",
 ]

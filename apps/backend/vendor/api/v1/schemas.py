@@ -61,7 +61,7 @@ class AddMCPServerRequest(BaseModel):
     server_url: str | None = Field(None, max_length=512)
     # Source repository URL (GitHub) - used when server_url is a command not a URL
     source_repo_url: str | None = Field(None, max_length=512)
-    is_global: bool = False
+    is_global: bool = True
     # Optional: override detected source_type ('github' | 'remote' | 'local')
     source_type: str | None = Field(None, pattern="^(github|remote|local)$")
     # Optional: for GitHub monorepos, subpath to the MCP server (e.g. 'src/filesystem')
@@ -121,7 +121,7 @@ class ConnectMCPServerRequest(BaseModel):
     name: str = Field(min_length=2, max_length=255)
     description: str = Field(default="", max_length=4000)
     server_url: str = Field(max_length=512)
-    is_global: bool = False
+    is_global: bool = True
     # Optional credentials used *at registration time* for tool discovery on
     # auth-protected servers (not persisted).
     credentials: dict[str, str] | None = None
@@ -239,6 +239,10 @@ class OAuthAuthorizeResponse(BaseModel):
 
     authorization_url: str
     state: str
+
+
+class SetMCPServerGlobalRequest(BaseModel):
+    is_global: bool
 
 
 class MCPServerResponse(BaseModel):

@@ -328,6 +328,8 @@ export interface ToolCandidate {
   description: string;
   risk: Risk;
   connected: boolean;
+  /** Why the assistant picked it (agent drafts only). */
+  reason?: string;
 }
 
 export interface ServerTools {
@@ -355,6 +357,30 @@ export interface AgentDraft extends Draft {
   role: string;
   goal: string;
   instructions: string;
+  config: AgentConfig;
+  insights: AgentInsights;
+}
+
+export type ProfileId = "quality" | "balanced" | "speed" | "cost";
+
+/** Why an agent draft is set up the way it is (POST /assist/agent). */
+export interface AgentInsights {
+  /** The outside systems the assistant read the description as needing ("" = none). */
+  needs: string;
+  profile: ProfileId;
+  profile_reason: string;
+  knowledge: { recommended: boolean; reason: string };
+  /** A realistic first request to test it with. */
+  try_asking: string;
+  /** Tools from the same search that weren't picked — optional extras. */
+  related_tools: ToolCandidate[];
+}
+
+/** A one-click settings preset (GET /assist/agent-profiles). */
+export interface AgentProfile {
+  id: ProfileId;
+  label: string;
+  summary: string;
   config: AgentConfig;
 }
 

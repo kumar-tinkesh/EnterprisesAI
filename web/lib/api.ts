@@ -505,6 +505,11 @@ export const vendorApi = {
     request<void>(`${VR}/mcp/${serverId}/bridge/forget-as-user`, {
       method: "POST",
     }, token, BACKEND_API_URL),
+  setMCPServerGlobal: (token: string, serverId: string, isGlobal: boolean) =>
+    request<VendorMCPServer>(`${VR}/mcp/${serverId}/global`, {
+      method: "PATCH",
+      body: JSON.stringify({ is_global: isGlobal }),
+    }, token, BACKEND_API_URL),
   // "Connect via OAuth" bootstrap — see apps/backend/vendor/services/oauth_flow.py
   setMCPOAuthConfig: (token: string, serverId: string, body: OAuthConfigBody) =>
     request<VendorMCPServer>(`${VR}/mcp/${serverId}/oauth-config`, {

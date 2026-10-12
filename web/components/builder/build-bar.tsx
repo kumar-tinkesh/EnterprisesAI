@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 
 const MODE_KEY = "compiler.mode";
 const MODES: { id: BuildMode; label: string; icon: typeof Bot; placeholder: string }[] = [
-  { id: "agent", label: "Agent", icon: Bot, placeholder: "Describe an agent, e.g. an inbox assistant that reads my Gmail and drafts replies" },
+  { id: "agent", label: "Agent", icon: Bot, placeholder: "Describe an agent, e.g. an inbox assistant that reads my Gmail and drafts replies — you'll set it up step by step" },
   { id: "workflow", label: "Workflow", icon: Network, placeholder: "Describe a workflow, e.g. every morning summarize my unread Gmail and post it to Slack #team" },
 ];
 
@@ -20,7 +20,8 @@ export const barButton = "flex h-9 shrink-0 items-center gap-1.5 rounded-xl px-4
  * The one prompt bar at the bottom of the AI Compiler. Agent / Workflow tabs
  * pick what to build; with an agent or workflow of the picked kind open it
  * shows that one's own controls (``edit``) instead, and "New" switches back
- * to describing a new one. A new one opens in place (``onOpen``).
+ * to describing a new one. A new workflow opens in place (``onOpen``); a new
+ * agent opens the guided setup over the page.
  */
 export function BuildBar({
   current,
@@ -67,9 +68,9 @@ export function BuildBar({
   return (
     <div className="shrink-0 border-t border-white/10 bg-zinc-950">
       {builder.error && <p className="px-4 pt-3 text-xs text-red-400">{builder.error}</p>}
-      {pending && <p className="px-4 pt-3 text-xs text-zinc-400">Designing the {mode} and matching tools… this can take a few seconds.</p>}
+      {pending && <p className="px-4 pt-3 text-xs text-zinc-400">Designing the workflow and matching tools… this can take a few seconds.</p>}
       {editing && above && <div className="px-4 pt-3">{above}</div>}
-      <div className="flex items-center gap-2 p-3">
+      <div className="flex items-center gap-2 p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:p-3">
         <div className="inline-flex shrink-0 rounded-xl border border-white/10 bg-white/5 p-1" role="tablist" aria-label="What to build">
           {MODES.map((m) => (
             <button
@@ -77,6 +78,7 @@ export function BuildBar({
               type="button"
               role="tab"
               aria-selected={mode === m.id}
+              aria-label={m.label}
               disabled={pending}
               onClick={() => pick(m.id)}
               className={cn(
@@ -85,7 +87,7 @@ export function BuildBar({
               )}
             >
               <m.icon className="h-3.5 w-3.5" />
-              {m.label}
+              <span className="hidden sm:inline">{m.label}</span>
             </button>
           ))}
         </div>
@@ -138,8 +140,8 @@ export function BuildBar({
                 <X className="h-4 w-4" />
               </button>
             )}
-            <button type="submit" disabled={pending || text.trim().length < 3} className={cn(barButton, "bg-indigo-600 text-white hover:bg-indigo-500")}>
-              {pending ? <Spinner className="h-3.5 w-3.5" /> : <Send className="h-3.5 w-3.5" />} Create
+            <button type="submit" aria-label="Create" disabled={pending || text.trim().length < 3} className={cn(barButton, "bg-indigo-600 text-white hover:bg-indigo-500")}>
+              {pending ? <Spinner className="h-3.5 w-3.5" /> : <Send className="h-3.5 w-3.5" />} <span className="hidden sm:inline">Create</span>
             </button>
           </form>
         )}

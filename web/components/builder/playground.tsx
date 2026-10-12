@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { ApprovalCard } from "@/components/builder/approval-card";
 import { Field, Select, Textarea } from "@/components/builder/fields";
+import { ConnectButton } from "@/components/connections/connect-button";
 import { ApiError } from "@/lib/api";
 import { builderApi } from "@/lib/builder/api";
 import { isFinished, type RunView } from "@/lib/builder/run-state";
@@ -55,6 +56,7 @@ export function Playground({
   onClose,
   stepName = (id: string) => id,
   request,
+  initialInput = "",
 }: {
   kind: "agent" | "workflow";
   targetId: string;
@@ -62,13 +64,16 @@ export function Playground({
   fields?: InputVariable[];
   beforeRun?: () => Promise<boolean>;
   onView: (view: RunView) => void;
-  onClose: () => void;
+  /** Omit when the host has no separate place to go back to (no close button then). */
+  onClose?: () => void;
   stepName?: (nodeId: string) => string;
   /** Ask from outside (the bottom bar): fills the request in and runs it. */
   request?: { text: string; at: number } | null;
+  /** Pre-filled (not run) request, e.g. a suggested first question. */
+  initialInput?: string;
 }) {
   const queryClient = useQueryClient();
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState(initialInput);
   const [values, setValues] = useState<Record<string, string>>({});
   const [runId, setRunId] = useState<string | null>(null);
   const [problems, setProblems] = useState<Problem[]>([]);
@@ -132,9 +137,11 @@ export function Playground({
             ))}
           </Select>
         )}
-        <button type="button" aria-label="Close playground" onClick={onClose} className="text-zinc-400 hover:text-zinc-700 cursor-pointer">
-          <X className="h-4 w-4" />
-        </button>
+        {onClose && (
+          <button type="button" aria-label="Close playground" onClick={onClose} className="text-zinc-400 hover:text-zinc-700 cursor-pointer">
+            <X className="h-4 w-4" />
+          </button>
+        )}
       </div>
 
       <div className="flex-1 space-y-4 overflow-y-auto p-4">
@@ -181,8 +188,13 @@ export function Playground({
                 <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
                 <span>
                   {p.message}
-                  {p.code === "not_connected" && (
-                    <a href="/user/agents" className="ml-1 font-medium underline">Connect</a>
+                  {p.code === "not_connected" && p.server_id && (
+                    <ConnectButton
+                      serverId={p.server_id}
+                      token={token}
+                      className="ml-1.5 align-middle"
+                      onConnected={() => setProblems((list) => list.filter((x) => !(x.code === "not_connected" && x.server_id === p.server_id)))}
+                    />
                   )}
                 </span>
               </p>

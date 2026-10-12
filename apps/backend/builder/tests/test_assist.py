@@ -138,6 +138,97 @@ async def test_agent_with_no_needs_gets_no_tools(tenant_client, llm, catalog):
     llm.on("A user wants to build an AI agent", {"name": "Poet", "role": "Poet", "goal": "Write poems", "instructions": "", "needs": ""})
     draft = (await tenant_client.post("/api/v1/builder/assist/agent", json={"description": "writes poems"})).json()
     assert draft["config"]["tool_ids"] == [] and not llm.seen("Pick the tools")
+    assert draft["insights"]["related_tools"] == []
+
+
+def reasoned_picker(**reasons: str):
+    """Like ``picker``, but also explains each pick (keys are "Server.tool")."""
+    def handle(prompt: str):
+        ids = candidate_ids(prompt)
+        return {"tool_ids": [ids[k] for k in reasons if k in ids], "reasons": {ids[k]: why for k, why in reasons.items() if k in ids}}
+    return handle
+
+
+async def test_agent_draft_explains_its_setup(tenant_client, llm, catalog):
+    llm.on("A user wants to build an AI agent", {
+        "name": "Inbox Helper", "role": "Email assistant", "goal": "Summarize email and share it",
+        "instructions": "Never invent emails.", "needs": "search emails in Gmail and post a message to Slack",
+        "profile": "quality", "profile_reason": "Wrong summaries are costly.", "tone": "friendly and brief",
+        "uses_documents": "true", "documents_reason": "The team's escalation policy.",
+        "try_asking": "Summarize today's unread emails",
+    })
+    llm.on("Pick the tools this agent", reasoned_picker(**{"Gmail.search_emails": "Finds today's emails", "Slack.post_message": "Shares the summary"}))
+    r = await tenant_client.post("/api/v1/builder/assist/agent", json={"description": "summarize my gmail into slack"})
+    assert r.status_code == 200, r.text
+    draft = r.json()
+
+    # Each picked tool says why; the prompt asked for reasons.
+    reasons = {t["tool_name"]: t["reason"] for t in draft["tools"]["agent"]}
+    assert reasons == {"search_emails": "Finds today's emails", "post_message": "Shares the summary"}
+    assert '"reasons"' in llm.seen("Pick the tools this agent")[0]
+    # The rest of the shortlist is offered as optional extras, never the picked ones.
+    related = {t["tool_id"] for t in draft["insights"]["related_tools"]}
+    assert related and not related & set(draft["config"]["tool_ids"])
+
+    # The chosen profile is applied to the settings, with the tone on top.
+    config = draft["config"]
+    assert config["llm"]["reasoning_effort"] == "high" and config["llm"]["max_output_tokens"] == 4000
+    assert config["tools"]["max_calls"] == 12 and config["reliability"]["retries"] == 2
+    assert config["response"] == {**config["response"], "verbosity": "detailed", "tone": "friendly and brief"}
+    assert config["approvals"] == {"read": False, "edit": True, "delete": True}
+
+    insights = draft["insights"]
+    assert insights["profile"] == "quality" and insights["profile_reason"] == "Wrong summaries are costly."
+    assert insights["knowledge"] == {"recommended": True, "reason": "The team's escalation policy."}
+    assert insights["try_asking"] == "Summarize today's unread emails"
+
+    # The fuller draft still saves as-is.
+    r = await tenant_client.post("/api/v1/builder/agents", json={k: draft[k] for k in ("name", "role", "goal", "instructions", "config")})
+    assert r.status_code == 201, r.text
+    assert r.json()["config"]["llm"]["reasoning_effort"] == "high"
+
+
+async def test_agent_draft_falls_back_to_balanced(tenant_client, llm, catalog):
+    llm.on("A user wants to build an AI agent", {
+        "name": "Poet", "role": "Poet", "goal": "Write poems", "instructions": "", "needs": "",
+        "profile": "turbo", "uses_documents": "no", "documents_reason": "should be dropped",
+    })
+    draft = (await tenant_client.post("/api/v1/builder/assist/agent", json={"description": "writes poems"})).json()
+    assert draft["insights"]["profile"] == "balanced"
+    assert draft["config"]["tools"]["max_calls"] == 8 and draft["config"]["llm"]["reasoning_effort"] == "auto"
+    assert draft["insights"]["knowledge"] == {"recommended": False, "reason": ""}
+    assert draft["config"]["response"]["tone"] == ""
+
+
+async def test_agent_draft_ignores_unknown_reasons(tenant_client, llm, catalog):
+    llm.on("A user wants to build an AI agent", {
+        "name": "Notifier", "role": "Notifier", "goal": "Post updates", "instructions": "", "needs": "post a message to Slack",
+    })
+
+    def handle(prompt: str):
+        ids = candidate_ids(prompt)
+        return {"tool_ids": [ids["Slack.post_message"]], "reasons": ["not", "a", "dict"]}
+
+    llm.on("Pick the tools this agent", handle)
+    draft = (await tenant_client.post("/api/v1/builder/assist/agent", json={"description": "post to slack"})).json()
+    assert [t["tool_name"] for t in draft["tools"]["agent"]] == ["post_message"]
+    assert "reason" not in draft["tools"]["agent"][0]
+
+
+async def test_agent_profiles_are_valid_settings(tenant_client):
+    from builder.agents.config import AgentConfig, apply_profile
+
+    r = await tenant_client.get("/api/v1/builder/assist/agent-profiles")
+    assert r.status_code == 200, r.text
+    profiles = r.json()
+    assert [p["id"] for p in profiles] == ["quality", "balanced", "speed", "cost"]
+    for p in profiles:
+        assert p["label"] and p["summary"]
+        AgentConfig.model_validate(apply_profile({}, p["id"]))  # every preset saves
+    # Applying a profile keeps what it doesn't set.
+    merged = apply_profile({"tool_ids": ["mcp:s:t"], "response": {"tone": "warm"}}, "speed")
+    assert merged["tool_ids"] == ["mcp:s:t"] and merged["response"] == {"tone": "warm", "verbosity": "concise"}
+    assert apply_profile({}, "nope") == apply_profile({}, "balanced")
 
 
 # ── Workflow drafts ──────────────────────────────────────────────────────────

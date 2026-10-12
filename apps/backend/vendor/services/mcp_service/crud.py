@@ -50,6 +50,25 @@ async def is_server_visible_to_user(
     return grant is not None
 
 
+async def set_mcp_server_global(
+    db: AsyncSession, *, server_id: str, is_global: bool, actor_id: str
+) -> Optional[VendorMCPServer]:
+    """Make a server available to every user (global) or only to granted tenants."""
+    server = await get_mcp_server(db, server_id)
+    if server is None:
+        return None
+    server.is_global = is_global
+    await db.flush()
+    await log_audit_event(
+        db,
+        action="mcp_server.set_global",
+        user_id=actor_id,
+        resource=f"mcp_server:{server_id}",
+        detail="global" if is_global else "restricted",
+    )
+    return server
+
+
 async def delete_mcp_server(
     db: AsyncSession, *, server_id: str, actor_id: str
 ) -> bool:

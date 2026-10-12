@@ -36,6 +36,8 @@ services:
       - sh
       - -c
       - exec uvicorn apps.llm_gateway.api:app --host 0.0.0.0 --port 4000 --reload --reload-dir /app/apps/llm_gateway
+    volumes:
+      - ./apps/llm_gateway:/app/apps/llm_gateway
 
   web:
     build:
