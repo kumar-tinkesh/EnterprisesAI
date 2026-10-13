@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ArrowRight, Bot, CheckCircle2, ExternalLink, Eye, Plus, Settings2, Sparkles, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Eye, Save, Settings2, Sparkles, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
@@ -27,6 +27,9 @@ import { useAgentWizard } from "@/stores/agent-wizard-store";
 import { useAuthStore } from "@/stores/auth-store";
 import { cn } from "@/lib/utils";
 
+/** Pre-filled in the playground after saving when the draft didn't suggest a question. */
+const DEFAULT_QUERY = "Hi! What can you help me with?";
+
 /** Whether the viewport is at least ``px`` wide (Tailwind's ``lg`` = 1024), kept current on resize. */
 function useMinWidth(px: number): boolean {
   const [ok, setOk] = useState(false);
@@ -40,13 +43,28 @@ function useMinWidth(px: number): boolean {
   return ok;
 }
 
+/** How many wizard hosts are mounted (a page can swap one for another). */
+let hosts = 0;
+
 /** Renders the guided agent setup over the page while one is in progress. */
 export function AgentWizardHost({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
-  const open = useAgentWizard((s) => s.open);
+  const open = useAgentWizard((s) => s.open && (typeof window === "undefined" || s.origin === window.location.pathname));
   const session = useAgentWizard((s) => s.session);
   // The store is restored from sessionStorage on the client only; render after mount so server and client agree.
   const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
+  useEffect(() => {
+    setMounted(true);
+    hosts++;
+    return () => {
+      hosts--;
+      // Left the page within the app (a reload or OAuth redirect never
+      // unmounts): drop the wizard so it doesn't reopen on the next visit.
+      // Deferred so a remount (Strict Mode, the page switching layouts) keeps it.
+      setTimeout(() => {
+        if (hosts === 0) useAgentWizard.getState().close();
+      }, 0);
+    };
+  }, []);
   if (!mounted || !open) return null;
   return <AgentWizard key={session} onOpen={onOpen} />;
 }
@@ -55,8 +73,8 @@ export function AgentWizardHost({ onOpen }: { onOpen: (target: BuildTarget) => v
  * Guided agent creation, in six steps: a description is drafted into a whole
  * agent (identity, tools with reasons, settings, guardrails), each part is
  * shown in its own category with why it's there, and the canvas on the left
- * draws the agent as it's set up. Nothing is saved until Create; then it can
- * be tried right here before opening the full editor.
+ * draws the agent as it's set up. Nothing is saved until Save; then it can
+ * be tried right here in a playground.
  *
  * Wide screens split canvas | panel (resizable). Below ``lg`` one shows at a
  * time, with a Setup / Preview switch in the header.
@@ -143,13 +161,19 @@ function AgentWizard({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
     return reviewIssues(draft, { disconnected, knowledgeRecommended: !!w.insights?.knowledge.recommended, needs: w.insights?.needs ?? "" });
   }, [draft, servers, w.insights]);
   const blocked = issues.some((i) => i.level === "block");
+  // Saving early is fine: only a name is needed, the rest can be finished later in the editor.
+  const canSave = !!draft?.name.trim();
 
   const create = useMutation({
     mutationFn: () => {
       setCreateError([]);
       const d = draft!;
       return builderApi.createAgent(token, {
-        name: d.name.trim(), role: d.role.trim(), goal: d.goal.trim(), instructions: (d.instructions ?? "").trim(),
+        name: d.name.trim(),
+        // Saved before Identity was finished: placeholders the editor can change later.
+        role: d.role.trim() || "Assistant",
+        goal: d.goal.trim() || "Not set yet. Finish setting it up in the editor.",
+        instructions: (d.instructions ?? "").trim(),
         llm_provider: d.llm_provider ?? "", llm_model: d.llm_model ?? "", config: d.config,
       });
     },
@@ -198,8 +222,8 @@ function AgentWizard({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
       <header className="flex items-center gap-2 border-b border-zinc-200 bg-white px-3 py-2">
         <Sparkles className="h-4 w-4 shrink-0 text-indigo-600" />
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold text-zinc-900">{w.createdId ? "Agent created" : "New agent"}{draft?.name ? ` · ${draft.name}` : ""}</p>
-          <p className="hidden truncate text-[11px] text-zinc-500 sm:block">{w.createdId ? "Try it, then open it in the editor." : "Nothing is saved until you create it."}</p>
+          <p className="truncate text-sm font-semibold text-zinc-900">{w.createdId ? "Agent saved" : "New agent"}{draft?.name ? ` · ${draft.name}` : ""}</p>
+          <p className="hidden truncate text-[11px] text-zinc-500 sm:block">{w.createdId ? "Test it here, or Configure it any time in the editor." : "Save any time; you can finish the setup later."}</p>
         </div>
         {/* Narrow screens show one side at a time. */}
         <div className="inline-flex shrink-0 rounded-lg border border-zinc-200 p-0.5 lg:hidden" role="tablist" aria-label="Show">
@@ -218,6 +242,11 @@ function AgentWizard({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
             </button>
           ))}
         </div>
+        {w.createdId && (
+          <Button size="sm" variant="outline" onClick={close} title="Open it in the editor to finish or change its setup">
+            <Settings2 /> <span className="hidden sm:inline">Configure</span>
+          </Button>
+        )}
         <button type="button" onClick={close} aria-label={w.createdId ? "Done" : "Close"} className="rounded-md p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer">
           <X className="h-4 w-4" />
         </button>
@@ -252,32 +281,14 @@ function AgentWizard({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
           }
           right={
             w.createdId ? (
-              <div className="flex h-full flex-col">
-                <div className="space-y-3 border-b border-zinc-200 p-4">
-                  <p className="flex items-center gap-2 text-sm font-semibold text-emerald-700">
-                    <CheckCircle2 className="h-4 w-4" /> {draft?.name || "Your agent"} is ready
-                  </p>
-                  <p className="text-xs text-zinc-500">Try it below — the canvas shows each tool as it&apos;s used. Everything can still be changed in the editor.</p>
-                  <div className="flex flex-col gap-2 sm:flex-row">
-                    <Button size="sm" onClick={close}>
-                      <ExternalLink /> Open in editor
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => useAgentWizard.getState().start({})}>
-                      <Plus /> Create another
-                    </Button>
-                  </div>
-                </div>
-                <div className="min-h-0 flex-1">
-                  <Playground
-                    kind="agent"
-                    targetId={w.createdId}
-                    token={token}
-                    initialInput={w.insights?.try_asking ?? ""}
-                    onView={setRunView}
-                    stepName={() => draft?.name || "Agent"}
-                  />
-                </div>
-              </div>
+              <Playground
+                kind="agent"
+                targetId={w.createdId}
+                token={token}
+                initialInput={w.insights?.try_asking || DEFAULT_QUERY}
+                onView={setRunView}
+                stepName={() => draft?.name || "Agent"}
+              />
             ) : (
               <div className="flex h-full flex-col">
                 <Stepper current={w.step} visited={w.visited} canJump={!!draft} onGo={(s) => useAgentWizard.getState().goTo(s)} />
@@ -319,7 +330,7 @@ function AgentWizard({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
                       <ArrowLeft /> <span className="hidden min-[400px]:inline">Back</span>
                     </Button>
                     <span className="flex-1 text-center text-[11px] text-zinc-400">
-                      {w.step === "review" && blocked ? "Fix the items in red to create it" : `${at + 1} / ${WIZARD_STEPS.length}`}
+                      {!canSave ? "Give it a name to save it" : w.step === "review" && blocked ? "Saves now; finish the red items in the editor" : `${at + 1} / ${WIZARD_STEPS.length}`}
                     </span>
                     {w.step !== "review" && draft && (
                       <button
@@ -330,9 +341,21 @@ function AgentWizard({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
                         Skip to review
                       </button>
                     )}
+                    {w.step !== "review" && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => create.mutate()}
+                        disabled={!canSave || create.isPending}
+                        title="Save it now and finish the rest later in the editor"
+                        aria-label="Save now"
+                      >
+                        {create.isPending ? <Spinner className="h-4 w-4" /> : <Save />} <span className="hidden min-[400px]:inline">Save</span>
+                      </Button>
+                    )}
                     {w.step === "review" ? (
-                      <Button size="sm" onClick={() => create.mutate()} disabled={!draft || blocked || create.isPending}>
-                        {create.isPending ? <Spinner className="h-4 w-4" /> : <Bot />} Create agent
+                      <Button size="sm" onClick={() => create.mutate()} disabled={!canSave || create.isPending}>
+                        {create.isPending ? <Spinner className="h-4 w-4" /> : <Save />} Save
                       </Button>
                     ) : (
                       <Button size="sm" onClick={goNext} disabled={!draft}>

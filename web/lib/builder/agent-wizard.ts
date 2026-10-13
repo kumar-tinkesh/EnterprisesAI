@@ -13,7 +13,7 @@ export const WIZARD_STEPS = [
   { id: "abilities", label: "Abilities", title: "What can it use?", hint: "The tools it may call and the documents it can search. It can't use anything that isn't listed here." },
   { id: "behaviour", label: "Behaviour", title: "How should it behave?", hint: "Safety checks, when it asks you first, and how it writes its answers." },
   { id: "engine", label: "Engine", title: "How hard should it think?", hint: "Pick a profile. It trades answer quality against speed and cost." },
-  { id: "review", label: "Review", title: "Check it, then create it", hint: "A plain-language summary of everything above, and anything that still needs you." },
+  { id: "review", label: "Review", title: "Check it, then save it", hint: "A plain-language summary of everything above, and anything that still needs you." },
 ] as const;
 
 export type WizardStepId = (typeof WIZARD_STEPS)[number]["id"];

@@ -1,14 +1,14 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
-import { Background, BackgroundVariant, Controls, MarkerType, ReactFlow, ReactFlowProvider, useReactFlow, type Edge } from "@xyflow/react";
+import { useCallback, useEffect, useMemo } from "react";
+import { Background, BackgroundVariant, Controls, ReactFlow, ReactFlowProvider, useReactFlow, type Edge } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { Bot } from "lucide-react";
 
 import { nodeTypes, useNodeSizes, type StepNodeType } from "@/components/builder/step-node";
+import { toolGraph } from "@/components/builder/tool-graph";
 import type { ServerInfo } from "@/components/builder/agent-wizard/wizard-ui";
 import { guardrailsOn } from "@/lib/builder/agent-wizard";
-import { serverIdOf, toolName } from "@/lib/builder/graph";
 import type { RunView } from "@/lib/builder/run-state";
 import type { DraftAgent, ToolCandidate } from "@/lib/builder/types";
 
@@ -81,6 +81,28 @@ function Preview({
   const active = runView.activeTool["agent"];
   const checks = guardrailsOn(draft?.config.guardrails).length;
 
+  // agent → connector (connect it there, once) → its tools.
+  const toolGraphFor = useCallback(
+    (agent: { x: number; y: number }) =>
+      toolGraph({
+        toolIds,
+        server: (sid) => {
+          const s = servers[sid];
+          const meta = Object.values(toolMeta).find((m) => m.server_id === sid);
+          const name = (s && !s.loading && !s.missing ? s.name : meta?.server_name) ?? "Connector";
+          return { name, connected: s && !s.loading && !s.missing ? s.connected : meta?.connected };
+        },
+        toolSubtitle: (tid) => (toolMeta[tid]?.risk ? `Risk: ${toolMeta[tid].risk}` : "A tool this agent may call"),
+        active,
+        usedTools: runView.usedTools,
+        token,
+        agent,
+        vertical,
+        ...(vertical ? { col: COL, row: ROW } : {}),
+      }),
+    [toolIds, servers, toolMeta, active, runView.usedTools, token, vertical],
+  );
+
   const nodes: StepNodeType[] = useMemo(() => {
     if (!draft) {
       return generating
@@ -97,27 +119,7 @@ function Preview({
         data: { type: "agent", title: draft.name || "Your agent", subtitle: draft.goal || draft.role || "Give it a goal", problems: [], state: runView.steps["agent"], detail, vertical },
       },
     ];
-    toolIds.forEach((tid, i) => {
-      const name = toolName(tid);
-      const server = servers[serverIdOf(tid) ?? ""];
-      const meta = toolMeta[tid];
-      const serverName = server?.name ?? meta?.server_name ?? "Tool";
-      const connected = server ? server.connected : meta?.connected ?? true;
-      out.push({
-        id: `tool:${tid}`,
-        type: "step",
-        position: at.tool(i),
-        data: {
-          vertical,
-          type: "tool",
-          title: name,
-          subtitle: `${serverName}${meta?.risk ? ` · ${meta.risk}` : ""}`,
-          problems: connected ? [] : [{ code: "not_connected", message: `Connect ${serverName} before it can run.` }],
-          connect: connected || !serverIdOf(tid) ? undefined : { serverId: serverIdOf(tid)!, serverName, token },
-          state: active === name ? "running" : runView.usedTools.includes(name) ? "succeeded" : undefined,
-        },
-      });
-    });
+    out.push(...toolGraphFor(at.agent).nodes);
     kbIds.forEach((kid, i) => {
       out.push({
         id: `kb:${kid}`,
@@ -127,24 +129,14 @@ function Preview({
       });
     });
     return out.map((n) => (sizes[n.id] ? { ...n, measured: sizes[n.id] } : n));
-  }, [draft, generating, toolIds, kbIds, servers, toolMeta, kbNames, profileLabel, checks, runView, active, sizes, vertical, token]);
+  }, [draft, generating, toolIds, kbIds, kbNames, profileLabel, checks, runView, active, sizes, vertical, toolGraphFor]);
 
   const edges: Edge[] = useMemo(
     () => [
-      ...toolIds.map((tid) => {
-        const on = active === toolName(tid);
-        return {
-          id: `e:${tid}`,
-          source: "agent",
-          target: `tool:${tid}`,
-          animated: on,
-          markerEnd: { type: MarkerType.ArrowClosed },
-          style: { stroke: on ? "#38bdf8" : "#a1a1aa", strokeWidth: on ? 2.5 : 1.5 },
-        };
-      }),
+      ...toolGraphFor(place(vertical, toolIds.length, kbIds.length).agent).edges,
       ...kbIds.map((kid) => ({ id: `k:${kid}`, source: `kb:${kid}`, target: "agent", style: { stroke: "#c4b5fd", strokeDasharray: "4 4" } })),
     ],
-    [toolIds, kbIds, active],
+    [toolGraphFor, toolIds.length, kbIds, vertical],
   );
 
   // Re-frame whenever something is added or removed, or the preview comes

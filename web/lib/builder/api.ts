@@ -103,8 +103,10 @@ export const builderApi = {
   workflowKnowledge: (t: string, id: string) => call<{ knowledge_base_id: string | null }>(t, `/workflows/${id}/knowledge`),
   createWorkflowKnowledge: (t: string, id: string) => call<{ knowledge_base_id: string }>(t, `/workflows/${id}/knowledge`, "POST"),
   getRun: (t: string, id: string) => call<Run>(t, `/runs/${id}`),
-  listRuns: (t: string, params: { agent_id?: string; workflow_id?: string }) =>
-    call<Run[]>(t, `/runs?${new URLSearchParams(params as Record<string, string>).toString()}`),
+  listRuns: (t: string, params: { agent_id?: string; workflow_id?: string; limit?: number }) =>
+    call<Run[]>(t, `/runs?${new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)])).toString()}`),
+  /** Decisions waiting on the signed-in user (pending by default). */
+  listApprovals: (t: string) => call<Approval[]>(t, "/approvals"),
   cancelRun: (t: string, id: string) => call<Run>(t, `/runs/${id}/cancel`, "POST"),
   decide: (t: string, approvalId: string, decision: "approve" | "reject" | "edit", args?: Record<string, unknown>) =>
     call<Approval>(t, `/approvals/${approvalId}`, "POST", { decision, ...(args ? { arguments: args } : {}) }),

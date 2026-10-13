@@ -20,8 +20,8 @@ const nextConfig: NextConfig = {
     return [
       // Anonymous users land on the auth screen.
       { source: "/", destination: "/auth", permanent: false },
-      // Builder Studio was folded into the AI Compiler; its listing lives in Projects.
-      { source: "/user/builder", destination: "/user/projects", permanent: false },
+      // Builder Studio was folded into the AI Compiler; its listing lives in Executions.
+      { source: "/user/builder", destination: "/user/executions", permanent: false },
     ];
   },
 };

@@ -2,10 +2,12 @@
 # Dev overlay — hot reload, no rebuilds for code changes
 #
 #   make docker-dev
-#   (= docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build)
+#   (= the Python services from this overlay, plus `next dev --turbopack` on
+#   the host — see the Makefile; the `web` service below is then not started)
 #
 # Source is bind-mounted into every container: Python services restart on
-# *.py changes (uvicorn --reload / watchfiles), the web app runs `next dev`.
+# *.py changes (uvicorn --reload / watchfiles). The `web` service here still
+# works for an all-in-Docker run (`docker compose -f ... -f ... up --build`).
 # Rebuild (`make docker-dev` again) only after changing pyproject.toml /
 # uv.lock / package.json / a Dockerfile; for new web deps also pass -V so the
 # node_modules volume is recreated.

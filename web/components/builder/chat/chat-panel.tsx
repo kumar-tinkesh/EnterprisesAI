@@ -123,12 +123,13 @@ export function ChatPanel({
   target,
   token,
   onClose,
-  editorHref,
+  onEdit,
 }: {
   target: ChatTarget;
   token: string;
   onClose: () => void;
-  editorHref: string;
+  /** Open this agent/workflow in the editor beside the chat. */
+  onEdit: () => void;
 }) {
   const queryClient = useQueryClient();
   const { kind, id } = target;
@@ -324,14 +325,15 @@ export function ChatPanel({
           onRename={renameChat}
           onDelete={removeChat}
         />
-        <a
-          href={editorHref}
+        <button
+          type="button"
+          onClick={onEdit}
           aria-label={editorTitle}
           title={editorTitle}
-          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-200 text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-200 text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900 cursor-pointer"
         >
           <ExternalLink className="h-3.5 w-3.5" />
-        </a>
+        </button>
         <button type="button" onClick={onClose} aria-label="Close chat" className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 cursor-pointer">
           <X className="h-4 w-4" />
         </button>
@@ -367,7 +369,7 @@ export function ChatPanel({
                           className="group flex h-full w-full items-center justify-between gap-2 rounded-xl border border-zinc-200 bg-white p-3 text-left text-xs font-medium text-zinc-800 transition hover:-translate-y-0.5 hover:border-indigo-300 hover:shadow-sm disabled:opacity-50 cursor-pointer"
                         >
                           <span className="flex items-center gap-2"><Sparkles className="h-3.5 w-3.5 shrink-0 text-indigo-500" /> {s.label}</span>
-                          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-zinc-300 group-hover:text-indigo-500" />
+                          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-zinc-400 group-hover:text-indigo-500" />
                         </button>
                       </li>
                     ))}

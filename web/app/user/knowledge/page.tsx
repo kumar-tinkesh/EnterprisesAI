@@ -79,10 +79,7 @@ export default function KnowledgeBasesPage() {
       title="Knowledge Base"
       description="Documents your agents can retrieve from. Every member of your organisation can search them."
     >
-      <div className="mt-6 flex items-center justify-between gap-3">
-        <a href="/user" className="text-sm text-zinc-500 hover:text-zinc-800">
-          ← Back to workspace
-        </a>
+      <div className="mt-6 flex items-center justify-end gap-3">
         <Button size="sm" onClick={() => setCreating(true)}>
           <Plus /> New knowledge base
         </Button>

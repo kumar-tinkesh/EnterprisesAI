@@ -1,12 +1,13 @@
 "use client";
 
+import { useState } from "react";
 import { Background, BackgroundVariant, Controls, ReactFlow, ReactFlowProvider } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { ArrowLeft, Bot, Link2, ListChecks, Network, Server, Sparkles } from "lucide-react";
+import { Bot, Link2, ListChecks, Network, Server, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { BuildBar } from "@/components/builder/build-bar";
-import type { BuildTarget } from "@/lib/builder/use-builder-actions";
+import type { BuildMode, BuildTarget } from "@/lib/builder/use-builder-actions";
 import { useAgentWizard } from "@/stores/agent-wizard-store";
 
 /**
@@ -22,12 +23,11 @@ export default function BuilderHome({
   onConnections: () => void;
   onOpen: (target: BuildTarget) => void;
 }) {
+  // The step-by-step setup is for agents; it's hidden while the bar is on Workflow.
+  const [mode, setMode] = useState<BuildMode>("agent");
   return (
     <div className="builder-dark flex h-screen flex-col bg-zinc-950">
       <header className="flex items-center gap-2 border-b border-zinc-200 bg-white px-3 py-2">
-        <a href="/user" className="rounded-md p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer" aria-label="Back to workspace" title="Back to workspace">
-          <ArrowLeft className="h-4 w-4" />
-        </a>
         <Sparkles className="h-4 w-4 text-indigo-600" />
         <span className="text-sm font-semibold text-zinc-900">AI Compiler</span>
         <span className="hidden text-xs text-zinc-400 sm:inline">Describe an agent or workflow below</span>
@@ -63,6 +63,7 @@ export default function BuilderHome({
           <p className="max-w-sm text-xs text-zinc-500">
             Pick Agent or Workflow below and describe it. It&apos;s designed, matched to your tools and opened on this canvas.
           </p>
+          {mode === "agent" && (
           <button
             type="button"
             onClick={() => useAgentWizard.getState().start({})}
@@ -70,10 +71,11 @@ export default function BuilderHome({
           >
             <ListChecks className="h-3.5 w-3.5" /> Set up an agent step by step
           </button>
+          )}
         </div>
       </div>
 
-      <BuildBar current={null} onOpen={onOpen} />
+      <BuildBar current={null} onOpen={onOpen} onModeChange={setMode} />
     </div>
   );
 }

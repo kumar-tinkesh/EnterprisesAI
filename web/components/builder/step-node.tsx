@@ -15,6 +15,7 @@ import {
   LogIn,
   Merge,
   PlayCircle,
+  Plug,
   Send,
   Wrench,
   XCircle,
@@ -25,8 +26,8 @@ import { cn } from "@/lib/utils";
 import type { StepState } from "@/lib/builder/run-state";
 import type { NodeType, Problem } from "@/lib/builder/types";
 
-/** "knowledge" only appears on the agent-mode canvas (a knowledge base feeding the agent). */
-export type StepKind = NodeType | "knowledge";
+/** "knowledge" and "server" only appear on the agent-mode canvas (a knowledge base feeding the agent; the connector its tools come from). */
+export type StepKind = NodeType | "knowledge" | "server";
 
 export type StepData = {
   type: StepKind;
@@ -37,7 +38,7 @@ export type StepData = {
   detail?: string | null;
   /** Lines come in at the top and leave at the bottom (narrow, top-to-bottom layouts). */
   vertical?: boolean;
-  /** A tool whose server isn't connected yet: connect it right on the node. */
+  /** A connector that isn't connected yet: connect it right on the node. */
   connect?: { serverId: string; serverName: string; token: string };
 };
 
@@ -45,6 +46,7 @@ export type StepNodeType = Node<StepData, "step">;
 
 const ICONS: Record<StepKind, typeof Bot> = {
   knowledge: BookOpen,
+  server: Plug,
   input: LogIn,
   manual_trigger: PlayCircle,
   schedule_trigger: CalendarClock,
@@ -59,6 +61,7 @@ const ICONS: Record<StepKind, typeof Bot> = {
 // Literal class names so Tailwind keeps them.
 const TONES: Record<StepKind, string> = {
   knowledge: "bg-violet-50 text-violet-700",
+  server: "bg-sky-50 text-sky-700",
   input: "bg-sky-50 text-sky-700",
   manual_trigger: "bg-sky-50 text-sky-700",
   schedule_trigger: "bg-sky-50 text-sky-700",

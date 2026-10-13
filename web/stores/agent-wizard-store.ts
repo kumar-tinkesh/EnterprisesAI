@@ -13,6 +13,8 @@ import type { AgentInsights, DraftAgent, ToolCandidate } from "@/lib/builder/typ
  */
 export interface WizardData {
   open: boolean;
+  /** The page it was started on; it only shows there, not over other pages. */
+  origin: string;
   /** Bumped on every start, so per-session component state starts fresh. */
   session: number;
   description: string;
@@ -39,6 +41,7 @@ interface WizardState extends WizardData {
 
 const EMPTY: WizardData = {
   open: false,
+  origin: "",
   session: 0,
   description: "",
   autoGenerate: false,
@@ -59,6 +62,7 @@ export const useAgentWizard = create<WizardState>()(
         set({
           ...EMPTY,
           open: true,
+          origin: typeof window === "undefined" ? "" : window.location.pathname,
           session: get().session + 1,
           description,
           autoGenerate: !blank && description.trim().length >= 3,

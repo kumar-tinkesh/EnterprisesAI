@@ -28,6 +28,7 @@ export function BuildBar({
   edit,
   above,
   onOpen,
+  onModeChange,
 }: {
   /** The kind of what's open in the canvas, if anything. */
   current: BuildMode | null;
@@ -36,6 +37,8 @@ export function BuildBar({
   /** Shown just above the bar (suggestion chips…), only alongside ``edit``. */
   above?: React.ReactNode;
   onOpen: (target: BuildTarget) => void;
+  /** Told which tab (Agent / Workflow) the bar is on, including the remembered one. */
+  onModeChange?: (mode: BuildMode) => void;
 }) {
   const builder = useBuilderActions({ open: onOpen });
   const [mode, setMode] = useState<BuildMode>(current ?? "agent");
@@ -51,6 +54,8 @@ export function BuildBar({
       /* default */
     }
   }, [current]);
+
+  useEffect(() => onModeChange?.(mode), [mode, onModeChange]);
 
   const pick = (m: BuildMode) => {
     setMode(m);

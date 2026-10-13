@@ -25,6 +25,7 @@ import { WorkflowEditor } from "@/components/builder/workflow-editor";
 import { editorHref, type BuildTarget } from "@/lib/builder/use-builder-actions";
 import { UserConnectModal, WhatsAppBridgeButtons, WhatsAppBridgeModal } from "@/components/connections/server-connect";
 import { AgentWizardHost } from "@/components/builder/agent-wizard/agent-wizard";
+import { useAgentWizard } from "@/stores/agent-wizard-store";
 import BuilderHome from "./agent-canvas";
 
 /** ?agent=<id> / ?workflow=<id> -> the agent or workflow open in the editor. */
@@ -46,10 +47,14 @@ export default function UserAgentsPage() {
   const [bridgeServer, setBridgeServer] = useState<MCPServerEntry | null>(null);
 
   // An agent or workflow open in place of the canvas — built here, or opened
-  // from Projects. Kept in the URL so reload / the back button behave.
+  // from Executions. Kept in the URL so reload / the back button behave.
   const [editing, setEditing] = useState<BuildTarget | null>(null);
   useEffect(() => {
-    setEditing(targetFromUrl());
+    const target = targetFromUrl();
+    // A saved wizard left open (it lives in sessionStorage) would cover the
+    // editor this link asked for; it's done, so close it.
+    if (target && useAgentWizard.getState().createdId) useAgentWizard.getState().close();
+    setEditing(target);
     const onPop = () => setEditing(targetFromUrl());
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);

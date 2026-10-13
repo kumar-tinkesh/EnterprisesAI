@@ -19,7 +19,7 @@ export const editorHref = ({ kind, id }: BuildTarget) => `/user/agents?${kind}=$
 
 /**
  * Create (with AI or blank) and delete agents/workflows; shared by the AI
- * Compiler and Projects. A new agent opens the guided setup
+ * Compiler and Executions. A new agent opens the guided setup
  * (components/builder/agent-wizard) instead of being saved straight away. ``open`` shows the new one in place (the compiler
  * page); without it the browser goes to the compiler page with it open.
  */
@@ -56,8 +56,8 @@ export function useBuilderActions({ open }: { open?: (target: BuildTarget) => vo
     mutationFn: async (mode: BuildMode): Promise<BuildTarget | null> => {
       setError(null);
       if (mode === "agent") {
-        // A blank agent is the guided setup without the description step.
-        useAgentWizard.getState().start({ blank: true });
+        // A new agent is the guided setup, from its first (Describe) step.
+        useAgentWizard.getState().start({});
         return null;
       }
       const wf = await builderApi.createWorkflow(token, {

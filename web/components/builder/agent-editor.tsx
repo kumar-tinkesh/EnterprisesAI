@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Background, BackgroundVariant, Controls, MarkerType, ReactFlow, ReactFlowProvider, useReactFlow, type Edge, type NodeChange } from "@xyflow/react";
+import { Background, BackgroundVariant, Controls, ReactFlow, ReactFlowProvider, useReactFlow, type Edge, type NodeChange } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { AlertTriangle, ArrowLeft, Check, FlaskConical, Globe, History, Play, Save, Settings2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Bot, Check, ChevronDown, FlaskConical, Globe, History, Play, Save, Settings2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,11 +17,11 @@ import { PublishPanel } from "@/components/builder/publish-panel";
 import { TestsPanel } from "@/components/builder/tests-panel";
 import { VersionHistory } from "@/components/builder/version-history";
 import { nodeTypes, useNodeSizes, type StepNodeType } from "@/components/builder/step-node";
+import { toolGraph } from "@/components/builder/tool-graph";
 import { ApiError, knowledgeApi } from "@/lib/api";
 import { builderApi } from "@/lib/builder/api";
 import { useServers } from "@/components/builder/agent-wizard/wizard-ui";
 import { groupByServer } from "@/lib/builder/agent-wizard";
-import { serverIdOf, toolName } from "@/lib/builder/graph";
 import { emptyRunView, type RunView } from "@/lib/builder/run-state";
 import type { DraftAgent, Problem } from "@/lib/builder/types";
 import type { BuildTarget } from "@/lib/builder/use-builder-actions";
@@ -61,6 +61,8 @@ function Editor({ id, onBack, onOpen }: { id: string; onBack: () => void; onOpen
   const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({});
   const loaded = useRef(false);
   const flow = useReactFlow();
+  const [switchOpen, setSwitchOpen] = useState(false);
+  const agents = useQuery({ queryKey: ["builder-agents"], queryFn: () => builderApi.listAgents(token), enabled: !!token && switchOpen });
 
   useEffect(() => {
     const t = setTimeout(() => flow.fitView({ padding: 0.3, maxZoom: 1, duration: 200 }), 60);
@@ -160,6 +162,24 @@ function Editor({ id, onBack, onOpen }: { id: string; onBack: () => void; onOpen
   const { sizes, track } = useNodeSizes();
   const serverIds = useMemo(() => groupByServer(toolIds).map((g) => g.serverId), [toolIds]);
   const servers = useServers(token, serverIds, {});
+  // agent → connector (connect it there, once) → its tools.
+  const tools = useMemo(
+    () =>
+      toolGraph({
+        toolIds,
+        server: (sid) => {
+          const s = servers[sid];
+          return s && !s.missing ? { name: s.loading ? "Connector" : s.name, connected: s.loading ? undefined : s.connected } : undefined;
+        },
+        toolSubtitle: () => "A tool this agent may call",
+        active,
+        usedTools: runView.usedTools,
+        token,
+        agent: positions["agent"] ?? { x: 320, y: Math.max(0, (Math.max(toolIds.length, kbIds.length, 1) - 1) * 55) },
+        at: (key, fallback) => positions[key] ?? fallback,
+      }),
+    [toolIds, kbIds.length, servers, active, runView.usedTools, token, positions],
+  );
   const flowNodes: StepNodeType[] = useMemo(() => {
     if (!form) return [];
     const at = (key: string, fallback: { x: number; y: number }) => positions[key] ?? fallback;
@@ -172,25 +192,7 @@ function Editor({ id, onBack, onOpen }: { id: string; onBack: () => void; onOpen
         data: { type: "agent", title: form.name || "Agent", subtitle: form.goal, problems: [], state: runView.steps["agent"], detail: active ? `Calling ${active}…` : null },
       },
     ];
-    toolIds.forEach((tid, i) => {
-      const name = toolName(tid);
-      const server = servers[serverIdOf(tid) ?? ""];
-      const needsConnecting = !!server && !server.loading && !server.missing && !server.connected;
-      nodes.push({
-        id: `tool:${tid}`,
-        type: "step",
-        position: at(`tool:${tid}`, { x: 680, y: i * 110 }),
-        selected: selected?.kind === "agent" && selected.tab === "abilities",
-        data: {
-          type: "tool",
-          title: name,
-          subtitle: server && !server.loading ? server.name : "A tool this agent may call",
-          problems: needsConnecting ? [{ code: "not_connected", message: `Connect ${server.name} before it can run.` }] : [],
-          connect: needsConnecting ? { serverId: server.serverId, serverName: server.name, token } : undefined,
-          state: active === name ? "running" : runView.usedTools.includes(name) ? "succeeded" : undefined,
-        },
-      });
-    });
+    nodes.push(...tools.nodes.map((n) => ({ ...n, selected: selected?.kind === "agent" && selected.tab === "abilities" })));
     kbIds.forEach((kid, i) => {
       nodes.push({
         id: `kb:${kid}`,
@@ -200,24 +202,14 @@ function Editor({ id, onBack, onOpen }: { id: string; onBack: () => void; onOpen
       });
     });
     return nodes.map((n) => (sizes[n.id] ? { ...n, measured: sizes[n.id] } : n));
-  }, [form, toolIds, kbIds, positions, selected, runView, active, sizes, servers, token]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [form, toolIds, kbIds, positions, selected, runView, active, sizes, tools]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const flowEdges: Edge[] = useMemo(
     () => [
-      ...toolIds.map((tid) => {
-        const on = active === toolName(tid);
-        return {
-          id: `e:${tid}`,
-          source: "agent",
-          target: `tool:${tid}`,
-          animated: on,
-          markerEnd: { type: MarkerType.ArrowClosed },
-          style: { stroke: on ? "#38bdf8" : "#a1a1aa", strokeWidth: on ? 2.5 : 1.5 },
-        };
-      }),
+      ...tools.edges,
       ...kbIds.map((kid) => ({ id: `k:${kid}`, source: `kb:${kid}`, target: "agent", style: { stroke: "#c4b5fd", strokeDasharray: "4 4" } })),
     ],
-    [toolIds, kbIds, active],
+    [tools.edges, kbIds],
   );
 
   const onNodesChange = useCallback((changes: NodeChange<StepNodeType>[]) => {
@@ -245,6 +237,32 @@ function Editor({ id, onBack, onOpen }: { id: string; onBack: () => void; onOpen
         <button type="button" onClick={onBack} className="rounded-md p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer" aria-label="Back">
           <ArrowLeft className="h-4 w-4" />
         </button>
+        <div className="relative shrink-0">
+          <button type="button" className="flex h-8 items-center gap-1 rounded-md px-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer" onClick={() => setSwitchOpen((o) => !o)} aria-label="Switch agent" aria-expanded={switchOpen} title="Switch agent">
+            <Bot className="h-4 w-4 text-indigo-400" /> <ChevronDown className="h-3.5 w-3.5" />
+          </button>
+          {switchOpen && (
+            <div className="absolute left-0 top-10 z-40 max-h-80 w-72 overflow-y-auto rounded-xl border border-zinc-200 bg-white p-1.5 shadow-lg">
+              {agents.isLoading && <div className="flex justify-center p-3"><Spinner className="h-4 w-4 text-zinc-400" /></div>}
+              {(agents.data ?? []).map((a) => (
+                <button
+                  key={a.id}
+                  type="button"
+                  onClick={() => {
+                    setSwitchOpen(false);
+                    if (a.id === id) return;
+                    if (dirty && !window.confirm("You have unsaved changes here. Leave anyway?")) return;
+                    onOpen({ kind: "agent", id: a.id });
+                  }}
+                  className={cn("flex w-full flex-col rounded-lg px-2.5 py-2 text-left text-xs hover:bg-zinc-100 cursor-pointer", a.id === id ? "text-indigo-600" : "text-zinc-700")}
+                >
+                  <span className="w-full truncate font-medium">{a.name}</span>
+                  {a.goal && <span className="w-full truncate text-[10px] text-zinc-400">{a.goal}</span>}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         <Input aria-label="Agent name" className="h-8 w-full min-w-0 max-w-56 border-transparent font-semibold hover:border-zinc-200" value={form.name} disabled={readOnly} onChange={(e) => update({ ...form, name: e.target.value })} />
         <span className={cn("hidden shrink-0 text-xs md:inline", dirty ? "text-amber-600" : "text-zinc-400")}>{readOnly ? "View only — shared by a teammate" : dirty ? "Unsaved changes" : "Saved"}</span>
         {/* Narrow screens keep the icons; the labels come back from lg. */}

@@ -7,6 +7,7 @@ import { useAuthStore } from "@/stores/auth-store";
 import { roleForDashboard } from "@/lib/validations";
 import { api } from "@/lib/api";
 import { Spinner } from "@/components/ui/spinner";
+import { UserShell } from "@/components/user-shell";
 
 /** Map a dashboard route segment to backend /dashboard/{segment}. */
 const DASHBOARD_SEGMENT: Record<string, "vendor" | "tenant" | "user" | "workspace"> = {
@@ -14,6 +15,10 @@ const DASHBOARD_SEGMENT: Record<string, "vendor" | "tenant" | "user" | "workspac
   "/tenant": "tenant",
   "/user": "user",
 };
+
+/** The token (and dashboard) already confirmed with the server in this tab, so
+ *  moving between pages doesn't flash a spinner while it's checked again. */
+let verified: { token: string; path: string } | null = null;
 
 /**
  * Client-side route guard. Renders children only when the stored access
@@ -37,7 +42,7 @@ export default function ProtectedDashboard({
   const accessToken = useAuthStore((s) => s.accessToken);
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
-  const [checked, setChecked] = useState(false);
+  const [checked, setChecked] = useState(() => !!accessToken && verified?.token === accessToken && verified.path === path);
   const [serverDenied, setServerDenied] = useState(false);
 
   useEffect(() => {
@@ -47,6 +52,7 @@ export default function ProtectedDashboard({
         if (isMounted) setChecked(true);
         return;
       }
+      if (verified?.token === accessToken && verified.path === path) return;
       try {
         await api.me(accessToken);
         // Confirm server-side that the token's role may access this dashboard.
@@ -68,6 +74,7 @@ export default function ProtectedDashboard({
         router.replace("/auth");
         return;
       }
+      verified = { token: accessToken, path };
       if (isMounted) setChecked(true);
     }
     validateToken();
@@ -127,6 +134,23 @@ export default function ProtectedDashboard({
           Sign out
         </button>
       </Centered>
+    );
+  }
+
+  // The user's pages share the sidebar frame; it holds sign-out too.
+  if (path === "/user") {
+    return (
+      <UserShell fullBleed={fullBleed}>
+        {fullBleed ? children : (
+          <div className="mx-auto max-w-6xl p-4 sm:p-6 lg:p-8">
+            <header className="border-b border-zinc-200 pb-4">
+              <h1 className="text-2xl font-bold text-zinc-900">{title}</h1>
+              <p className="text-sm text-zinc-500">{description}</p>
+            </header>
+            {children}
+          </div>
+        )}
+      </UserShell>
     );
   }
 

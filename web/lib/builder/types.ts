@@ -462,6 +462,8 @@ export interface RunToolCall {
 export interface Run {
   id: string;
   kind: "agent" | "workflow";
+  agent_id?: string | null;
+  workflow_id?: string | null;
   status: RunStatus;
   name: string | null;
   input: { text: string; variables: Record<string, unknown> };
