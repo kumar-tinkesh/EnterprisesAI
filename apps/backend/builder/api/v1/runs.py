@@ -36,6 +36,7 @@ from builder.api.v1.deps import get_end_user, problems_response
 from builder.models import BuilderApproval, BuilderRun
 from builder.runs import states
 from builder.runs.db import session_factory
+from builder.runs.conversations import ConversationError, conversation_history, open_conversation, record_turn
 from builder.runs.events import get_event_bus
 from builder.runs.service import (
     RunActionError,
@@ -57,6 +58,9 @@ class RunStart(BaseModel):
     variables: dict[str, Any] = Field(default_factory=dict)
     # How much answer: "auto" sizes it to the question.
     depth: Literal["auto", "short", "detailed"] = "auto"
+    # A playground chat: continue this one, or start a new one with this message.
+    conversation_id: str | None = None
+    new_conversation: bool = False
 
 
 class Decision(BaseModel):
@@ -73,6 +77,21 @@ async def _get_run(db: AsyncSession, run_id: str, user: CurrentUser) -> BuilderR
     return run
 
 
+async def _open_chat(db: AsyncSession, user: CurrentUser, kind: str, target_id: str, payload: RunStart):
+    """The chat this run is a message of (after preflight passed, so a run that
+    can't start never creates an empty chat)."""
+    try:
+        conv = await open_conversation(
+            db, user, kind=kind, target_id=target_id, conversation_id=payload.conversation_id,
+            new=payload.new_conversation, text=payload.input,
+        )
+    except ConversationError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    if conv:
+        record_turn(conv)
+    return conv
+
+
 @router.post("/agents/{agent_id}/runs", status_code=202)
 async def start_agent_run(
     agent_id: str,
@@ -86,7 +105,12 @@ async def start_agent_run(
     problems = await agent_run_problems(db, user, agent)
     if problems:
         return problems_response("This agent can't run yet.", problems)
-    run = await create_agent_run(db, user, agent, text=payload.input, variables=payload.variables, depth=payload.depth)
+    conv = await _open_chat(db, user, "agent", agent.id, payload)
+    history = await conversation_history(db, conv.id) if conv else None
+    run = await create_agent_run(
+        db, user, agent, text=payload.input, variables=payload.variables, depth=payload.depth,
+        conversation_id=conv.id if conv else None, history=history,
+    )
     return await run_view(db, run, detail=False)
 
 
@@ -105,7 +129,11 @@ async def start_workflow_run(
     problems = await workflow_run_problems(db, user, wf, payload.variables)
     if problems:
         return problems_response("This workflow can't run yet.", problems)
-    run = await create_workflow_run(db, user, wf, text=payload.input, variables=payload.variables, depth=payload.depth)
+    conv = await _open_chat(db, user, "workflow", wf.id, payload)
+    run = await create_workflow_run(
+        db, user, wf, text=payload.input, variables=payload.variables, depth=payload.depth,
+        conversation_id=conv.id if conv else None,
+    )
     return await run_view(db, run, detail=False)
 
 

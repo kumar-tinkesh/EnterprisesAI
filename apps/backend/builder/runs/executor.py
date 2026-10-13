@@ -136,6 +136,7 @@ async def _execute_agent(run: BuilderRun, user: CurrentUser, worker_id: str) -> 
         run_id=run.id, node_run_id=node_run.id, node_id=AGENT_NODE_ID, attempt=node_run.attempt,
         user=user, agent=agent, config=config, input_text=input_text, approvals=config.approvals, emit=emit_event,
         dry_run=run.purpose == "test", depth=(run.input or {}).get("depth") or "auto",
+        history=list((run.input or {}).get("history") or []),
     )
     try:
         result = await run_agent(ctx)

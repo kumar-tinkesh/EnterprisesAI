@@ -87,6 +87,9 @@ class AgentContext:
     dry_run: bool = False
     # How much answer the person asked for: "auto" | "short" | "detailed".
     depth: str = "auto"
+    # Earlier turns of the playground chat this run belongs to (user/assistant
+    # messages, oldest first) — see builder.runs.conversations.
+    history: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -251,6 +254,7 @@ async def run_agent(ctx: AgentContext) -> AgentResult:
         state = {
             "messages": [
                 {"role": "system", "content": system_prompt(ctx.agent, ctx.config, has_tools=bool(tool_defs), has_knowledge=has_knowledge, depth=ctx.depth)},
+                *[{"role": m["role"], "content": m["content"]} for m in ctx.history if m.get("role") in ("user", "assistant") and m.get("content")],
                 {"role": "user", "content": checked.text},
             ],
             "turn": 0,

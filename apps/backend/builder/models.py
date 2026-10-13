@@ -134,6 +134,28 @@ class BuilderRun(Base, TimestampMixin):
     purpose: Mapped[str] = mapped_column(String(20), default="run", server_default="run", index=True)
     # Started through the public API with this publishable key (purpose "public").
     public_key_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    # The playground chat this run is one message of (NULL = a one-off run).
+    conversation_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+
+
+class BuilderConversation(Base, TimestampMixin):
+    """One playground chat with an agent or a workflow: its runs, in order, are
+    its messages. Private to the person who started it, like its runs. An
+    agent run in a chat is given the chat's earlier turns as context."""
+
+    __tablename__ = "builder_conversations"
+    __table_args__ = (Index("ix_builder_conversations_owner_last", "owner_id", "last_message_at"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    tenant_id: Mapped[str] = mapped_column(String(36), index=True)
+    owner_id: Mapped[str] = mapped_column(String(36), index=True)
+    kind: Mapped[str] = mapped_column(String(20))  # agent | workflow
+    # No foreign keys: like runs, a chat outlives a deleted agent/workflow.
+    agent_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    workflow_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    title: Mapped[str] = mapped_column(String(200), default="New chat")
+    turn_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_message_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class BuilderNodeRun(Base, TimestampMixin):

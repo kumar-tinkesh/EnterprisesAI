@@ -25,7 +25,7 @@ from vendor.models import MCPTool
 from vendor.services import mcp_auth
 from vendor.services.mcp_service.crud import get_mcp_server, is_server_visible_to_user
 
-from builder.api.v1 import agents, assist, publishing, quality, runs, schedules, versions, workflows
+from builder.api.v1 import agents, assist, conversations, publishing, quality, runs, schedules, versions, workflows
 from builder.api.v1.deps import get_end_user
 from builder.api.v1.schemas import (
     RuntimeToolOut,
@@ -54,6 +54,7 @@ router.include_router(versions.router)
 router.include_router(quality.router)
 router.include_router(publishing.router)
 router.include_router(runs.router)
+router.include_router(conversations.router)
 router.include_router(assist.router)
 
 

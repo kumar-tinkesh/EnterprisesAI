@@ -27,7 +27,7 @@ const STATUS_TONE: Record<string, string> = {
   cancelled: "bg-zinc-100 text-zinc-500",
 };
 
-function coerce(v: InputVariable, raw: string): unknown {
+export function coerce(v: InputVariable, raw: string): unknown {
   if (raw === "") return undefined;
   if (v.type === "number") return Number(raw);
   if (v.type === "boolean") return raw === "true";

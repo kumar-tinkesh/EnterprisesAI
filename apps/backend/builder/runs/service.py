@@ -45,7 +45,7 @@ def agent_snapshot(agent: BuilderAgent) -> dict:
 async def create_run(
     db: AsyncSession, user: CurrentUser, kind: str, target_id: str, *, definition: dict, version: int, text: str,
     variables: dict | None = None, schedule_id: str | None = None, purpose: str = "run", public_key_id: str | None = None,
-    depth: str = "auto",
+    depth: str = "auto", conversation_id: str | None = None, history: list[dict] | None = None,
 ) -> BuilderRun:
     """Queue a run of an already-frozen ``definition`` (see agent_snapshot /
     workflow_definition), executing as ``user``."""
@@ -56,12 +56,18 @@ async def create_run(
         **({"agent_id": target_id} if kind == "agent" else {"workflow_id": target_id}),
         definition_version=version,
         definition=definition,
-        input={"text": text, "variables": variables or {}, **({"depth": depth} if depth != "auto" else {})},
+        input={
+            "text": text, "variables": variables or {},
+            **({"depth": depth} if depth != "auto" else {}),
+            # The chat's earlier turns (builder.runs.conversations) — context for an agent run.
+            **({"history": history} if history else {}),
+        },
         status=states.QUEUED,
         state={},
         schedule_id=schedule_id,
         purpose=purpose,
         public_key_id=public_key_id,
+        conversation_id=conversation_id,
     )
     db.add(run)
     await db.commit()
@@ -74,10 +80,12 @@ async def create_run(
 async def create_agent_run(
     db: AsyncSession, user: CurrentUser, agent: BuilderAgent, *, text: str, variables: dict | None = None,
     schedule_id: str | None = None, purpose: str = "run", depth: str = "auto",
+    conversation_id: str | None = None, history: list[dict] | None = None,
 ) -> BuilderRun:
     return await create_run(
         db, user, "agent", agent.id, definition={"agent": agent_snapshot(agent)}, version=agent.version,
         text=text, variables=variables, schedule_id=schedule_id, purpose=purpose, depth=depth,
+        conversation_id=conversation_id, history=history,
     )
 
 
@@ -107,7 +115,7 @@ async def workflow_definition(db: AsyncSession, tenant_id: str, workflow: dict, 
 
 async def create_workflow_run(
     db: AsyncSession, user: CurrentUser, workflow, *, text: str, variables: dict | None = None,
-    schedule_id: str | None = None, purpose: str = "run", depth: str = "auto",
+    schedule_id: str | None = None, purpose: str = "run", depth: str = "auto", conversation_id: str | None = None,
 ) -> BuilderRun:
     """Freezes the workflow and every agent its steps use, so edits made while
     it runs (or before a resume) don't change what this run does."""
@@ -115,6 +123,7 @@ async def create_workflow_run(
     return await create_run(
         db, user, "workflow", workflow.id, definition=definition, version=workflow.version,
         text=text, variables=variables, schedule_id=schedule_id, purpose=purpose, depth=depth,
+        conversation_id=conversation_id,
     )
 
 
@@ -218,6 +227,7 @@ async def run_view(db: AsyncSession, run: BuilderRun, *, detail: bool = True) ->
         "name": ((run.definition or {}).get("agent") or (run.definition or {}).get("workflow") or {}).get("name"),
         "schedule_id": run.schedule_id,
         "purpose": run.purpose,
+        "conversation_id": run.conversation_id,
     }
     if not detail:
         return view

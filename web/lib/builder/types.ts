@@ -398,6 +398,24 @@ export interface WorkflowEditResult {
 
 export type RunStatus = "queued" | "running" | "waiting" | "succeeded" | "failed" | "cancelled";
 
+/** A playground chat with an agent or workflow; its runs are its messages. */
+export interface Conversation {
+  id: string;
+  kind: "agent" | "workflow";
+  agent_id: string | null;
+  workflow_id: string | null;
+  title: string;
+  turn_count: number;
+  created_at: string;
+  last_message_at: string | null;
+}
+
+/** Continue a chat, or start one with this message (omit both for a one-off run). */
+export interface ChatRef {
+  conversation_id?: string | null;
+  new_conversation?: boolean;
+}
+
 export interface Approval {
   id: string;
   run_id: string;
@@ -458,6 +476,10 @@ export interface Run {
   schedule_id?: string | null;
   /** Which saved version of the agent/workflow it ran. */
   definition_version?: number;
+  /** The playground chat it is one message of. */
+  conversation_id?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
   nodes?: RunNode[];
   tool_calls?: RunToolCall[];
   approvals?: Approval[];

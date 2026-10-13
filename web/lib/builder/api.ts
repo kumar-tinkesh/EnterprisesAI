@@ -11,7 +11,9 @@ import type {
   AnswerDepth,
   AgentDraft,
   Approval,
+  ChatRef,
   CheckResult,
+  Conversation,
   GuardrailSettings,
   Run,
   PublicKey,
@@ -87,9 +89,17 @@ export const builderApi = {
   workflowPreflight: (t: string, id: string) => call<CheckResult>(t, `/workflows/${id}/preflight`, "POST"),
 
   // Runs
-  startAgentRun: (t: string, id: string, input: string, depth: AnswerDepth = "auto") => call<Run>(t, `/agents/${id}/runs`, "POST", { input, depth }),
-  startWorkflowRun: (t: string, id: string, input: string, variables: Record<string, unknown>, depth: AnswerDepth = "auto") =>
-    call<Run>(t, `/workflows/${id}/runs`, "POST", { input, variables, depth }),
+  startAgentRun: (t: string, id: string, input: string, depth: AnswerDepth = "auto", chat: ChatRef = {}) =>
+    call<Run>(t, `/agents/${id}/runs`, "POST", { input, depth, ...chat }),
+  startWorkflowRun: (t: string, id: string, input: string, variables: Record<string, unknown>, depth: AnswerDepth = "auto", chat: ChatRef = {}) =>
+    call<Run>(t, `/workflows/${id}/runs`, "POST", { input, variables, depth, ...chat }),
+
+  // Playground chats
+  listConversations: (t: string, params: { agent_id?: string; workflow_id?: string }) =>
+    call<Conversation[]>(t, `/conversations?${new URLSearchParams(params as Record<string, string>).toString()}`),
+  conversationRuns: (t: string, id: string) => call<Run[]>(t, `/conversations/${id}/runs`),
+  renameConversation: (t: string, id: string, title: string) => call<Conversation>(t, `/conversations/${id}`, "PATCH", { title }),
+  deleteConversation: (t: string, id: string) => call<void>(t, `/conversations/${id}`, "DELETE"),
   workflowKnowledge: (t: string, id: string) => call<{ knowledge_base_id: string | null }>(t, `/workflows/${id}/knowledge`),
   createWorkflowKnowledge: (t: string, id: string) => call<{ knowledge_base_id: string }>(t, `/workflows/${id}/knowledge`, "POST"),
   getRun: (t: string, id: string) => call<Run>(t, `/runs/${id}`),
