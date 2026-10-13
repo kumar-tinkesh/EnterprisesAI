@@ -5,6 +5,7 @@
     POST   /{agents|workflows}/{id}/public-keys     make one — the key is in the response, once
     PATCH  /public-keys/{key_id}                    pause/resume, move to another version, limits, origins
     DELETE /public-keys/{key_id}                    revoke (it stops working at once; the record stays)
+    GET    /published                               everything the caller published: keys + usage over N days
 
 Publishing is for the agent's/workflow's creator or a tenant admin. A key
 runs as whoever made it, with their connected tools — so when callers could
@@ -13,7 +14,7 @@ explicitly (``acknowledge_write_tools``).
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -28,10 +29,11 @@ from builder.agents.config import AgentConfig
 from builder.api.v1.agents import get_agent
 from builder.api.v1.deps import can_manage, get_end_user
 from builder.api.v1.workflows import _get_workflow
-from builder.models import BuilderAgent, BuilderPublicKey, BuilderVersion, BuilderWorkflow
+from builder.models import BuilderAgent, BuilderPublicKey, BuilderRun, BuilderVersion, BuilderWorkflow
 from builder.publishing.service import (
     PublishError, definition_for, definition_problems, new_key, start_of_day, usage, write_tools,
 )
+from builder.runs import states
 from builder.runs.db import as_utc, utcnow
 
 router = APIRouter()
@@ -216,3 +218,103 @@ async def revoke_key(key_id: str, user: CurrentUser = Depends(get_end_user), db:
     key = await _key(db, key_id, user)
     key.status = "revoked"
     await db.commit()
+
+
+class PublishedKey(KeyOut):
+    kind: str
+    target_id: str
+    target_name: str
+    requests: int  # in the window
+
+
+class PublishedDay(BaseModel):
+    date: str  # YYYY-MM-DD (UTC)
+    success: int
+    error: int
+
+
+class PublishedStats(BaseModel):
+    live_keys: int
+    total_requests: int
+    success_rate: float  # of the finished ones, 0–1
+    avg_latency_ms: int  # of the finished ones
+
+
+class PublishedOut(BaseModel):
+    days: int
+    stats: PublishedStats
+    series: list[PublishedDay]
+    keys: list[PublishedKey]
+
+
+@router.get("/published", response_model=PublishedOut)
+async def published(days: int = 14, user: CurrentUser = Depends(get_end_user), db: AsyncSession = Depends(get_db)):
+    """The caller's publishing at a glance: their keys on every agent and
+    workflow (revoked ones are gone from the list but their calls still count),
+    and the public calls of the last ``days`` days."""
+    days = max(1, min(days, 90))
+    today = start_of_day(utcnow())
+    since = today - timedelta(days=days - 1)
+
+    keys = (
+        await db.execute(
+            select(BuilderPublicKey)
+            .where(BuilderPublicKey.owner_id == user.id, BuilderPublicKey.tenant_id == user.tenant_id)
+            .order_by(BuilderPublicKey.created_at.desc())
+        )
+    ).scalars().all()
+    rows = (
+        await db.execute(
+            select(BuilderRun.public_key_id, BuilderRun.status, BuilderRun.created_at, BuilderRun.started_at, BuilderRun.finished_at)
+            .where(BuilderRun.public_key_id.in_([k.id for k in keys] or [""]), BuilderRun.created_at >= since)
+        )
+    ).all()
+
+    per_day = {(since + timedelta(days=i)).date().isoformat(): [0, 0] for i in range(days)}
+    per_key: dict[str, int] = {}
+    ok = finished = 0
+    latency: list[float] = []
+    for key_id, status, created, started, ended in rows:
+        per_key[key_id] = per_key.get(key_id, 0) + 1
+        if status not in states.TERMINAL:
+            continue
+        finished += 1
+        bucket = per_day.get(as_utc(created).date().isoformat())
+        if status == states.SUCCEEDED:
+            ok += 1
+            if bucket:
+                bucket[0] += 1
+        elif bucket:
+            bucket[1] += 1
+        if started and ended:
+            latency.append((as_utc(ended) - as_utc(started)).total_seconds() * 1000)
+
+    names: dict[str, str] = {}
+    agent_ids = [k.agent_id for k in keys if k.agent_id]
+    workflow_ids = [k.workflow_id for k in keys if k.workflow_id]
+    if agent_ids:
+        names.update((await db.execute(select(BuilderAgent.id, BuilderAgent.name).where(BuilderAgent.id.in_(agent_ids)))).tuples().all())
+    if workflow_ids:
+        names.update((await db.execute(select(BuilderWorkflow.id, BuilderWorkflow.name).where(BuilderWorkflow.id.in_(workflow_ids)))).tuples().all())
+
+    listed = []
+    for k in keys:
+        if k.status == "revoked":
+            continue
+        target_id = k.agent_id or k.workflow_id or ""
+        listed.append(PublishedKey(
+            **await _out(db, k, user), kind=k.kind, target_id=target_id,
+            target_name=names.get(target_id, "Deleted"), requests=per_key.get(k.id, 0),
+        ))
+
+    return PublishedOut(
+        days=days,
+        stats=PublishedStats(
+            live_keys=sum(1 for k in keys if k.status == "active"),
+            total_requests=len(rows),
+            success_rate=round(ok / finished, 4) if finished else 0.0,
+            avg_latency_ms=round(sum(latency) / len(latency)) if latency else 0,
+        ),
+        series=[PublishedDay(date=d, success=v[0], error=v[1]) for d, v in per_day.items()],
+        keys=listed,
+    )

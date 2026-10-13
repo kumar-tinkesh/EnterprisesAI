@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Bot, Brain, ChevronsLeft, ChevronsRight, LayoutDashboard, LogOut, Menu, Plug, Sparkles, X, Zap } from "lucide-react";
+import { Bot, Brain, ChevronsLeft, Globe, ChevronsRight, LayoutDashboard, LogOut, Menu, Plug, Sparkles, X, Zap } from "lucide-react";
 
 import { Avatar } from "@/components/builder/chat/chat-message";
 import { useAuthStore } from "@/stores/auth-store";
@@ -13,6 +13,7 @@ const NAV = [
   { href: "/user", label: "Dashboard", Icon: LayoutDashboard },
   { href: "/user/agents", label: "AI Compiler", Icon: Bot },
   { href: "/user/executions", label: "Executions", Icon: Zap },
+  { href: "/user/published", label: "Published", Icon: Globe },
   { href: "/user/connectors", label: "Connectors", Icon: Plug },
   { href: "/user/knowledge", label: "Knowledge Base", Icon: Brain },
 ];

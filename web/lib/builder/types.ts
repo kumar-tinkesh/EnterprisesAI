@@ -223,6 +223,35 @@ export interface TestRun {
   results?: TestResult[] | null;
 }
 
+/** The signed-in user's runs for the dashboard (GET /builder/insights). */
+export interface InsightsWindow {
+  runs: number;
+  succeeded: number;
+  failed: number;
+  success_rate: number;
+  avg_latency_ms: number;
+  /** Distinct agents/workflows that ran. */
+  active: number;
+}
+export interface Insights {
+  days: number;
+  current: InsightsWindow;
+  previous: InsightsWindow;
+  /** Two windows of days, oldest first (UTC dates). */
+  series: { date: string; succeeded: number; failed: number }[];
+  busiest: { kind: "agent" | "workflow"; id: string; name: string; exists: boolean; runs: number; succeeded: number }[];
+  all_time: { runs: number; success_rate: number };
+}
+
+/** Everything the signed-in user published, at a glance (GET /builder/published). */
+export interface Published {
+  days: number;
+  stats: { live_keys: number; total_requests: number; success_rate: number; avg_latency_ms: number };
+  /** One per day, oldest first (UTC dates). */
+  series: { date: string; success: number; error: number }[];
+  keys: (PublicKey & { kind: "agent" | "workflow"; target_id: string; target_name: string; requests: number })[];
+}
+
 export interface PublicKey {
   id: string;
   name: string;

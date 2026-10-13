@@ -201,3 +201,30 @@ async def test_only_managers_publish(tenant_client, make_user_client, demo, tena
     colleague = await make_user_client(CurrentUser(id="tu_5", email="e@x.io", full_name="E", role="tenant_user", tenant_id=tenant.id))
     assert (await colleague.get(f"{B}/agents/{agent['id']}/public-keys")).status_code == 403
     assert (await colleague.post(f"{B}/agents/{agent['id']}/public-keys", json={})).status_code == 403
+
+
+async def test_published_overview_counts_every_key(tenant_client, anon_client, demo, gateway, runtime):
+    empty = (await tenant_client.get(f"{B}/published")).json()
+    assert empty["stats"] == {"live_keys": 0, "total_requests": 0, "success_rate": 0.0, "avg_latency_ms": 0}
+    assert empty["keys"] == [] and len(empty["series"]) == 14 and empty["series"][-1]["success"] == 0
+
+    agent = await make_agent(tenant_client, demo, ["echo"])
+    site = await publish(tenant_client, "agents", agent["id"])
+    spare = await publish(tenant_client, "agents", agent["id"], name="Spare")
+    gateway([reply("Hi there.")])
+    r = await anon_client.post(f"{P}/runs", headers=bearer(site), json={"input": "say hi", "wait_seconds": 0})
+    assert r.status_code == 202
+    await worker(runtime).drain()
+    await tenant_client.patch(f"{B}/public-keys/{spare['id']}", json={"status": "paused"})
+
+    out = (await tenant_client.get(f"{B}/published")).json()
+    assert out["stats"]["live_keys"] == 1 and out["stats"]["total_requests"] == 1 and out["stats"]["success_rate"] == 1.0
+    assert out["series"][-1] == {**out["series"][-1], "success": 1, "error": 0}
+    by_name = {k["name"]: k for k in out["keys"]}
+    assert by_name["Site"]["requests"] == 1 and by_name["Site"]["target_name"] == "Helper" and by_name["Site"]["kind"] == "agent"
+    assert by_name["Spare"]["status"] == "paused" and by_name["Spare"]["requests"] == 0
+
+    # Revoked keys leave the list; their calls still count.
+    await tenant_client.delete(f"{B}/public-keys/{site['id']}")
+    out = (await tenant_client.get(f"{B}/published")).json()
+    assert [k["name"] for k in out["keys"]] == ["Spare"] and out["stats"]["total_requests"] == 1

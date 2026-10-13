@@ -8,6 +8,8 @@ import type {
   Agent,
   AgentConfig,
   AgentProfile,
+  Insights,
+  Published,
   AnswerDepth,
   AgentDraft,
   Approval,
@@ -145,6 +147,8 @@ export const builderApi = {
   updatePublicKey: (t: string, keyId: string, body: { status?: "active" | "paused"; version?: number; latest?: boolean; name?: string }) =>
     call<PublicKey>(t, `/public-keys/${keyId}`, "PATCH", body),
   revokePublicKey: (t: string, keyId: string) => call<void>(t, `/public-keys/${keyId}`, "DELETE"),
+  insights: (t: string, days = 7) => call<Insights>(t, `/insights?days=${days}`),
+  published: (t: string, days = 14) => call<Published>(t, `/published?days=${days}`),
 
   // Schedules
   listSchedules: (t: string, params: { agent_id?: string; workflow_id?: string }) =>
