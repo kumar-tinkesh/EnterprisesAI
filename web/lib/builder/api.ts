@@ -8,7 +8,9 @@ import type {
   Agent,
   AgentConfig,
   AgentProfile,
+  Health,
   Insights,
+  Overview,
   Published,
   AnswerDepth,
   AgentDraft,
@@ -147,6 +149,8 @@ export const builderApi = {
   updatePublicKey: (t: string, keyId: string, body: { status?: "active" | "paused"; version?: number; latest?: boolean; name?: string }) =>
     call<PublicKey>(t, `/public-keys/${keyId}`, "PATCH", body),
   revokePublicKey: (t: string, keyId: string) => call<void>(t, `/public-keys/${keyId}`, "DELETE"),
+  overview: (t: string, days = 7) => call<Overview>(t, `/overview?days=${days}`),
+  health: (t: string, kind: "agent" | "workflow", id: string) => call<Health>(t, `/${kind}s/${id}/health`),
   insights: (t: string, days = 7) => call<Insights>(t, `/insights?days=${days}`),
   published: (t: string, days = 14) => call<Published>(t, `/published?days=${days}`),
 

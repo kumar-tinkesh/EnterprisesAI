@@ -36,3 +36,20 @@ async def test_insights_compare_windows_and_rank_agents(db, tenant_client, demo,
     await tenant_client.delete(f"{B}/agents/{agent['id']}")
     [top] = (await tenant_client.get(f"{B}/insights")).json()["busiest"]
     assert (top["name"], top["exists"]) == ("Helper", False)
+
+
+async def test_overview_has_a_line_per_agent(tenant_client, demo, gateway, runtime):
+    agent = await make_agent(tenant_client, demo, ["echo"])
+    idle = await make_agent(tenant_client, demo, ["echo"])
+    gateway([reply("One."), reply("Two.")])
+    for i in range(2):
+        await start(tenant_client, agent, f"q{i}")
+    await worker(runtime).drain()
+
+    out = (await tenant_client.get(f"{B}/overview")).json()
+    by_id = {i["id"]: i for i in out["items"]}
+    busy, quiet = by_id[agent["id"]], by_id[idle["id"]]
+    assert (busy["runs"], busy["succeeded"], busy["daily"][-1], busy["last_status"]) == (2, 2, 2, "succeeded")
+    assert busy["health_status"] == "testing" and busy["running"] == 0 and busy["schedule"] is None and busy["published"] == 0
+    assert (quiet["runs"], quiet["last_run_at"], quiet["health_status"]) == (0, None, "not_tested")
+    assert out["totals"] == {"runs": 2, "succeeded": 2, "failed": 0, "running": 0, "waiting": 0}

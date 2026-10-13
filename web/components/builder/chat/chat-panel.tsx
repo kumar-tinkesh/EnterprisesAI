@@ -124,10 +124,16 @@ export function ChatPanel({
   token,
   onClose,
   onEdit,
+  embedded = false,
+  actions,
 }: {
   target: ChatTarget;
   token: string;
   onClose: () => void;
+  /** Inside a page that already shows who this is: the header keeps only the chat's own controls. */
+  embedded?: boolean;
+  /** Embedded: the page's own controls, on the same line as New and History. */
+  actions?: React.ReactNode;
   /** Open this agent/workflow in the editor beside the chat. */
   onEdit: () => void;
 }) {
@@ -299,13 +305,15 @@ export function ChatPanel({
     <div className="flex h-full min-h-0 flex-col bg-white">
       {/* Header */}
       <header className="flex shrink-0 items-center gap-2 border-b border-zinc-200 px-3 py-2.5 sm:px-4">
-        <Avatar name={name} size={32} />
+        {!embedded && <Avatar name={name} size={32} />}
         <div className="min-w-0 flex-1">
-          <p className="flex items-center gap-1.5">
-            <span className="truncate text-sm font-semibold text-zinc-900">{name}</span>
-            <span className="hidden shrink-0 rounded-full bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium capitalize text-zinc-500 sm:inline">{kind}</span>
-          </p>
-          <p className="truncate text-[11px] text-zinc-500">{chat ? chat.title : "New chat"}</p>
+          {!embedded && (
+            <p className="flex items-center gap-1.5">
+              <span className="truncate text-sm font-semibold text-zinc-900">{name}</span>
+              <span className="hidden shrink-0 rounded-full bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium capitalize text-zinc-500 sm:inline">{kind}</span>
+            </p>
+          )}
+          <p className={cn("truncate text-zinc-500", embedded ? "text-xs font-medium" : "text-[11px]")}>{chat ? chat.title : "New chat"}</p>
         </div>
         <button
           type="button"
@@ -325,18 +333,23 @@ export function ChatPanel({
           onRename={renameChat}
           onDelete={removeChat}
         />
-        <button
-          type="button"
-          onClick={onEdit}
-          aria-label={editorTitle}
-          title={editorTitle}
-          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-200 text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900 cursor-pointer"
-        >
-          <ExternalLink className="h-3.5 w-3.5" />
-        </button>
-        <button type="button" onClick={onClose} aria-label="Close chat" className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 cursor-pointer">
-          <X className="h-4 w-4" />
-        </button>
+        {embedded && actions}
+        {!embedded && (
+          <>
+            <button
+              type="button"
+              onClick={onEdit}
+              aria-label={editorTitle}
+              title={editorTitle}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-200 text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900 cursor-pointer"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+            </button>
+            <button type="button" onClick={onClose} aria-label="Close chat" className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 cursor-pointer">
+              <X className="h-4 w-4" />
+            </button>
+          </>
+        )}
       </header>
 
       {/* Thread */}

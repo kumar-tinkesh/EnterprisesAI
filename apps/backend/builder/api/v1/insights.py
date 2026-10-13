@@ -2,13 +2,15 @@
 
     GET /insights?days=7    the caller's runs: this window vs the one before,
                             a daily series over two windows, busiest agents, all-time totals
+    GET /overview?days=7    one line per agent/workflow the caller can see (the Executions
+                            list): its runs per day, last run, what's live, health, schedule, keys
 
 Counts the caller's own runs (purpose "run": chats, the playground,
 schedules). Test-case runs and public-key calls have their own views.
 """
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
@@ -19,7 +21,8 @@ from src.api.deps import CurrentUser
 from src.db.session import get_db
 
 from builder.api.v1.deps import get_end_user
-from builder.models import BuilderAgent, BuilderRun, BuilderWorkflow
+from builder.api.v1.health import compute_health
+from builder.models import BuilderAgent, BuilderPublicKey, BuilderRun, BuilderSchedule, BuilderWorkflow
 from builder.publishing.service import start_of_day
 from builder.runs import states
 from builder.runs.db import as_utc, utcnow
@@ -150,4 +153,101 @@ async def insights(
             runs=len(rows),
             success_rate=round(sum(1 for r in finished if r.status == states.SUCCEEDED) / len(finished), 4) if finished else 0.0,
         ),
+    )
+
+
+class OverviewItem(BaseModel):
+    kind: str
+    id: str
+    runs: int  # in the window
+    succeeded: int
+    failed: int
+    daily: list[int]  # runs per day, oldest first
+    last_run_at: datetime | None
+    last_status: str | None
+    running: int  # queued or running now
+    waiting: int  # waiting for a person
+    health_status: str
+    health_score: int | None
+    schedule: str | None  # its cron, when an enabled schedule exists
+    next_run_at: datetime | None
+    published: int  # live publishable keys
+
+
+class OverviewTotals(BaseModel):
+    runs: int
+    succeeded: int
+    failed: int
+    running: int
+    waiting: int
+
+
+class OverviewOut(BaseModel):
+    days: int
+    totals: OverviewTotals
+    items: list[OverviewItem]
+
+
+@router.get("/overview", response_model=OverviewOut)
+async def overview(
+    days: int = Query(default=7, ge=1, le=30),
+    user: CurrentUser = Depends(get_end_user),
+    db: AsyncSession = Depends(get_db),
+):
+    agents = (await db.execute(
+        select(BuilderAgent).where(BuilderAgent.tenant_id == user.tenant_id, BuilderAgent.workflow_id.is_(None)).limit(200)
+    )).scalars().all()
+    workflows = (await db.execute(select(BuilderWorkflow).where(BuilderWorkflow.tenant_id == user.tenant_id).limit(200))).scalars().all()
+    targets = [("agent", a) for a in agents] + [("workflow", w) for w in workflows]
+
+    since = start_of_day(utcnow()) - timedelta(days=days - 1)
+    rows = (await db.execute(
+        select(BuilderRun.kind, BuilderRun.agent_id, BuilderRun.workflow_id, BuilderRun.status, BuilderRun.created_at)
+        .where(BuilderRun.owner_id == user.id, BuilderRun.purpose == "run")
+    )).all()
+    live = {states.QUEUED, states.RUNNING}
+    per: dict[tuple[str, str], dict] = {}
+    for r in rows:
+        target = r.workflow_id if r.kind == "workflow" else r.agent_id
+        if not target:
+            continue
+        p = per.setdefault((r.kind, target), {"runs": 0, "ok": 0, "bad": 0, "daily": [0] * days, "last": None, "last_status": None, "running": 0, "waiting": 0})
+        created = as_utc(r.created_at)
+        if p["last"] is None or created > p["last"]:
+            p["last"], p["last_status"] = created, r.status
+        p["running"] += r.status in live
+        p["waiting"] += r.status == states.WAITING
+        if created >= since:
+            p["runs"] += 1
+            p["ok"] += r.status == states.SUCCEEDED
+            p["bad"] += r.status == states.FAILED
+            p["daily"][min(days - 1, (created - since).days)] += 1
+
+    schedules = {
+        (s.kind, s.agent_id or s.workflow_id): s
+        for s in (await db.execute(select(BuilderSchedule).where(BuilderSchedule.tenant_id == user.tenant_id, BuilderSchedule.enabled.is_(True)))).scalars()
+    }
+    keys: dict[str, int] = {}
+    for k in (await db.execute(select(BuilderPublicKey).where(BuilderPublicKey.tenant_id == user.tenant_id, BuilderPublicKey.status == "active"))).scalars():
+        keys[k.agent_id or k.workflow_id or ""] = keys.get(k.agent_id or k.workflow_id or "", 0) + 1
+
+    items = []
+    for kind, t in targets:
+        p = per.get((kind, t.id)) or {"runs": 0, "ok": 0, "bad": 0, "daily": [0] * days, "last": None, "last_status": None, "running": 0, "waiting": 0}
+        h = await compute_health(db, user, t)
+        sched = schedules.get((kind, t.id))
+        items.append(OverviewItem(
+            kind=kind, id=t.id, runs=p["runs"], succeeded=p["ok"], failed=p["bad"], daily=p["daily"],
+            last_run_at=p["last"], last_status=p["last_status"], running=p["running"], waiting=p["waiting"],
+            health_status=h.status, health_score=h.score,
+            schedule=sched.cron if sched else None, next_run_at=as_utc(sched.next_run_at) if sched else None,
+            published=keys.get(t.id, 0),
+        ))
+    return OverviewOut(
+        days=days,
+        totals=OverviewTotals(
+            runs=sum(i.runs for i in items), succeeded=sum(i.succeeded for i in items), failed=sum(i.failed for i in items),
+            running=sum(i.running for i in items), waiting=sum(i.waiting for i in items),
+        ),
+        items=items,
     )

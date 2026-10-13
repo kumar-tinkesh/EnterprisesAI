@@ -223,6 +223,41 @@ export interface TestRun {
   results?: TestResult[] | null;
 }
 
+/** One line per agent/workflow for the Executions list (GET /builder/overview). */
+export interface OverviewItem {
+  kind: "agent" | "workflow";
+  id: string;
+  runs: number;
+  succeeded: number;
+  failed: number;
+  /** Runs per day over the window, oldest first. */
+  daily: number[];
+  last_run_at: string | null;
+  last_status: RunStatus | null;
+  running: number;
+  waiting: number;
+  health_status: Health["status"];
+  health_score: number | null;
+  schedule: string | null;
+  next_run_at: string | null;
+  published: number;
+}
+export interface Overview {
+  days: number;
+  totals: { runs: number; succeeded: number; failed: number; running: number; waiting: number };
+  items: OverviewItem[];
+}
+
+/** How ready an agent/workflow is (GET /builder/{agents|workflows}/{id}/health). */
+export interface Health {
+  /** 0–100 over the measured parts; null until something is measured. */
+  score: number | null;
+  status: "production_ready" | "testing" | "needs_attention" | "not_tested";
+  runs_counted: number;
+  dimensions: { key: string; label: string; weight: number; score: number | null; measured: boolean; summary: string; detail: string[] }[];
+  blockers: { key: string; severity: "critical" | "warning"; title: string; detail: string; fix: string }[];
+}
+
 /** The signed-in user's runs for the dashboard (GET /builder/insights). */
 export interface InsightsWindow {
   runs: number;
