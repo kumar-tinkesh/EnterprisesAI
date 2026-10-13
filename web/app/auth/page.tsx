@@ -17,7 +17,7 @@ export default function AuthPage() {
     <main className="flex min-h-screen items-center justify-center p-6">
       <div className="flex w-full max-w-md flex-col gap-6">
         <div className="text-center">
-          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-zinc-900 text-white">
+          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-500 text-white shadow-lg shadow-indigo-500/20">
             <Building2 className="h-6 w-6" />
           </div>
           <h1 className="text-2xl font-bold">EnterpriseAI</h1>

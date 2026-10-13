@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Bot, Brain, ChevronsLeft, Globe, ChevronsRight, LayoutDashboard, LogOut, Menu, Plug, Sparkles, X, Zap } from "lucide-react";
+import { Bot, Brain, Globe, LayoutDashboard, LogOut, Menu, PanelLeftClose, PanelLeftOpen, Plug, Sparkles, X, Zap } from "lucide-react";
 
 import { Avatar } from "@/components/builder/chat/chat-message";
 import { useAuthStore } from "@/stores/auth-store";
@@ -101,8 +101,20 @@ function SidebarBody({ pathname, collapsed, onToggle }: { pathname: string; coll
 
   return (
     <>
-      <div className={cn("flex h-14 shrink-0 items-center border-b border-zinc-100", collapsed ? "justify-center px-2" : "px-4")}>
-        <Brand collapsed={collapsed} />
+      <div className={cn("flex h-14 shrink-0 items-center gap-2 border-b border-zinc-100", collapsed ? "justify-center px-2" : "pl-4 pr-2")}>
+        {/* Collapsed, the header is just the way back open. */}
+        {!(collapsed && onToggle) && <Brand />}
+        {onToggle && (
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            className={cn("rounded-md p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 cursor-pointer", !collapsed && "ml-auto")}
+          >
+            {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+          </button>
+        )}
       </div>
 
       <nav className="flex-1 space-y-1 overflow-y-auto p-2" aria-label="Main">
@@ -151,17 +163,6 @@ function SidebarBody({ pathname, collapsed, onToggle }: { pathname: string; coll
           <LogOut className="h-4 w-4 shrink-0" />
           {!collapsed && "Sign out"}
         </button>
-        {onToggle && (
-          <button
-            type="button"
-            onClick={onToggle}
-            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            className={cn("mt-1 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 cursor-pointer", collapsed && "justify-center px-0")}
-          >
-            {collapsed ? <ChevronsRight className="h-4 w-4" /> : <><ChevronsLeft className="h-4 w-4" /> Collapse</>}
-          </button>
-        )}
       </div>
     </>
   );
