@@ -29,6 +29,7 @@ export function BuildBar({
   above,
   onOpen,
   onModeChange,
+  onExit,
 }: {
   /** The kind of what's open in the canvas, if anything. */
   current: BuildMode | null;
@@ -39,6 +40,9 @@ export function BuildBar({
   onOpen: (target: BuildTarget) => void;
   /** Told which tab (Agent / Workflow) the bar is on, including the remembered one. */
   onModeChange?: (mode: BuildMode) => void;
+  /** Picking the other tab while something is open leaves it for the empty canvas
+   *  in that mode (return false to stay, e.g. unsaved changes kept). */
+  onExit?: () => boolean;
 }) {
   const builder = useBuilderActions({ open: onOpen });
   const [mode, setMode] = useState<BuildMode>(current ?? "agent");
@@ -58,6 +62,22 @@ export function BuildBar({
   useEffect(() => onModeChange?.(mode), [mode, onModeChange]);
 
   const pick = (m: BuildMode) => {
+    if (current && m !== current && onExit) {
+      // The empty canvas opens on the tab that was picked.
+      try {
+        window.localStorage.setItem(MODE_KEY, m);
+      } catch {
+        /* not remembered */
+      }
+      if (!onExit()) {
+        try {
+          window.localStorage.setItem(MODE_KEY, current);
+        } catch {
+          /* not remembered */
+        }
+      }
+      return;
+    }
     setMode(m);
     builder.setError(null);
     try {

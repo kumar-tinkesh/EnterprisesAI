@@ -6,7 +6,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { ApiError } from "@/lib/api";
 import { builderApi } from "@/lib/builder/api";
-import { draftKey } from "@/lib/builder/graph";
+import { draftKey, unsavedKey } from "@/lib/builder/graph";
 import type { Problem } from "@/lib/builder/types";
 import { useAgentWizard } from "@/stores/agent-wizard-store";
 import { useAuthStore } from "@/stores/auth-store";
@@ -46,6 +46,7 @@ export function useBuilderActions({ open }: { open?: (target: BuildTarget) => vo
       const draft = await builderApi.draftWorkflow(token, description);
       const wf = await builderApi.createWorkflow(token, { name: draft.name, description });
       window.sessionStorage.setItem(draftKey(wf.id), JSON.stringify(draft));
+      window.sessionStorage.setItem(unsavedKey(wf.id), String(wf.version));
       return { kind: "workflow", id: wf.id };
     },
     onSuccess: (target) => target && (open ? open(target) : router.push(editorHref(target))),
@@ -60,14 +61,13 @@ export function useBuilderActions({ open }: { open?: (target: BuildTarget) => vo
         useAgentWizard.getState().start({});
         return null;
       }
-      const wf = await builderApi.createWorkflow(token, {
-        name: "New workflow",
-        nodes: [
-          { id: "in", type: "input", position: { x: 0, y: 0 } },
-          { id: "out", type: "output", position: { x: 600, y: 0 } },
-        ],
-        edges: [{ id: "e1", source: "in", target: "out" }],
-      });
+      // An empty canvas: the person adds the trigger, agents and output.
+      const wf = await builderApi.createWorkflow(token, { name: "New workflow", nodes: [], edges: [] });
+      try {
+        window.sessionStorage.setItem(unsavedKey(wf.id), String(wf.version));
+      } catch {
+        /* then it's simply kept */
+      }
       return { kind: "workflow", id: wf.id };
     },
     // The guided setup lives on the AI Compiler page.

@@ -34,15 +34,23 @@ type Notice = { tone: "ok" | "warn" | "error"; text: string; detail?: string[]; 
 const NOTICE_KEY = (id: string) => `builder.agent-notice.${id}`;
 
 /** The agent editor (canvas, settings, schedules, playground) for one saved agent. */
-export function AgentEditor({ id, onBack, onOpen }: { id: string; onBack: () => void; onOpen: (target: BuildTarget) => void }) {
+type EditorProps = {
+  id: string;
+  onBack: () => void;
+  onOpen: (target: BuildTarget) => void;
+  /** Where the bar's Workflow tab goes (the empty canvas); without it the tab only switches what the bar describes. */
+  onExit?: () => void;
+};
+
+export function AgentEditor(props: EditorProps) {
   return (
     <ReactFlowProvider>
-      <Editor id={id} onBack={onBack} onOpen={onOpen} />
+      <Editor {...props} />
     </ReactFlowProvider>
   );
 }
 
-function Editor({ id, onBack, onOpen }: { id: string; onBack: () => void; onOpen: (target: BuildTarget) => void }) {
+function Editor({ id, onBack, onOpen, onExit }: EditorProps) {
   const token = useAuthStore((s) => s.accessToken) || "";
   const queryClient = useQueryClient();
 
@@ -423,6 +431,11 @@ function Editor({ id, onBack, onOpen }: { id: string; onBack: () => void; onOpen
       <BuildBar
         current="agent"
         onOpen={onOpen}
+        onExit={onExit ? () => {
+          if (dirty && !window.confirm("You have unsaved changes here. Leave anyway?")) return false;
+          onExit();
+          return true;
+        } : undefined}
         edit={
           <form
             className="flex min-w-0 flex-1 items-center gap-2"

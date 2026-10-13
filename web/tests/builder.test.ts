@@ -37,7 +37,9 @@ describe("graph helpers", () => {
   it("creates new steps with unique ids and sensible defaults", () => {
     const step = newNode("agent", nodes, { x: 1, y: 2 });
     expect(step.id).toBe("n1");
-    expect(step.draft_agent?.name).toBe("New agent");
+    // Empty, so its panel offers an existing agent or a new one.
+    expect(step.draft_agent).toBeUndefined();
+    expect(step.agent_id).toBeUndefined();
     expect(newNode("human_approval", [...nodes, step], { x: 0, y: 0 }).id).toBe("n2");
   });
 

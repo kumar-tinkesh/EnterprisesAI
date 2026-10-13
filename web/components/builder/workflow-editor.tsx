@@ -39,7 +39,7 @@ import { WorkflowSettings } from "@/components/builder/workflow-settings";
 import { ApiError } from "@/lib/api";
 import { builderApi } from "@/lib/builder/api";
 import { arrange } from "@/lib/builder/arrange";
-import { connect, draftKey, forSave, inputFields, newNode, problemsByStep, removeSteps, stepTitle, updateStep } from "@/lib/builder/graph";
+import { connect, draftKey, forSave, inputFields, newNode, problemsByStep, removeSteps, stepTitle, unsavedKey, updateStep } from "@/lib/builder/graph";
 import { emptyRunView, isFinished, type RunView } from "@/lib/builder/run-state";
 import type { Agent, AnswerDepth, NodeType, Problem, WorkflowConfig, WorkflowEdge, WorkflowNode } from "@/lib/builder/types";
 import type { BuildTarget } from "@/lib/builder/use-builder-actions";
@@ -74,7 +74,14 @@ const DEPTHS: { value: AnswerDepth; label: string; hint: string }[] = [
   { value: "auto", label: "Auto", hint: "Sized to the question" },
   { value: "detailed", label: "Detailed", hint: "In depth, with the reasoning" },
 ];
-type EditorProps = { id: string; onBack: () => void; onSwitch?: (workflowId: string) => void; onOpen: (target: BuildTarget) => void };
+type EditorProps = {
+  id: string;
+  onBack: () => void;
+  onSwitch?: (workflowId: string) => void;
+  onOpen: (target: BuildTarget) => void;
+  /** Where the bar's Agent tab goes (the empty canvas); without it the tab only switches what the bar describes. */
+  onExit?: () => void;
+};
 
 /** The workflow canvas (same chrome as the agent editor) for one saved workflow. */
 export function WorkflowEditor(props: EditorProps) {
@@ -94,7 +101,10 @@ function readStored<T extends string>(key: string, allowed: readonly T[], fallba
   }
 }
 
-function Editor({ id, onBack, onSwitch, onOpen }: EditorProps) {
+/** How many editors have each workflow open (a page can swap one for another). */
+const openEditors = new Map<string, number>();
+
+function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
   const token = useAuthStore((s) => s.accessToken) || "";
   const queryClient = useQueryClient();
   const flow = useReactFlow();
@@ -121,6 +131,32 @@ function Editor({ id, onBack, onSwitch, onOpen }: EditorProps) {
   const [runCardOpen, setRunCardOpen] = useState(false);
   const loaded = useRef(false);
   const inputKey = `builder.input.${id}`;
+
+  // Made by "blank" / "with AI" and never saved: delete it on the way out, so
+  // only workflows someone actually saved are listed.
+  const version = useRef<number | null>(null);
+  version.current = doc?.version ?? version.current;
+  useEffect(() => {
+    openEditors.set(id, (openEditors.get(id) ?? 0) + 1);
+    return () => {
+      openEditors.set(id, (openEditors.get(id) ?? 1) - 1);
+      // Deferred so a remount (Strict Mode, the page swapping layouts) keeps it.
+      setTimeout(() => {
+        if (openEditors.get(id)) return;
+        let created: string | null = null;
+        try {
+          created = window.sessionStorage.getItem(unsavedKey(id));
+        } catch {
+          return;
+        }
+        if (created === null) return;
+        window.sessionStorage.removeItem(unsavedKey(id));
+        if (version.current !== null && version.current > Number(created)) return; // saved since
+        window.sessionStorage.removeItem(draftKey(id));
+        void builderApi.deleteWorkflow(token, id).finally(() => queryClient.invalidateQueries({ queryKey: ["builder-workflows"] }));
+      }, 0);
+    };
+  }, [id, token, queryClient]);
 
   useEffect(() => {
     setDepthState(readStored("answerDepth", ["auto", "short", "detailed"] as const, "auto"));
@@ -804,6 +840,11 @@ function Editor({ id, onBack, onSwitch, onOpen }: EditorProps) {
         <BuildBar
           current="workflow"
           onOpen={onOpen}
+          onExit={onExit ? () => {
+            if (dirty && !window.confirm("You have unsaved changes here. Leave anyway?")) return false;
+            onExit();
+            return true;
+          } : undefined}
           above={
             !aiEdit.isPending && !instruction.trim() && canManage && !previewing ? (
               <div className="flex flex-wrap gap-1.5">

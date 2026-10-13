@@ -106,9 +106,9 @@ export default function UserAgentsPage() {
     return (
       <ProtectedDashboard path="/user" title="AI Compiler" description="Build and test an agent or workflow" fullBleed>
         {editing.kind === "workflow" ? (
-          <WorkflowEditor key={editing.id} id={editing.id} onBack={closeEditor} onOpen={openEditor} onSwitch={(workflowId) => openEditor({ kind: "workflow", id: workflowId })} />
+          <WorkflowEditor key={editing.id} id={editing.id} onBack={closeEditor} onExit={closeEditor} onOpen={openEditor} onSwitch={(workflowId) => openEditor({ kind: "workflow", id: workflowId })} />
         ) : (
-          <AgentEditor key={editing.id} id={editing.id} onBack={closeEditor} onOpen={openEditor} />
+          <AgentEditor key={editing.id} id={editing.id} onBack={closeEditor} onExit={closeEditor} onOpen={openEditor} />
         )}
         <AgentWizardHost onOpen={openEditor} />
       </ProtectedDashboard>

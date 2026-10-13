@@ -8,6 +8,8 @@ import { describeSchedule } from "@/lib/builder/schedule";
 
 /** Session-storage key for an AI draft handed from the studio to the editor. */
 export const draftKey = (id: string) => `builder.draft.${id}`;
+/** Set on a workflow made by "blank" / "with AI" until it's first saved; left unsaved, it's deleted on the way out. */
+export const unsavedKey = (id: string) => `builder.unsaved-workflow.${id}`;
 
 export const TRIGGERS: NodeType[] = ["input", "manual_trigger", "schedule_trigger"];
 
@@ -52,9 +54,8 @@ export function serverIdOf(toolId: string | null | undefined): string | null {
 export function newNode(type: NodeType, nodes: WorkflowNode[], position: { x: number; y: number }): WorkflowNode {
   const id = uniqueId("n", nodes.map((n) => n.id));
   const node: WorkflowNode = { id, type, position };
-  if (type === "agent") {
-    node.draft_agent = { name: "New agent", role: "Assistant", goal: "Describe what this step does", instructions: "", config: {} };
-  } else if (type === "human_approval") {
+  // An agent step starts empty: its panel offers an agent already made, or a new one.
+  if (type === "human_approval") {
     node.approval_message = "Approve this before the workflow continues?";
   } else if (type === "join") {
     node.join_policy = { mode: "all" };

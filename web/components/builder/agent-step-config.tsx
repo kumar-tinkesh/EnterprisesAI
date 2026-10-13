@@ -32,7 +32,7 @@ const OVERRIDES: { id: Exclude<AgentSection, "identity">; title: string; Icon: t
   { id: "approvals", title: "Ask before tools run", Icon: UserRoundCheck },
 ];
 
-/** The goal a freshly added agent step starts with (lib/builder/graph.ts newNode). */
+/** The goal agent steps added before the step picker existed started with. */
 const NEW_AGENT_GOAL = "Describe what this step does";
 
 const WIZARD: { id: "describe" | AgentSection; title: string }[] = [
