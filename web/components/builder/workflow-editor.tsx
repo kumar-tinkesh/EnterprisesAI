@@ -575,7 +575,7 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
               </div>
             )}
           </div>
-          <Input aria-label="Workflow name" className="h-8 w-56 border-transparent font-semibold hover:border-zinc-200" value={doc.name} disabled={!canManage || previewing} onChange={(e) => change((d) => ({ ...d, name: e.target.value }))} />
+          <Input aria-label="Workflow name" className="h-8 w-full min-w-0 max-w-56 border-transparent font-semibold hover:border-zinc-200" value={doc.name} disabled={!canManage || previewing} onChange={(e) => change((d) => ({ ...d, name: e.target.value }))} />
           <span className={cn("shrink-0 text-xs", dirty ? "text-amber-600" : "text-zinc-400")}>{!canManage ? "View only — shared by a teammate" : dirty ? "Unsaved changes" : "Saved"}</span>
           {problems.length > 0 && (
             <span className="flex shrink-0 items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-700" title={problems.map((p) => p.message).join("\n")}>
@@ -588,19 +588,22 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
                 <Plus /> Add Step
               </Button>
             )}
-            {canManage && (
-              <Button size="sm" variant="outline" className="h-8" disabled={previewing} onClick={toggleApproval} title="Ask before tools that change or delete data run" aria-pressed={approvalOn}>
-                <ShieldCheck className={approvalOn ? "text-emerald-500" : "text-zinc-400"} /> Approval {approvalOn ? "on" : "off"}
-              </Button>
-            )}
-            {canManage && <Button size="sm" variant="outline" className="h-8" disabled={previewing} onClick={tidy} title="Tidy up the layout"><LayoutGrid /> Arrange</Button>}
             <Button size="sm" variant="outline" className={cn("h-8", playOpen && "bg-indigo-50")} onClick={() => setPlayOpen((o) => !o)}>
-              <MessageSquare /> Playground
+              <MessageSquare /> Test
             </Button>
-            <Button size="sm" variant="outline" className={cn("h-8", selection?.kind === "tests" && "bg-indigo-50")} disabled={previewing} onClick={() => setSelection(selection?.kind === "tests" ? null : { kind: "tests" })}><FlaskConical /> Tests</Button>
-            <Button size="sm" variant="outline" className={cn("h-8", selection?.kind === "history" && "bg-indigo-50")} onClick={() => setSelection(selection?.kind === "history" ? null : { kind: "history" })}><History /> History</Button>
-            {canManage && <Button size="sm" variant="outline" className={cn("h-8", selection?.kind === "publish" && "bg-indigo-50")} disabled={previewing} onClick={() => setSelection(selection?.kind === "publish" ? null : { kind: "publish" })}><Globe /> Publish</Button>}
-            <Button size="sm" variant="outline" className={cn("h-8 w-8 px-0", selection?.kind === "settings" && "bg-indigo-50")} disabled={previewing} onClick={() => setSelection(selection?.kind === "settings" ? null : { kind: "settings" })} aria-label="Workflow settings" title="Whole-run settings"><Settings2 /></Button>
+            {/* The occasional ones, as one quiet row of icons. */}
+            <div className="flex shrink-0 items-center rounded-lg border border-zinc-200 p-0.5">
+              {canManage && (
+                <IconTool label={approvalOn ? "Approval on: asks before tools that change or delete data" : "Approval off: tools run without asking"} pressed={approvalOn} disabled={previewing} onClick={toggleApproval}>
+                  <ShieldCheck className={approvalOn ? "text-emerald-500" : undefined} />
+                </IconTool>
+              )}
+              {canManage && <IconTool label="Arrange the steps" disabled={previewing} onClick={tidy}><LayoutGrid /></IconTool>}
+              <IconTool label="Tests" pressed={selection?.kind === "tests"} disabled={previewing} onClick={() => setSelection(selection?.kind === "tests" ? null : { kind: "tests" })}><FlaskConical /></IconTool>
+              <IconTool label="History" pressed={selection?.kind === "history"} onClick={() => setSelection(selection?.kind === "history" ? null : { kind: "history" })}><History /></IconTool>
+              {canManage && <IconTool label="Publish" pressed={selection?.kind === "publish"} disabled={previewing} onClick={() => setSelection(selection?.kind === "publish" ? null : { kind: "publish" })}><Globe /></IconTool>}
+              <IconTool label="Whole-run settings" pressed={selection?.kind === "settings"} disabled={previewing} onClick={() => setSelection(selection?.kind === "settings" ? null : { kind: "settings" })}><Settings2 /></IconTool>
+            </div>
             {canManage && (
               <Button size="sm" className="h-8" disabled={!dirty || save.isPending || previewing} onClick={() => save.mutate()}>
                 {save.isPending ? <Spinner className="h-4 w-4" /> : <Save />} Save
@@ -928,5 +931,25 @@ function Centered({ text, spinner }: { text?: string; spinner?: boolean }) {
     <div className="builder-dark flex h-screen items-center justify-center bg-zinc-950 text-sm text-zinc-400">
       {spinner ? <Spinner className="h-6 w-6" /> : text}
     </div>
+  );
+}
+
+/** One icon button in the editor's toolbar group; the label is its tooltip. */
+function IconTool({ label, pressed, disabled, onClick, children }: { label: string; pressed?: boolean; disabled?: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      aria-pressed={pressed}
+      disabled={disabled}
+      onClick={onClick}
+      className={cn(
+        "inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors disabled:opacity-40 cursor-pointer [&_svg]:h-4 [&_svg]:w-4",
+        pressed ? "bg-indigo-50 text-indigo-600" : "text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900",
+      )}
+    >
+      {children}
+    </button>
   );
 }

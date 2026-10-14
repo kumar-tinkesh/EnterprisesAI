@@ -79,11 +79,13 @@ export default function KnowledgeBasesPage() {
       title="Knowledge Base"
       description="Documents your agents can retrieve from. Every member of your organisation can search them."
     >
-      <div className="mt-6 flex items-center justify-end gap-3">
-        <Button size="sm" onClick={() => setCreating(true)}>
-          <Plus /> New knowledge base
-        </Button>
-      </div>
+      {kbs.length > 0 && (
+        <div className="mt-6 flex items-center justify-end gap-3">
+          <Button size="sm" onClick={() => setCreating(true)}>
+            <Plus /> New knowledge base
+          </Button>
+        </div>
+      )}
 
       {creating && (
         <CreateKnowledgeBase

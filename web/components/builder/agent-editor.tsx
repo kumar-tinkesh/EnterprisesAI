@@ -286,53 +286,31 @@ function Editor({ id, onBack, onOpen, onExit }: EditorProps) {
           >
             <Settings2 /> <span className="hidden lg:inline">Settings</span>
           </Button>
-          {!readOnly && (
-            <Button
-              size="sm"
-              variant="outline"
-              aria-label="Publish"
-              className={cn("h-8 px-2 lg:px-3", selected?.kind === "publish" && "bg-indigo-50")}
-              onClick={() => setSelected(selected?.kind === "publish" ? null : { kind: "publish" })}
-            >
-              <Globe /> <span className="hidden lg:inline">Publish</span>
-            </Button>
-          )}
-          <Button
-            size="sm"
-            variant="outline"
-            aria-label="Export"
-            className={cn("h-8 px-2 lg:px-3", selected?.kind === "export" && "bg-indigo-50")}
-            onClick={() => setSelected(selected?.kind === "export" ? null : { kind: "export" })}
-          >
-            <Download /> <span className="hidden xl:inline">Export</span>
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            aria-label="Usage and cost"
-            className={cn("h-8 px-2 lg:px-3", selected?.kind === "usage" && "bg-indigo-50")}
-            onClick={() => setSelected(selected?.kind === "usage" ? null : { kind: "usage" })}
-          >
-            <Coins /> <span className="hidden xl:inline">Usage</span>
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            aria-label="Tests"
-            className={cn("h-8 px-2 lg:px-3", selected?.kind === "tests" && "bg-indigo-50")}
-            onClick={() => setSelected(selected?.kind === "tests" ? null : { kind: "tests" })}
-          >
-            <FlaskConical /> <span className="hidden lg:inline">Tests</span>
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            aria-label="History"
-            className={cn("h-8 px-2 lg:px-3", selected?.kind === "history" && "bg-indigo-50")}
-            onClick={() => setSelected(selected?.kind === "history" ? null : { kind: "history" })}
-          >
-            <History /> <span className="hidden lg:inline">History</span>
-          </Button>
+          {/* The occasional ones, as one quiet row of icons. */}
+          <div className="flex items-center rounded-lg border border-zinc-200 p-0.5">
+            {([
+              !readOnly && { kind: "publish", label: "Publish", Icon: Globe },
+              { kind: "tests", label: "Tests", Icon: FlaskConical },
+              { kind: "usage", label: "Usage and cost", Icon: Coins },
+              { kind: "history", label: "History", Icon: History },
+              { kind: "export", label: "Export", Icon: Download },
+            ].filter(Boolean) as { kind: "publish" | "tests" | "usage" | "history" | "export"; label: string; Icon: typeof Globe }[]).map(({ kind, label, Icon }) => (
+              <button
+                key={kind}
+                type="button"
+                aria-label={label}
+                title={label}
+                aria-pressed={selected?.kind === kind}
+                onClick={() => setSelected(selected?.kind === kind ? null : { kind })}
+                className={cn(
+                  "inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors cursor-pointer [&_svg]:h-4 [&_svg]:w-4",
+                  selected?.kind === kind ? "bg-indigo-50 text-indigo-600" : "text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900",
+                )}
+              >
+                <Icon />
+              </button>
+            ))}
+          </div>
           <Button size="sm" variant="outline" aria-label="Test" className={cn("h-8 px-2 lg:px-3", playOpen && "bg-indigo-50")} onClick={() => setPlayOpen((o) => !o)}>
             <Play /> <span className="hidden lg:inline">Test</span>
           </Button>

@@ -65,7 +65,6 @@ export function AgentConfigPanel({
     body.current?.scrollTo({ top: 0 });
   }, [tab]);
 
-  const current = TABS.find((t) => t.id === tab) ?? TABS[0];
   const props: StepProps = {
     token, draft: value, update: onChange, insights: null, toolMeta: meta, addMeta, servers,
     profiles: profiles.data ?? [],
@@ -102,11 +101,8 @@ export function AgentConfigPanel({
       </nav>
       <div ref={body} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         <div className="space-y-4 p-3 sm:p-4">
-          <div>
-            <h3 className="text-base font-semibold text-zinc-900">{current.title}</h3>
-            <p className="mt-1 text-xs leading-relaxed text-zinc-500">{current.hint}</p>
-            {readOnly && <p className="mt-2 rounded-lg bg-amber-50 p-2 text-xs text-amber-800">View only — shared by a teammate.</p>}
-          </div>
+          {/* The tab names the topic; each card below says what it's for. */}
+          {readOnly && <p className="rounded-lg bg-amber-50 p-2 text-xs text-amber-800">View only — shared by a teammate.</p>}
           <fieldset disabled={readOnly} className="min-w-0 space-y-3">
             {tab === "identity" && <IdentityStep {...props} />}
             {tab === "abilities" && <AbilitiesStep {...props} />}

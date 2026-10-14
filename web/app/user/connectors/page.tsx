@@ -101,11 +101,13 @@ function Connectors() {
 
   return (
     <div className="mt-6 space-y-6">
-      <div className="grid grid-cols-3 gap-3">
-        <Metric label="Active connections" value={connected.length} sub={`of ${servers.length} available`} />
-        <Metric label="Total tools" value={totalTools} sub="ready for your agents" />
-        <Metric label="Agent connections" value={agentLinks} sub="agents × connectors in use" />
-      </div>
+      <p className="text-sm text-zinc-500">
+        <span className="font-semibold text-zinc-900 tabular-nums">{connected.length}</span> of {servers.length} connected
+        <span className="mx-2 text-zinc-300" aria-hidden>·</span>
+        <span className="font-semibold text-zinc-900 tabular-nums">{totalTools.toLocaleString()}</span> tools
+        <span className="mx-2 text-zinc-300" aria-hidden>·</span>
+        <span className="font-semibold text-zinc-900 tabular-nums">{agentLinks}</span> in use by agents
+      </p>
 
       <div className="space-y-3">
         <div className="flex flex-wrap items-center gap-3">
@@ -156,7 +158,7 @@ function Connectors() {
                 <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-medium text-zinc-500">{g.items.length}</span>
                 <span className="h-px flex-1 bg-zinc-100" />
               </div>
-              <ul className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              <ul className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                 {g.items.map((s) => {
                   const uses = usedBy[s.id] ?? 0;
                   const busy = disconnect.isPending && disconnect.variables?.id === s.id;
@@ -166,7 +168,7 @@ function Connectors() {
                         type="button"
                         onClick={() => setOpen(s.id)}
                         className={cn(
-                          "flex h-full w-full items-start gap-4 rounded-2xl border bg-white p-5 text-left transition hover:border-indigo-300 cursor-pointer",
+                          "flex h-full w-full items-start gap-3 rounded-xl border bg-white p-4 text-left transition hover:border-indigo-300 cursor-pointer",
                           open === s.id ? "border-indigo-400" : "border-zinc-200",
                         )}
                         title={`See ${s.name}'s tools`}
@@ -177,23 +179,18 @@ function Connectors() {
                             <span className="truncate text-sm font-semibold text-zinc-900">{s.name}</span>
                           </span>
                           {s.description && <span className="mt-1 line-clamp-2 block text-xs text-zinc-500">{s.description}</span>}
-                          <span className="mt-2.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-zinc-500">
-                            {s.connected ? (
-                              <>
+                          {s.connected && (
+                            <span className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-zinc-500">
                                 <span className="font-medium text-zinc-600">{s.bound_tools.length} tool{s.bound_tools.length === 1 ? "" : "s"}</span>
                                 <span aria-hidden>•</span>
                                 <span className={uses ? "text-indigo-600" : ""}>{uses ? `Used by ${uses} agent${uses === 1 ? "" : "s"}` : "Not used by any agent yet"}</span>
-                              </>
-                            ) : (
-                              <span>Connect it to let your agents use its tools</span>
-                            )}
-                          </span>
+                            </span>
+                          )}
                         </span>
                       </button>
                       <div className="absolute right-4 top-4 flex items-center gap-1">
                         {s.connected ? (
                           <>
-                            <span className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-700">Connected</span>
                             <button
                               type="button"
                               aria-label={`Disconnect ${s.name}`}
@@ -238,16 +235,6 @@ function Connectors() {
       {connecting && (
         <ConnectServerDialog serverId={connecting} token={token} onClose={() => setConnecting(null)} onConnected={() => setConnecting(null)} />
       )}
-    </div>
-  );
-}
-
-function Metric({ label, value, sub }: { label: string; value: number; sub: string }) {
-  return (
-    <div className="rounded-2xl border border-zinc-200 bg-white p-4">
-      <p className="text-2xl font-bold tabular-nums text-zinc-900">{value.toLocaleString()}</p>
-      <p className="mt-1 text-xs font-medium text-zinc-600">{label}</p>
-      <p className="hidden text-[11px] text-zinc-500 sm:block">{sub}</p>
     </div>
   );
 }

@@ -59,15 +59,15 @@ export function Category({
   const [open, setOpen] = useState(defaultOpen);
   return (
     <section className="rounded-xl border border-zinc-200 bg-white">
-      <div className="flex items-start gap-2 p-3 sm:p-4">
+      <div className="flex items-start gap-2 px-3 py-2.5">
         <button
           type="button"
           onClick={() => setOpen((o) => !o)}
           aria-expanded={open}
           className="flex min-w-0 flex-1 items-start gap-3 text-left cursor-pointer"
         >
-          <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", TONES[tone])}>
-            <Icon className="h-4 w-4" />
+          <span className={cn("flex h-6 w-6 shrink-0 items-center justify-center rounded-md", TONES[tone])}>
+            <Icon className="h-3.5 w-3.5" />
           </span>
           <span className="min-w-0 flex-1">
             <span className="flex flex-wrap items-center gap-1.5">
@@ -76,7 +76,7 @@ export function Category({
             </span>
             {hint && <span className="mt-0.5 block text-xs text-zinc-500">{hint}</span>}
           </span>
-          <ChevronDown className={cn("mt-1 h-4 w-4 shrink-0 text-zinc-400 transition-transform", open && "rotate-180")} />
+          <ChevronDown className={cn("mt-0.5 h-4 w-4 shrink-0 text-zinc-400 transition-transform", open && "rotate-180")} />
         </button>
         {action}
       </div>

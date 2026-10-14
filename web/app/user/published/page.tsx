@@ -49,6 +49,18 @@ function PublishedView() {
   }
   const { stats, series, keys, days } = data.data;
 
+  // Nothing published and nothing ever called: one empty state, not four zeros and an empty chart.
+  if (keys.length === 0 && stats.total_requests === 0) {
+    return (
+      <div className="mt-6 flex flex-col items-center rounded-xl border border-dashed border-zinc-300 bg-white px-6 py-12 text-center">
+        <Globe className="h-7 w-7 text-zinc-400" />
+        <p className="mt-3 text-sm font-medium text-zinc-900">Nothing published yet</p>
+        <p className="mt-1 max-w-sm text-xs text-zinc-500">Open an agent or workflow on the canvas and press Publish to get an API key and an embed widget.</p>
+        <Link href="/user/executions" className="mt-4 text-sm font-medium text-indigo-600 hover:text-indigo-800">Open your agents</Link>
+      </div>
+    );
+  }
+
   return (
     <div className="mt-6 space-y-6">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
@@ -60,17 +72,14 @@ function PublishedView() {
 
       <DailyBars
         title="Public API calls"
-        subtitle={`Requests per day over the last ${days} days, through the API and the embed widget`}
+        subtitle={`Last ${days} days, API and embed widget`}
         days={series.map((d) => ({ date: d.date, good: d.success, bad: d.error }))}
         empty="No public calls recorded yet. Publish an agent or workflow to get started."
       />
 
       <section className="rounded-xl border border-zinc-200 bg-white" aria-labelledby="keys-heading">
         <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3 sm:px-5">
-          <div>
-            <h2 id="keys-heading" className="font-semibold text-zinc-900">Publishable keys</h2>
-            <p className="text-xs text-zinc-500">Active API keys across your agents and workflows</p>
-          </div>
+          <h2 id="keys-heading" className="font-semibold text-zinc-900">Publishable keys</h2>
           <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-600">{keys.length} key{keys.length === 1 ? "" : "s"}</span>
         </div>
         {keys.length === 0 ? (

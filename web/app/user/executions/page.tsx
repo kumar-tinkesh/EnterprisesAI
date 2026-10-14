@@ -3,10 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
-  Activity,
   Bot,
   CalendarClock,
-  CheckCircle2,
   Globe,
   Loader2,
   MessageSquare,
@@ -47,7 +45,7 @@ function chatFromUrl(): ChatTarget | null {
   return (kind === "agent" || kind === "workflow") && id ? { kind, id } : null;
 }
 
-const DETAIL_TABS: DetailTab[] = ["overview", "chat", "edit", "simulate", "health"];
+const DETAIL_TABS: DetailTab[] = ["overview", "chat", "simulate", "health"];
 function tabFromUrl(): DetailTab {
   const t = new URLSearchParams(window.location.search).get("tab");
   return DETAIL_TABS.includes(t as DetailTab) ? (t as DetailTab) : "overview";
@@ -229,18 +227,6 @@ export default function ExecutionsPage() {
   const loading = tab === "agent" ? agents.isLoading : workflows.isLoading;
   const counts = Object.fromEntries((Object.keys(FILTERS) as Filter[]).map((f) => [f, all.filter((i) => matches(i, f)).length])) as Record<Filter, number>;
 
-  const totals = overview.data?.totals;
-  const finished = totals ? totals.succeeded + totals.failed : 0;
-
-  const summary = (
-    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-      <Stat Icon={Activity} label={`Runs, ${WINDOW} days`} value={totals ? String(totals.runs) : "…"} />
-      <Stat Icon={CheckCircle2} label="Succeeded" value={totals ? (finished ? `${Math.round((totals.succeeded / finished) * 100)}%` : "—") : "…"} sub={totals?.failed ? `${totals.failed} failed` : undefined} />
-      <Stat Icon={Loader2} label="Running now" value={totals ? String(totals.running) : "…"} onClick={() => setFilter("live")} active={filter === "live"} />
-      <Stat Icon={ShieldAlert} label="Waiting for you" value={totals ? String(totals.waiting) : "…"} tone={totals?.waiting ? "amber" : undefined} onClick={() => setFilter("attention")} active={filter === "attention"} />
-    </div>
-  );
-
   const list = (
     <div className={cn("@container flex min-h-0 flex-col rounded-xl border border-zinc-200 bg-white", chat && "flex-1")}>
       <div className="flex flex-wrap items-center gap-1 border-b border-zinc-100 px-3 py-2" role="tablist" aria-label="Project items">
@@ -345,7 +331,7 @@ export default function ExecutionsPage() {
     <ProtectedDashboard path="/user" title="Executions" description="Every agent and workflow: what it does, how it's set up, how it's doing, and a chat with it." fullBleed>
       <div className="flex h-dvh overflow-hidden bg-zinc-950">
         {editing && chat ? (
-          <section className="flex min-w-0 flex-1 flex-col md:w-[58%] md:flex-none [&>div]:h-full" aria-label="Editor">
+          <section className="flex min-w-0 flex-1 flex-col [&>div]:h-full" aria-label="Editor">
             {chat.kind === "workflow" ? (
               <WorkflowEditor key={chat.id} id={chat.id} onBack={closeEditor} onOpen={openEditor} onSwitch={(workflowId) => openEditor({ kind: "workflow", id: workflowId })} />
             ) : (
@@ -361,13 +347,12 @@ export default function ExecutionsPage() {
               </div>
               <div className="ml-auto">{actions}</div>
             </div>
-            {!chat && summary}
             {error && <p className="text-sm text-red-600">{error}</p>}
             {list}
           </section>
         )}
-        {chat && (
-          <section className={cn("min-w-0 flex-1 flex-col border-zinc-200 shadow-xl md:border-l", editing ? "hidden md:flex" : "flex")} aria-label="Details">
+        {chat && !editing && (
+          <section className="flex min-w-0 flex-1 flex-col border-zinc-200 shadow-xl md:border-l" aria-label="Details">
             <ProjectDetail
               key={`${chat.kind}:${chat.id}`}
               target={chat}
@@ -383,18 +368,6 @@ export default function ExecutionsPage() {
       {wizard}
     </ProtectedDashboard>
   );
-}
-
-function Stat({ Icon, label, value, sub, tone, onClick, active }: { Icon: typeof Activity; label: string; value: string; sub?: string; tone?: "amber"; onClick?: () => void; active?: boolean }) {
-  const body = (
-    <>
-      <span className="flex items-center gap-1.5 text-[11px] text-zinc-500"><Icon className="h-3.5 w-3.5" /> {label}</span>
-      <span className={cn("mt-0.5 block text-xl font-semibold tabular-nums", tone === "amber" ? "text-amber-700" : "text-zinc-900")}>{value}</span>
-      {sub && <span className="block text-[10px] text-red-600">{sub}</span>}
-    </>
-  );
-  const cls = cn("rounded-xl border bg-white px-3 py-2 text-left", active ? "border-indigo-400" : "border-zinc-200");
-  return onClick ? <button type="button" onClick={onClick} className={cn(cls, "hover:border-indigo-300 cursor-pointer")}>{body}</button> : <div className={cls}>{body}</div>;
 }
 
 /** Runs per day as tiny bars: the shape of its week, at a glance. */

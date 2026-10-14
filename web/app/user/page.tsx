@@ -9,17 +9,13 @@ import {
   ArrowRight,
   ArrowUpRight,
   Bot,
-  Brain,
   CheckCircle2,
   Circle,
   Clock,
   Gauge,
-  Globe,
   Loader2,
   MessageSquare,
   Network,
-  Pencil,
-  Plug,
   ShieldAlert,
   Sparkles,
   Timer,
@@ -31,7 +27,7 @@ import ProtectedDashboard from "@/components/protected-dashboard";
 import { Avatar } from "@/components/builder/chat/chat-message";
 import { DailyBars, GOOD } from "@/components/charts/daily-bars";
 import { builderApi } from "@/lib/builder/api";
-import { knowledgeApi, vendorApi } from "@/lib/api";
+import { vendorApi } from "@/lib/api";
 import type { InsightsWindow, Run, RunStatus } from "@/lib/builder/types";
 import { useAuthStore } from "@/stores/auth-store";
 import { cn } from "@/lib/utils";
@@ -114,7 +110,6 @@ function Dashboard() {
   const runs = useQuery({ queryKey: ["dashboard-runs"], queryFn: () => builderApi.listRuns(token, { limit: 50 }), enabled: !!token, refetchInterval: 15000 });
   const approvals = useQuery({ queryKey: ["builder-approvals"], queryFn: () => builderApi.listApprovals(token), enabled: !!token, refetchInterval: 15000 });
   const catalog = useQuery({ queryKey: ["catalog", token, ""], queryFn: () => vendorApi.getCatalog(token), enabled: !!token });
-  const kbs = useQuery({ queryKey: ["knowledge-bases", token], queryFn: () => knowledgeApi.list(token), enabled: !!token });
 
   const ins = insights.data;
   const agentList = agents.data ?? [];
@@ -122,7 +117,6 @@ function Dashboard() {
   const runList = runs.data ?? [];
   const servers = catalog.data?.servers ?? [];
   const connected = servers.filter((s) => s.connected).length;
-  const docs = (kbs.data ?? []).reduce((n, kb) => n + kb.document_count, 0);
   const pending = approvals.data ?? [];
   const failedRecently = runList.filter((r) => r.status === "failed" && Date.now() - new Date(r.created_at).getTime() < 86400000).slice(0, 3);
 
@@ -142,8 +136,6 @@ function Dashboard() {
   const cur = ins?.current;
   const prev = ins?.previous;
   const chartDays = (ins?.series ?? []).map((d) => ({ date: d.date, good: d.succeeded, bad: d.failed }));
-  const chartRuns = chartDays.reduce((n, d) => n + d.good + d.bad, 0);
-  const chartFailed = chartDays.reduce((n, d) => n + d.bad, 0);
 
   return (
     <section className="mx-auto max-w-7xl space-y-6 p-4 sm:p-6 lg:p-8">
@@ -160,13 +152,6 @@ function Dashboard() {
           <h1 className="mt-1 truncate text-2xl font-bold text-zinc-900 sm:text-3xl">
             {greeting()}, {firstName}
           </h1>
-          {cur && (
-            <p className="mt-1 text-sm text-zinc-500">
-              {cur.runs
-                ? `${cur.runs} run${cur.runs === 1 ? "" : "s"} in the last ${WINDOW} days${cur.failed ? `, ${cur.failed} failed` : ", none failed"}.`
-                : `Nothing has run in the last ${WINDOW} days.`}
-            </p>
-          )}
         </div>
         <div className="flex shrink-0 gap-2">
           <Link href="/user/executions" className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 text-sm font-medium text-zinc-700 hover:bg-zinc-50">
@@ -282,8 +267,7 @@ function Dashboard() {
         <div className="lg:col-span-2">
           <DailyBars
             title="Runs"
-            subtitle={`Last ${WINDOW * 2} days: every chat, playground and scheduled run`}
-            summary={chartRuns ? <>{chartRuns} run{chartRuns === 1 ? "" : "s"} · <span className={chartFailed ? "text-red-600" : ""}>{chartFailed} failed</span></> : undefined}
+            subtitle={`Last ${WINDOW * 2} days`}
             days={chartDays}
             goodLabel="Succeeded"
             badLabel="Failed"
@@ -295,7 +279,6 @@ function Dashboard() {
         <div className="rounded-xl border border-zinc-200 bg-white">
           <div className="border-b border-zinc-100 px-4 py-3 sm:px-5">
             <h2 className="flex items-center gap-2 font-semibold text-zinc-900"><Trophy className="h-4 w-4 text-amber-500" /> Busiest agents</h2>
-            <p className="text-xs text-zinc-500">By runs, all time</p>
           </div>
           {!ins ? (
             <SkeletonRows />
@@ -343,14 +326,11 @@ function Dashboard() {
         </div>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-3">
-        {/* Recent runs */}
-        <div className="rounded-xl border border-zinc-200 bg-white lg:col-span-2">
+      {/* Recent runs */}
+      <div>
+        <div className="rounded-xl border border-zinc-200 bg-white">
           <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3 sm:px-5">
-            <div>
-              <h2 className="font-semibold text-zinc-900">Recent runs</h2>
-              <p className="text-xs text-zinc-500">The last few, newest first</p>
-            </div>
+            <h2 className="font-semibold text-zinc-900">Recent runs</h2>
             <Link href="/user/executions" className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-800">
               View all <ArrowRight className="h-3 w-3" />
             </Link>
@@ -387,52 +367,8 @@ function Dashboard() {
           )}
         </div>
 
-        {/* Your agents */}
-        <div className="rounded-xl border border-zinc-200 bg-white">
-          <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3 sm:px-5">
-            <h2 className="font-semibold text-zinc-900">Your agents & workflows</h2>
-            <Link href="/user/executions" className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-800">
-              All <ArrowRight className="h-3 w-3" />
-            </Link>
-          </div>
-          {agents.isLoading || workflows.isLoading ? (
-            <SkeletonRows />
-          ) : projects.length === 0 ? (
-            <Empty Icon={Bot} text="No agents yet." cta={{ href: "/user/agents", label: "Build one with AI" }} />
-          ) : (
-            <ul className="divide-y divide-zinc-100">
-              {projects.slice(0, 6).map((p) => (
-                <li key={`${p.kind}:${p.id}`} className="flex items-center gap-3 px-4 py-2.5 sm:px-5">
-                  <Avatar name={p.name} size={30} />
-                  <div className="min-w-0 flex-1">
-                    <p className="flex items-center gap-1.5">
-                      <span className="truncate text-sm font-medium text-zinc-900">{p.name}</span>
-                      {p.kind === "workflow" && <Network className="h-3.5 w-3.5 shrink-0 text-zinc-400" aria-label="Workflow" />}
-                    </p>
-                    <p className="truncate text-[11px] text-zinc-500">Updated {ago(p.updated)}</p>
-                  </div>
-                  <Link href={chatHref(p.kind, p.id)} aria-label={`Chat with ${p.name}`} title="Chat" className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-zinc-500 hover:bg-indigo-50 hover:text-indigo-700">
-                    <MessageSquare className="h-3.5 w-3.5" />
-                  </Link>
-                  <Link href={chatHref(p.kind, p.id, true)} aria-label={`Edit ${p.name}`} title="Edit" className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700">
-                    <Pencil className="h-3.5 w-3.5" />
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
       </div>
 
-      {/* All time */}
-      <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-xl border border-zinc-200 bg-white px-4 py-3 text-sm sm:px-5">
-        <Fact Icon={Activity} text={ins ? `${ins.all_time.runs.toLocaleString()} runs all time` : "…"} />
-        <Fact Icon={Gauge} text={ins ? (ins.all_time.runs ? `${Math.round(ins.all_time.success_rate * 100)}% succeeded overall` : "No runs yet") : "…"} />
-        <Fact Icon={Bot} text={`${agentList.length} agent${agentList.length === 1 ? "" : "s"} · ${workflowList.length} workflow${workflowList.length === 1 ? "" : "s"}`} href="/user/executions" />
-        <Fact Icon={Plug} text={servers.length ? `${connected} / ${servers.length} connectors` : "Connectors"} href="/user/connectors" />
-        <Fact Icon={Brain} text={`${docs} knowledge doc${docs === 1 ? "" : "s"}`} href="/user/knowledge" />
-        <Fact Icon={Globe} text="Published" href="/user/published" />
-      </div>
     </section>
   );
 }
@@ -501,19 +437,6 @@ function Kpi({
   );
   const cls = "rounded-xl border border-zinc-200 bg-white p-4 sm:p-5";
   return href ? <Link href={href} className={cn(cls, "transition-shadow hover:shadow-md")}>{body}</Link> : <div className={cls}>{body}</div>;
-}
-
-function Fact({ Icon, text, href }: { Icon: typeof Bot; text: string; href?: string }) {
-  const body = (
-    <>
-      <Icon className="h-4 w-4 text-zinc-400" /> {text}
-    </>
-  );
-  return href ? (
-    <Link href={href} className="inline-flex items-center gap-1.5 text-zinc-600 hover:text-indigo-600">{body}</Link>
-  ) : (
-    <span className="inline-flex items-center gap-1.5 text-zinc-600">{body}</span>
-  );
 }
 
 function SkeletonRows() {

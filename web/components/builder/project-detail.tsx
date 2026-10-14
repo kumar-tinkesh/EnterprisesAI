@@ -1,14 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
   AlertTriangle,
-  Check,
   CheckCircle2,
   Clock,
-  Copy,
   Eye,
   FlaskConical,
   Layers,
@@ -17,7 +15,6 @@ import {
   Minus,
   RefreshCw,
   ShieldAlert,
-  SlidersHorizontal,
   X,
   XCircle,
 } from "lucide-react";
@@ -26,22 +23,20 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { ChatPanel, type ChatTarget } from "@/components/builder/chat/chat-panel";
 import { TestsPanel } from "@/components/builder/tests-panel";
-import { AgentConfigPanel, type ConfigTab } from "@/components/builder/agent-wizard/agent-config-panel";
 import { useServers } from "@/components/builder/agent-wizard/wizard-ui";
 import { ConnectorIcon } from "@/components/connections/connector-icon";
-import { ApiError, knowledgeApi } from "@/lib/api";
+import { knowledgeApi } from "@/lib/api";
 import { builderApi } from "@/lib/builder/api";
 import { groupByServer } from "@/lib/builder/agent-wizard";
 import { NODE_META, stepTitle, toolName } from "@/lib/builder/graph";
-import type { Agent, DraftAgent, Health, Problem, Run, RunStatus, Workflow } from "@/lib/builder/types";
+import type { Agent, Health, Run, RunStatus, Workflow } from "@/lib/builder/types";
 import { cn } from "@/lib/utils";
 
-export type DetailTab = "overview" | "chat" | "edit" | "simulate" | "health";
+export type DetailTab = "overview" | "chat" | "simulate" | "health";
 
 const TABS: { id: DetailTab; label: string; Icon: typeof Eye }[] = [
   { id: "overview", label: "Overview", Icon: Eye },
   { id: "chat", label: "Chat", Icon: MessageSquare },
-  { id: "edit", label: "Edit config", Icon: SlidersHorizontal },
   { id: "simulate", label: "Simulate", Icon: FlaskConical },
   { id: "health", label: "Health", Icon: Activity },
 ];
@@ -130,7 +125,7 @@ export function ProjectDetail({
               type="button"
               role="tab"
               aria-selected={tab === t.id}
-              onClick={() => (t.id === "edit" && kind === "workflow" ? onOpenCanvas() : onTab(t.id))}
+              onClick={() => onTab(t.id)}
               className={cn(
                 "inline-flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-3 text-xs font-semibold transition-colors cursor-pointer",
                 tab === t.id ? "border-indigo-500 text-indigo-700" : "border-transparent text-zinc-500 hover:text-zinc-900",
@@ -152,16 +147,14 @@ export function ProjectDetail({
           <div className="flex justify-center py-16"><Spinner className="h-6 w-6 text-zinc-400" /></div>
         ) : tab === "chat" ? (
           <ChatPanel key={`${kind}:${id}`} target={target} token={token} onClose={onClose} onEdit={onOpenCanvas} embedded actions={controls} />
-        ) : tab === "edit" && kind === "agent" ? (
-          <EditAgent agent={item as Agent} token={token} readOnly={!canManage} onDone={() => onTab("overview")} />
         ) : tab === "simulate" ? (
           <div className="h-full [&>div]:h-full">
             <TestsPanel kind={kind} targetId={id} token={token} canManage={canManage} onClose={() => onTab("overview")} />
           </div>
         ) : tab === "health" ? (
-          <HealthView health={health} loading={healthQ.isLoading} refreshing={healthQ.isFetching} onRefresh={() => void healthQ.refetch()} onTab={onTab} kind={kind} />
+          <HealthView health={health} loading={healthQ.isLoading} refreshing={healthQ.isFetching} onRefresh={() => void healthQ.refetch()} onTab={onTab} onOpenCanvas={onOpenCanvas} canManage={canManage} />
         ) : kind === "agent" ? (
-          <AgentOverview agent={item as Agent} token={token} onTab={onTab} />
+          <AgentOverview agent={item as Agent} token={token} onOpenCanvas={onOpenCanvas} />
         ) : (
           <WorkflowOverview workflow={item as Workflow} token={token} onOpenCanvas={onOpenCanvas} />
         )}
@@ -218,14 +211,14 @@ function RunStats({ runs }: { runs: Run[] }) {
     { label: "Last run", value: runs[0] ? ago(runs[0].created_at) : "never" },
   ];
   return (
-    <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-zinc-200 bg-zinc-100 sm:grid-cols-4">
+    <dl className="flex flex-wrap gap-x-6 gap-y-2">
       {cells.map((c) => (
-        <div key={c.label} className="bg-white px-4 py-3">
-          <p className="text-[11px] text-zinc-500">{c.label}</p>
-          <p className="mt-0.5 text-lg font-semibold tabular-nums text-zinc-900">{c.value}</p>
+        <div key={c.label}>
+          <dt className="text-[11px] text-zinc-500">{c.label}</dt>
+          <dd className="text-base font-semibold tabular-nums text-zinc-900">{c.value}</dd>
         </div>
       ))}
-    </div>
+    </dl>
   );
 }
 
@@ -319,7 +312,7 @@ function KnowledgeNames({ ids, token }: { ids: string[]; token: string }) {
   );
 }
 
-function AgentOverview({ agent, token, onTab }: { agent: Agent; token: string; onTab: (t: DetailTab) => void }) {
+function AgentOverview({ agent, token, onOpenCanvas }: { agent: Agent; token: string; onOpenCanvas: () => void }) {
   const runs = useRecentRuns(token, "agent", agent.id);
   const cfg = agent.config ?? {};
   const g = cfg.guardrails ?? {};
@@ -343,7 +336,7 @@ function AgentOverview({ agent, token, onTab }: { agent: Agent; token: string; o
       <div className="mx-auto max-w-3xl space-y-6 p-4 sm:p-5">
         <RunStats runs={runs.data ?? []} />
 
-        <Section title="Configuration" hint="Everything this agent is set to, as it runs." action={agent.can_manage ? <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => onTab("edit")}>Edit</Button> : undefined}>
+        <Section title="Configuration" action={agent.can_manage ? <Button size="sm" variant="outline" className="h-7 text-xs" onClick={onOpenCanvas}>Edit</Button> : undefined}>
           <Row label="Role">{agent.role || <None>Not set</None>}</Row>
           <Row label="Goal">{agent.goal || <None>Not set</None>}</Row>
           <Row label="Instructions">{agent.instructions ? <span className="whitespace-pre-wrap">{agent.instructions}</span> : <None />}</Row>
@@ -376,7 +369,7 @@ function AgentOverview({ agent, token, onTab }: { agent: Agent; token: string; o
           </Row>
         </Section>
 
-        <Section title="Recent runs" hint="Newest first">
+        <Section title="Recent runs">
           <RecentRuns runs={runs.data ?? []} loading={runs.isLoading} />
         </Section>
       </div>
@@ -419,7 +412,7 @@ function WorkflowOverview({ workflow, token, onOpenCanvas }: { workflow: Workflo
       <div className="mx-auto max-w-3xl space-y-6 p-4 sm:p-5">
         <RunStats runs={runs.data ?? []} />
 
-        <Section title="Steps" hint="In the order they run" action={workflow.can_manage ? <Button size="sm" variant="outline" className="h-7 text-xs" onClick={onOpenCanvas}>Edit on canvas</Button> : undefined}>
+        <Section title="Steps" action={workflow.can_manage ? <Button size="sm" variant="outline" className="h-7 text-xs" onClick={onOpenCanvas}>Edit on canvas</Button> : undefined}>
           {ordered.length === 0 ? (
             <p className="py-4 text-sm text-zinc-500">No steps yet. Open it on the canvas to add some.</p>
           ) : (
@@ -447,7 +440,7 @@ function WorkflowOverview({ workflow, token, onOpenCanvas }: { workflow: Workflo
           )}
         </Section>
 
-        <Section title="Configuration" hint="How it runs">
+        <Section title="Configuration">
           <Row label="Description">{workflow.description || <None>Not set</None>}</Row>
           <Row label="Starts with">{trigger ? NODE_META[trigger.type].title : <None>No trigger yet</None>}</Row>
           <Row label="Agents">{workflow.agents.length ? workflow.agents.map((a) => a.name).join(", ") : <None />}</Row>
@@ -467,98 +460,9 @@ function WorkflowOverview({ workflow, token, onOpenCanvas }: { workflow: Workflo
           </Row>
         </Section>
 
-        <Section title="Recent runs" hint="Newest first">
+        <Section title="Recent runs">
           <RecentRuns runs={runs.data ?? []} loading={runs.isLoading} />
         </Section>
-      </div>
-    </div>
-  );
-}
-
-/** The agent's whole configuration in its categories, saved over it or as a copy. */
-function EditAgent({ agent, token, readOnly, onDone }: { agent: Agent; token: string; readOnly: boolean; onDone: () => void }) {
-  const queryClient = useQueryClient();
-  const seed = (a: Agent): DraftAgent => ({ name: a.name, role: a.role, goal: a.goal, instructions: a.instructions, llm_provider: a.llm_provider, llm_model: a.llm_model, config: a.config });
-  const [form, setForm] = useState<DraftAgent>(() => seed(agent));
-  const [version, setVersion] = useState(agent.version);
-  const [dirty, setDirty] = useState(false);
-  const [section, setSection] = useState<ConfigTab>("identity");
-  const [notice, setNotice] = useState<{ ok: boolean; text: string; detail?: string[] } | null>(null);
-
-  const body = () => ({
-    name: form.name.trim(), role: form.role.trim(), goal: form.goal.trim(), instructions: form.instructions ?? "",
-    llm_provider: form.llm_provider ?? "", llm_model: form.llm_model ?? "", config: form.config,
-  });
-  const fail = (err: unknown) => {
-    const problems = err instanceof ApiError ? ((err.body as { problems?: Problem[] })?.problems ?? []) : [];
-    setNotice({ ok: false, text: err instanceof ApiError && err.status === 409 ? "Someone else saved it meanwhile. Reload to see their version." : "Not saved.", detail: problems.map((p) => p.message) });
-  };
-  const refresh = (a: Agent) => {
-    queryClient.setQueryData(["builder-agent", a.id], a);
-    for (const key of [["builder-agents"], ["builder-health", "agent", a.id], ["builder-versions", "agent", a.id], ["builder-chat-target", "agent", a.id]]) void queryClient.invalidateQueries({ queryKey: key });
-  };
-  const update = useMutation({
-    mutationFn: () => builderApi.updateAgent(token, agent.id, { ...body(), expected_version: version }),
-    onSuccess: (a) => {
-      setVersion(a.version);
-      setForm(seed(a));
-      setDirty(false);
-      setNotice({ ok: true, text: `Saved as v${a.version}.` });
-      refresh(a);
-    },
-    onError: fail,
-  });
-  const copy = useMutation({
-    mutationFn: () => builderApi.createAgent(token, { ...body(), name: `${form.name.trim()} (copy)` }),
-    onSuccess: (a) => {
-      setNotice({ ok: true, text: `Saved a copy: "${a.name}". This one is unchanged.` });
-      void queryClient.invalidateQueries({ queryKey: ["builder-agents"] });
-    },
-    onError: fail,
-  });
-  const busy = update.isPending || copy.isPending;
-
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-zinc-100 bg-zinc-50 px-4 py-2.5 sm:px-5">
-        <p className="min-w-0 flex-1 text-xs text-zinc-500">
-          {readOnly ? "View only: a teammate shared it." : dirty ? <span className="font-medium text-amber-700">Unsaved changes</span> : "Change anything below, then update it, or keep it and save a copy."}
-        </p>
-        {!readOnly && (
-          <>
-            <Button size="sm" variant="outline" className="h-8" disabled={busy || !form.name.trim()} onClick={() => copy.mutate()} title="Leave this agent as it is and save these settings as a new one">
-              {copy.isPending ? <Spinner className="h-4 w-4" /> : <Copy />} Save as new
-            </Button>
-            <Button size="sm" className="h-8" disabled={busy || !dirty} onClick={() => update.mutate()}>
-              {update.isPending ? <Spinner className="h-4 w-4" /> : <Check />} Update this agent
-            </Button>
-          </>
-        )}
-      </div>
-      {notice && (
-        <div className={cn("flex shrink-0 items-start gap-2 border-b px-4 py-2 text-xs sm:px-5", notice.ok ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-red-200 bg-red-50 text-red-800")}>
-          {notice.ok ? <Check className="mt-0.5 h-3.5 w-3.5" /> : <AlertTriangle className="mt-0.5 h-3.5 w-3.5" />}
-          <div className="flex-1">
-            <p className="font-medium">{notice.text}</p>
-            {notice.detail?.map((d) => <p key={d}>• {d}</p>)}
-          </div>
-          <button type="button" aria-label="Dismiss" onClick={() => setNotice(null)} className="cursor-pointer">×</button>
-        </div>
-      )}
-      <div className="min-h-0 flex-1">
-        <AgentConfigPanel
-          agentId={agent.id}
-          value={form}
-          token={token}
-          readOnly={readOnly}
-          onChange={(next) => {
-            setForm(next);
-            setDirty(true);
-          }}
-          tab={section}
-          onTab={setSection}
-          onClose={() => (!dirty || window.confirm("Leave without saving these changes?")) && onDone()}
-        />
       </div>
     </div>
   );
@@ -586,7 +490,8 @@ function Ring({ score }: { score: number | null }) {
   );
 }
 
-const FIX_TAB: Record<string, DetailTab> = { writes_without_injection_guard: "edit", delete_without_approval: "edit", low_test_score: "simulate", high_failure_rate: "overview" };
+// Where each fix is made: its settings (on the canvas) or Simulate.
+const FIX_AT: Record<string, "settings" | "simulate" | null> = { writes_without_injection_guard: "settings", delete_without_approval: "settings", low_test_score: "simulate", high_failure_rate: null };
 
 function HealthView({
   health,
@@ -594,14 +499,16 @@ function HealthView({
   refreshing,
   onRefresh,
   onTab,
-  kind,
+  onOpenCanvas,
+  canManage,
 }: {
   health: Health | undefined;
   loading: boolean;
   refreshing: boolean;
   onRefresh: () => void;
   onTab: (t: DetailTab) => void;
-  kind: "agent" | "workflow";
+  onOpenCanvas: () => void;
+  canManage: boolean;
 }) {
   if (loading || !health) return <div className="flex justify-center py-16"><Spinner className="h-6 w-6 text-zinc-400" /></div>;
   const st = HEALTH_STATUS[health.status];
@@ -639,7 +546,8 @@ function HealthView({
           <section className="space-y-2">
             <h3 className="text-sm font-semibold text-zinc-900">What to fix</h3>
             {[...critical, ...warnings].map((b) => {
-              const target = FIX_TAB[b.key] ?? (b.key === "not_connected" ? null : kind === "agent" ? "edit" : null);
+              const at = b.key in FIX_AT ? FIX_AT[b.key] : b.key === "not_connected" ? null : "settings";
+              const target = at === "settings" && !canManage ? null : at;
               return (
                 <div key={b.key} className={cn("rounded-xl border p-3.5", b.severity === "critical" ? "border-red-200 bg-red-50" : "border-amber-200 bg-amber-50")}>
                   <p className={cn("flex items-center gap-2 text-sm font-semibold", b.severity === "critical" ? "text-red-700" : "text-amber-700")}>
@@ -649,9 +557,9 @@ function HealthView({
                   <p className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-zinc-600">
                     <span className="font-medium">Fix:</span> {b.fix}
                     {b.key === "not_connected" && <a href="/user/connectors" className="font-medium text-indigo-600 hover:text-indigo-800">Open Connectors →</a>}
-                    {target && target !== "overview" && (
-                      <button type="button" onClick={() => onTab(target)} className="font-medium text-indigo-600 hover:text-indigo-800 cursor-pointer">
-                        {target === "edit" ? "Open its settings →" : "Open Simulate →"}
+                    {target && (
+                      <button type="button" onClick={() => (target === "settings" ? onOpenCanvas() : onTab("simulate"))} className="font-medium text-indigo-600 hover:text-indigo-800 cursor-pointer">
+                        {target === "settings" ? "Open its settings →" : "Open Simulate →"}
                       </button>
                     )}
                   </p>
