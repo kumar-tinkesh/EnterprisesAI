@@ -244,11 +244,20 @@ export function Playground({
             <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-zinc-500">Timeline</p>
             <ol className="space-y-1">
               {view.timeline.map((t) => (
-                <li key={t.key} className="flex gap-2 text-xs text-zinc-700">
+                <li key={t.key} className={cn("flex gap-2 text-xs text-zinc-700", t.via && "pl-4")}>
                   <Circle className={cn("mt-0.5 h-2.5 w-2.5 shrink-0 fill-current", TONE_DOT[t.tone])} />
                   <span>
-                    {t.nodeId && <span className="font-medium text-zinc-900">{stepName(t.nodeId)} </span>}
+                    {t.via ? (
+                      <span className="font-medium text-zinc-900">↳ {t.via} </span>
+                    ) : (
+                      t.nodeId && <span className="font-medium text-zinc-900">{stepName(t.nodeId)} </span>
+                    )}
                     {t.text}
+                    {t.detail && (
+                      <span className="mt-0.5 block line-clamp-2 break-all rounded bg-zinc-50 px-1.5 py-0.5 font-mono text-[10.5px] text-zinc-500" title={t.detail}>
+                        {t.detail}
+                      </span>
+                    )}
                   </span>
                 </li>
               ))}

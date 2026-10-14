@@ -321,7 +321,7 @@ async def _delegate(ctx: AgentContext, sub: dict, turn: int, index: int, task: s
         state["cost_usd"] = add_cost(state.get("cost_usd"), out.get("cost_usd"))
         return row.output_text or "" if row.status == states.SUCCEEDED else f"Error: {name} couldn't finish: {row.error}"
 
-    await ctx.emit("tool_call", phase="started", tool=label, risk="read", node_id=ctx.node_id)
+    await ctx.emit("tool_call", phase="started", tool=label, risk="read", arguments={"task": task}, node_id=ctx.node_id)
     config = AgentConfig.model_validate(sub.get("config") or {})
     config.sub_agent_ids = []
     approvals = ToolApprovalPolicy(
@@ -345,7 +345,7 @@ async def _delegate(ctx: AgentContext, sub: dict, turn: int, index: int, task: s
         raise
     except AgentFailed as exc:
         await _set_node_run(row.id, status=states.FAILED, error=str(exc), finished_at=utcnow())
-        await ctx.emit("tool_call", phase="finished", tool=label, is_error=True, node_id=ctx.node_id)
+        await ctx.emit("tool_call", phase="finished", tool=label, is_error=True, preview=str(exc)[:300], node_id=ctx.node_id)
         return f"Error: {name} couldn't finish: {exc}"
     await _set_node_run(
         row.id, status=states.SUCCEEDED, output_text=result.text, finished_at=utcnow(),
@@ -355,7 +355,7 @@ async def _delegate(ctx: AgentContext, sub: dict, turn: int, index: int, task: s
     state["completion_tokens"] += result.completion_tokens
     state["cost_usd"] = add_cost(state.get("cost_usd"), result.cost_usd)
     state["sources"].extend(result.sources)
-    await ctx.emit("tool_call", phase="finished", tool=label, is_error=False, node_id=ctx.node_id)
+    await ctx.emit("tool_call", phase="finished", tool=label, is_error=False, preview=(result.text or "")[:300], node_id=ctx.node_id)
     return result.text or "(it gave no answer)"
 
 

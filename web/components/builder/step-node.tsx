@@ -17,6 +17,7 @@ import {
   PlayCircle,
   Plug,
   Send,
+  Users,
   Wrench,
   XCircle,
 } from "lucide-react";
@@ -26,8 +27,8 @@ import { cn } from "@/lib/utils";
 import type { StepState } from "@/lib/builder/run-state";
 import type { NodeType, Problem } from "@/lib/builder/types";
 
-/** "knowledge" and "server" only appear on the agent-mode canvas (a knowledge base feeding the agent; the connector its tools come from). */
-export type StepKind = NodeType | "knowledge" | "server";
+/** "knowledge", "server" and "team" only appear on the agent-mode canvas (a knowledge base feeding the agent; the connector its tools come from; an agent it hands work to). */
+export type StepKind = NodeType | "knowledge" | "server" | "team";
 
 export type StepData = {
   type: StepKind;
@@ -47,6 +48,7 @@ export type StepNodeType = Node<StepData, "step">;
 const ICONS: Record<StepKind, typeof Bot> = {
   knowledge: BookOpen,
   server: Plug,
+  team: Users,
   input: LogIn,
   manual_trigger: PlayCircle,
   schedule_trigger: CalendarClock,
@@ -62,6 +64,7 @@ const ICONS: Record<StepKind, typeof Bot> = {
 const TONES: Record<StepKind, string> = {
   knowledge: "bg-violet-50 text-violet-700",
   server: "bg-sky-50 text-sky-700",
+  team: "bg-fuchsia-50 text-fuchsia-700",
   input: "bg-sky-50 text-sky-700",
   manual_trigger: "bg-sky-50 text-sky-700",
   schedule_trigger: "bg-sky-50 text-sky-700",

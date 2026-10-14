@@ -14,6 +14,10 @@ export interface TimelineItem {
   /** For a step's event, shown after the step's name (the component knows the names). */
   text: string;
   nodeId?: string;
+  /** Set when a sub-agent the step handed work to did this (its name). */
+  via?: string;
+  /** What went in or came out: a tool's input, a sub-agent's task, a result's start. */
+  detail?: string;
 }
 
 /** Fresh pending approvals for a run, without touching anything live events own. */
@@ -23,6 +27,11 @@ export type ApprovalsRefresh = { type: "approvals_refresh"; approvals: Approval[
 export function displayTool(name: string): string {
   const i = name.indexOf("__");
   return i >= 0 ? name.slice(i + 2) : name;
+}
+
+/** A sub-agent's events carry its name in ``via`` (the step that asked it is the node). */
+function viaOf(event: { via?: string }): { via?: string } {
+  return event.via ? { via: event.via } : {};
 }
 
 export interface RunView {
@@ -39,6 +48,9 @@ export interface RunView {
   error: string | null;
   /** What the guardrails found or did, in order. */
   guardrails: GuardrailFlag[];
+  /** Per sub-agent (by name): the tool it's calling now, and the tools it has used. */
+  subActive: Record<string, string | null>;
+  subUsed: Record<string, string[]>;
 }
 
 export const emptyRunView: RunView = {
@@ -53,6 +65,8 @@ export const emptyRunView: RunView = {
   sources: [],
   error: null,
   guardrails: [],
+  subActive: {},
+  subUsed: {},
 };
 
 const TERMINAL: RunStatus[] = ["succeeded", "failed", "cancelled"];
@@ -127,27 +141,40 @@ export function reduceRunEvent(view: RunView, event: RunEvent | ApprovalsRefresh
     }
     case "agent_turn":
       return event.tool_calls.length
-        ? { ...view, timeline: add(view, { tone: "info", text: `decided to use ${event.tool_calls.map(displayTool).join(", ")}`, nodeId: event.node_id }) }
+        ? { ...view, timeline: add(view, { tone: "info", text: `decided to use ${event.tool_calls.map(displayTool).join(", ")}`, nodeId: event.node_id, ...viaOf(event) }) }
         : view;
     case "tool_call": {
+      const via = event.via;
+      const tags = { nodeId: event.node_id, ...viaOf(event) };
       if (event.phase === "started") {
-        return {
-          ...view,
-          activeTool: { ...view.activeTool, [event.node_id]: event.tool },
-          timeline: add(view, { tone: "info", text: `calling ${event.tool}${event.risk && event.risk !== "read" ? ` (${event.risk})` : ""}`, nodeId: event.node_id }),
-        };
+        const args = event.arguments ?? {};
+        const detail = typeof args.task === "string" ? args.task : Object.keys(args).length ? JSON.stringify(args) : undefined;
+        const item = add(view, { tone: "info", text: `calling ${event.tool}${event.risk && event.risk !== "read" ? ` (${event.risk})` : ""}`, detail, ...tags });
+        // A sub-agent's tools light its own node, not the asking agent's tools.
+        return via
+          ? { ...view, subActive: { ...view.subActive, [via]: event.tool }, timeline: item }
+          : { ...view, activeTool: { ...view.activeTool, [event.node_id]: event.tool }, timeline: item };
       }
       const failed = event.phase === "finished" && event.is_error;
-      return {
-        ...view,
-        activeTool: { ...view.activeTool, [event.node_id]: null },
-        usedTools: Array.from(new Set([...view.usedTools, event.tool])),
-        timeline: add(view, {
-          tone: event.phase === "declined" ? "warn" : failed ? "error" : "ok",
-          text: event.phase === "declined" ? `${event.tool} was declined` : failed ? `${event.tool} failed` : `${event.tool} done`,
-          nodeId: event.node_id,
-        }),
-      };
+      const timeline = add(view, {
+        tone: event.phase === "declined" ? "warn" : failed ? "error" : "ok",
+        text: event.phase === "declined" ? `${event.tool} was declined` : failed ? `${event.tool} failed` : `${event.tool} done`,
+        detail: event.preview || undefined,
+        ...tags,
+      });
+      return via
+        ? {
+            ...view,
+            subActive: { ...view.subActive, [via]: null },
+            subUsed: { ...view.subUsed, [via]: Array.from(new Set([...(view.subUsed[via] ?? []), event.tool])) },
+            timeline,
+          }
+        : {
+            ...view,
+            activeTool: { ...view.activeTool, [event.node_id]: null },
+            usedTools: Array.from(new Set([...view.usedTools, event.tool])),
+            timeline,
+          };
     }
     case "condition":
       return { ...view, timeline: add(view, { tone: "info", text: `took the "${event.branch}" line`, nodeId: event.node_id }) };

@@ -653,9 +653,9 @@ export type RunEvent =
   | { type: "ping" }
   | { type: "run_status"; status: RunStatus; error?: string | null }
   | { type: "node_status"; node_id: string; status: string; attempt?: number; preview?: string; error?: string }
-  | { type: "agent_turn"; node_id: string; turn: number; tool_calls: string[] }
+  | { type: "agent_turn"; node_id: string; turn: number; tool_calls: string[]; via?: string }
   | { type: "guardrail"; node_id: string; rule: string; severity: GuardrailFlag["severity"]; message: string }
-  | { type: "tool_call"; node_id: string; phase: "started" | "finished" | "declined"; tool: string; risk?: Risk; is_error?: boolean; preview?: string; arguments?: Record<string, unknown> }
+  | { type: "tool_call"; node_id: string; phase: "started" | "finished" | "declined"; tool: string; risk?: Risk; is_error?: boolean; preview?: string; arguments?: Record<string, unknown>; via?: string }
   | { type: "condition"; node_id: string; branch: string; target: string }
   | { type: "approval_requested"; approval_id: string; kind: Approval["kind"]; node_id?: string; tool?: string }
   | { type: "approval_resolved"; approval_id: string; status: string }

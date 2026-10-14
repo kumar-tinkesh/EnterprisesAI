@@ -72,7 +72,7 @@ function Editor({ id, onBack, onOpen, onExit }: EditorProps) {
   const loaded = useRef(false);
   const flow = useReactFlow();
   const [switchOpen, setSwitchOpen] = useState(false);
-  const agents = useQuery({ queryKey: ["builder-agents"], queryFn: () => builderApi.listAgents(token), enabled: !!token && switchOpen });
+  const agents = useQuery({ queryKey: ["builder-agents"], queryFn: () => builderApi.listAgents(token), enabled: !!token && (switchOpen || (form?.config.sub_agent_ids?.length ?? 0) > 0) });
 
   useEffect(() => {
     const t = setTimeout(() => flow.fitView({ padding: 0.3, maxZoom: 1, duration: 200 }), 60);
@@ -166,6 +166,7 @@ function Editor({ id, onBack, onOpen, onExit }: EditorProps) {
 
   const toolIds = form?.config.tool_ids ?? [];
   const kbIds = form?.config.knowledge_base_ids ?? [];
+  const subIds = form?.config.sub_agent_ids ?? [];
   const kbName = (kid: string) => kbs.data?.find((k) => k.id === kid)?.name ?? "Knowledge base";
   const active = runView.activeTool["agent"];
 
@@ -198,7 +199,7 @@ function Editor({ id, onBack, onOpen, onExit }: EditorProps) {
         id: "agent",
         type: "step",
         position: at("agent", { x: 320, y: Math.max(0, (Math.max(toolIds.length, kbIds.length, 1) - 1) * 55) }),
-        selected: selected?.kind === "agent" && selected.tab !== "abilities",
+        selected: selected?.kind === "agent" && selected.tab !== "abilities" && selected.tab !== "team",
         data: { type: "agent", title: form.name || "Agent", subtitle: form.goal, problems: [], state: runView.steps["agent"], detail: active ? `Calling ${active}…` : null },
       },
     ];
@@ -211,15 +212,46 @@ function Editor({ id, onBack, onOpen, onExit }: EditorProps) {
         data: { type: "knowledge", title: kbName(kid), subtitle: "Searched when it needs facts", problems: [] },
       });
     });
+    // Its team: agents it may hand work to, under it. Lit while it's asking one, with what that one is calling.
+    const agentAt = nodes[0].position;
+    // Beside the agent, in the connectors' column, under the lowest one.
+    const firstCol = tools.nodes.filter((n) => n.data.type === "server" || n.position.x < agentAt.x + 400);
+    const teamY = firstCol.length ? Math.max(...firstCol.map((n) => n.position.y)) + 110 : agentAt.y + 110;
+    subIds.forEach((sid, i) => {
+      const sub = agents.data?.find((a) => a.id === sid);
+      const name = sub?.name ?? "Agent";
+      const asking = active === `Ask ${name}`;
+      const used = runView.subUsed[name] ?? [];
+      const calling = runView.subActive[name];
+      const toolCount = sub?.config?.tool_ids?.length ?? 0;
+      nodes.push({
+        id: `team:${sid}`,
+        type: "step",
+        position: at(`team:${sid}`, { x: agentAt.x + 360, y: teamY + i * 90 }),
+        selected: selected?.kind === "agent" && selected.tab === "team",
+        data: {
+          type: "team",
+          title: sub ? name : "Loading…",
+          subtitle: used.length ? `Used ${used.join(", ")}` : `Team · ${toolCount} tool${toolCount === 1 ? "" : "s"}`,
+          problems: [],
+          state: asking ? "running" : runView.usedTools.includes(`Ask ${name}`) ? "succeeded" : undefined,
+          detail: asking ? (calling ? `Calling ${calling}…` : "Working on it…") : null,
+        },
+      });
+    });
     return nodes.map((n) => (sizes[n.id] ? { ...n, measured: sizes[n.id] } : n));
-  }, [form, toolIds, kbIds, positions, selected, runView, active, sizes, tools]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [form, toolIds, kbIds, subIds, agents.data, positions, selected, runView, active, sizes, tools]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const flowEdges: Edge[] = useMemo(
     () => [
       ...tools.edges,
       ...kbIds.map((kid) => ({ id: `k:${kid}`, source: `kb:${kid}`, target: "agent", style: { stroke: "#c4b5fd", strokeDasharray: "4 4" } })),
+      ...subIds.map((sid) => {
+        const on = active === `Ask ${agents.data?.find((a) => a.id === sid)?.name}`;
+        return { id: `t:${sid}`, source: "agent", target: `team:${sid}`, animated: on, style: { stroke: on ? "#e879f9" : "#d8b4fe", strokeWidth: on ? 2.5 : 1.5, strokeDasharray: on ? undefined : "6 4" } };
+      }),
     ],
-    [tools.edges, kbIds],
+    [tools.edges, kbIds, subIds, agents.data, active],
   );
 
   const onNodesChange = useCallback((changes: NodeChange<StepNodeType>[]) => {
@@ -227,8 +259,8 @@ function Editor({ id, onBack, onOpen, onExit }: EditorProps) {
     for (const c of changes) {
       if (c.type === "position" && c.position) setPositions((p) => ({ ...p, [c.id]: c.position! }));
       if (c.type === "select" && c.selected) {
-        // The agent opens its settings; a tool or a document opens them on Abilities, where those live.
-        setSelected({ kind: "agent", tab: c.id === "agent" ? "identity" : "abilities" });
+        // The agent opens its settings; a tool or a document opens them on Abilities, a team member on Team.
+        setSelected({ kind: "agent", tab: c.id === "agent" ? "identity" : c.id.startsWith("team:") ? "team" : "abilities" });
       }
     }
   }, [track]);
