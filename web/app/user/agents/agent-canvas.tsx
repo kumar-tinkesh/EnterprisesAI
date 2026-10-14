@@ -12,6 +12,7 @@ import { builderApi } from "@/lib/builder/api";
 import { useBuilderActions } from "@/lib/builder/use-builder-actions";
 import { useAuthStore } from "@/stores/auth-store";
 import { BuildBar } from "@/components/builder/build-bar";
+import { ImportAgentButton } from "@/components/builder/import-agent";
 import type { BuildMode, BuildTarget } from "@/lib/builder/use-builder-actions";
 import { useAgentWizard } from "@/stores/agent-wizard-store";
 
@@ -69,13 +70,7 @@ export default function BuilderHome({
             Pick Agent or Workflow below and describe it. It&apos;s designed, matched to your tools and opened on this canvas.
           </p>
           {mode === "agent" ? (
-            <button
-              type="button"
-              onClick={() => useAgentWizard.getState().start({})}
-              className="pointer-events-auto mt-1 inline-flex items-center gap-1.5 rounded-lg border border-white/15 px-3 py-2 text-xs font-medium text-zinc-200 hover:bg-white/5 cursor-pointer"
-            >
-              <ListChecks className="h-3.5 w-3.5" /> Set up an agent step by step
-            </button>
+            <AgentStart onOpen={onOpen} />
           ) : (
             <WorkflowStart onOpen={onOpen} />
           )}
@@ -88,6 +83,56 @@ export default function BuilderHome({
 }
 
 /**
+ * Agent mode's own way in: the step-by-step setup, or an agent already made.
+ */
+function AgentStart({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
+  const token = useAuthStore((s) => s.accessToken) || "";
+  const agents = useQuery({ queryKey: ["builder-agents"], queryFn: () => builderApi.listAgents(token), enabled: !!token });
+  const recent = [...(agents.data ?? [])].sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+
+  return (
+    <div className="pointer-events-auto mt-1 flex w-full max-w-sm flex-col items-center gap-3">
+      <div className="flex flex-wrap items-start justify-center gap-2">
+        <button
+          type="button"
+          onClick={() => useAgentWizard.getState().start({})}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 px-3 py-2 text-xs font-medium text-zinc-200 hover:bg-white/5 cursor-pointer"
+        >
+          <ListChecks className="h-3.5 w-3.5" /> Set up an agent step by step
+        </button>
+        <ImportAgentButton token={token} onImported={(a) => onOpen({ kind: "agent", id: a.id })} className="border-white/15 text-zinc-200 hover:bg-white/5" />
+      </div>
+      {recent.length > 0 && (
+        <ListPanel title="Open an agent">
+          {recent.map((a) => (
+            <button
+              key={a.id}
+              type="button"
+              onClick={() => onOpen({ kind: "agent", id: a.id })}
+              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-zinc-200 hover:bg-white/5 cursor-pointer"
+            >
+              <Bot className="h-3.5 w-3.5 shrink-0 text-indigo-400" />
+              <span className="min-w-0 flex-1 truncate">{a.name}</span>
+              {a.role && <span className="max-w-[40%] shrink-0 truncate text-[10px] text-zinc-500">{a.role}</span>}
+            </button>
+          ))}
+        </ListPanel>
+      )}
+    </div>
+  );
+}
+
+/** The scrollable list of things already made, under the empty canvas's start button. */
+function ListPanel({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="w-full rounded-xl border border-white/10 bg-white/5 p-1.5 text-left">
+      <p className="px-2.5 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">{title}</p>
+      <div className="max-h-56 overflow-y-auto">{children}</div>
+    </div>
+  );
+}
+
+/**
  * Workflow mode's own way in: an empty workflow to wire agents together by
  * hand (Add Step → Agent, then drag the lines), or one already made.
  */
@@ -95,7 +140,7 @@ function WorkflowStart({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
   const token = useAuthStore((s) => s.accessToken) || "";
   const { createBlank, error } = useBuilderActions({ open: onOpen });
   const workflows = useQuery({ queryKey: ["builder-workflows"], queryFn: () => builderApi.listWorkflows(token), enabled: !!token });
-  const recent = [...(workflows.data ?? [])].sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, 5);
+  const recent = [...(workflows.data ?? [])].sort((a, b) => b.updated_at.localeCompare(a.updated_at));
 
   return (
     <div className="pointer-events-auto mt-1 flex w-full max-w-sm flex-col items-center gap-3">
@@ -110,8 +155,7 @@ function WorkflowStart({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
       <p className="text-[11px] text-zinc-500">Then Add Step → Agent to use the agents you&apos;ve made, and drag lines to run them one after another or side by side.</p>
       {error && <p className="text-xs text-red-400">{error}</p>}
       {recent.length > 0 && (
-        <div className="w-full rounded-xl border border-white/10 bg-white/5 p-1.5 text-left">
-          <p className="px-2.5 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Open a workflow</p>
+        <ListPanel title="Open a workflow">
           {recent.map((w) => (
             <button
               key={w.id}
@@ -124,7 +168,7 @@ function WorkflowStart({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
               <span className="shrink-0 text-[10px] text-zinc-500">{w.node_count} steps</span>
             </button>
           ))}
-        </div>
+        </ListPanel>
       )}
     </div>
   );

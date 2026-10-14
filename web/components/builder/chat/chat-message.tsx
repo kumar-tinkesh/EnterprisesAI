@@ -1,12 +1,12 @@
 "use client";
 
 import { memo, useState, type ReactNode } from "react";
-import { AlertTriangle, Check, CheckCircle2, ChevronDown, Copy, Loader2, Pencil, RotateCw, ShieldAlert, Wrench, XCircle } from "lucide-react";
+import { AlertTriangle, Check, CheckCircle2, ChevronDown, Copy, FileText, Image as ImageIcon, Loader2, Pencil, RotateCw, ShieldAlert, Wrench, XCircle } from "lucide-react";
 
 import { MarkdownView } from "@/components/builder/chat/markdown-view";
-import { formatDuration, hueOf, initials, runDurationMs, trailSummary } from "@/lib/builder/chat";
+import { formatCost, formatDuration, formatTokens, hueOf, initials, runDurationMs, trailSummary } from "@/lib/builder/chat";
 import { displayTool } from "@/lib/builder/run-state";
-import type { GuardrailFlag, Run, RunToolCall } from "@/lib/builder/types";
+import type { Attachment, GuardrailFlag, Run, RunToolCall } from "@/lib/builder/types";
 import { cn } from "@/lib/utils";
 
 export function Avatar({ name, size = 28, live = false }: { name: string; size?: number; live?: boolean }) {
@@ -47,10 +47,31 @@ export function CopyButton({ text }: { text: string }) {
   );
 }
 
-export function UserMessage({ text, onEdit }: { text: string; onEdit?: () => void }) {
+/** A file sent with a message, as a small chip. */
+export function FileChip({ file, onRemove }: { file: Pick<Attachment, "filename" | "kind">; onRemove?: () => void }) {
+  const Icon = file.kind === "image" ? ImageIcon : FileText;
+  return (
+    <span className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-2 py-1 text-[11px] text-zinc-700">
+      <Icon className="h-3.5 w-3.5 shrink-0 text-indigo-500" />
+      <span className="min-w-0 truncate">{file.filename}</span>
+      {onRemove && (
+        <button type="button" aria-label={`Remove ${file.filename}`} onClick={onRemove} className="shrink-0 text-zinc-400 hover:text-red-600 cursor-pointer">
+          <XCircle className="h-3.5 w-3.5" />
+        </button>
+      )}
+    </span>
+  );
+}
+
+export function UserMessage({ text, onEdit, files = [] }: { text: string; onEdit?: () => void; files?: Pick<Attachment, "id" | "filename" | "kind">[] }) {
   return (
     <div className="group flex justify-end">
       <div className="flex max-w-[85%] flex-col items-end">
+        {files.length > 0 && (
+          <div className="mb-1.5 flex flex-wrap justify-end gap-1.5">
+            {files.map((f) => <FileChip key={f.id} file={f} />)}
+          </div>
+        )}
         <div className="whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-indigo-600 px-4 py-2.5 text-sm leading-relaxed text-white shadow-sm">{text}</div>
         {onEdit && (
           <button
@@ -190,6 +211,11 @@ export const AnswerMessage = memo(function AnswerMessage({
         <RunTrail run={run} stepName={stepName} />
         <div className={cn("mt-1.5 flex flex-wrap items-center gap-3 text-[11px] text-zinc-400 transition-opacity", !latest && "sm:opacity-0 sm:group-hover/answer:opacity-100")}>
           {ms != null && <span className="tabular-nums">{formatDuration(ms)}</span>}
+          {(run.prompt_tokens ?? 0) + (run.completion_tokens ?? 0) > 0 && (
+            <span className="tabular-nums" title={`${run.prompt_tokens ?? 0} tokens in, ${run.completion_tokens ?? 0} out${run.cost_usd == null ? " · this model has no known price" : ""}`}>
+              {formatTokens((run.prompt_tokens ?? 0) + (run.completion_tokens ?? 0))} tokens{run.cost_usd != null ? ` · ${formatCost(run.cost_usd)}` : ""}
+            </span>
+          )}
           <span>{new Date(run.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
           {run.definition_version ? <span>v{run.definition_version}</span> : null}
           {text && <CopyButton text={text} />}

@@ -24,7 +24,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, DateTime, Float, ForeignKey, Index, Integer, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.db.base import Base, TimestampMixin
@@ -136,6 +136,11 @@ class BuilderRun(Base, TimestampMixin):
     public_key_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     # The playground chat this run is one message of (NULL = a one-off run).
     conversation_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    # Estimated from the tokens and the model that answered (builder.pricing);
+    # NULL when the model's price isn't known.
+    cost_usd: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # Set when a webhook started it.
+    webhook_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
 
 
 class BuilderConversation(Base, TimestampMixin):
@@ -451,7 +456,72 @@ class BuilderPublicKey(Base, TimestampMixin):
     last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class BuilderAgentMemory(Base, TimestampMixin):
+    """One thing an agent remembers about one person (builder.agents.memory).
+
+    Private to that person, like their chats: the agent is shared in the
+    tenant, but what it learned working for someone is theirs.
+    """
+
+    __tablename__ = "builder_agent_memories"
+    __table_args__ = (Index("ix_builder_agent_memories_agent_owner", "agent_id", "owner_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    agent_id: Mapped[str] = mapped_column(ForeignKey("builder_agents.id", ondelete="CASCADE"))
+    owner_id: Mapped[str] = mapped_column(String(36), index=True)
+    content: Mapped[str] = mapped_column(Text)
+    # The run that saved it (NULL = the person added it themselves).
+    source_run_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+
+
+class BuilderAttachment(Base, TimestampMixin):
+    """A file sent with a chat message: a document's text (read once, on
+    upload) or an image's bytes (sent to the model with the message)."""
+
+    __tablename__ = "builder_attachments"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    tenant_id: Mapped[str] = mapped_column(String(36), index=True)
+    owner_id: Mapped[str] = mapped_column(String(36), index=True)
+    filename: Mapped[str] = mapped_column(String(255))
+    # document | image
+    kind: Mapped[str] = mapped_column(String(20))
+    content_type: Mapped[str] = mapped_column(String(100), default="")
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    data: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)
+
+
+class BuilderWebhook(Base, TimestampMixin):
+    """A URL that runs an agent when something posts to it (a form, Slack, Zapier, …).
+
+    Like a schedule it runs as the person who made it, with their connected
+    tools and the same checks first. The URL carries a secret token (senders
+    like Slack can't set headers); only its SHA-256 hash is stored.
+    """
+
+    __tablename__ = "builder_webhooks"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    owner_id: Mapped[str] = mapped_column(String(36), index=True)
+    agent_id: Mapped[str] = mapped_column(ForeignKey("builder_agents.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    token_prefix: Mapped[str] = mapped_column(String(20))
+    # Put before what was posted: "A new lead came in. Qualify it:".
+    instruction: Mapped[str] = mapped_column(Text, default="")
+    enabled: Mapped[bool] = mapped_column(default=True)
+    requests_per_minute: Mapped[int] = mapped_column(Integer, default=10)
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_run_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+
+
 __all__ = [
+    "BuilderAgentMemory",
+    "BuilderAttachment",
+    "BuilderWebhook",
     "BuilderPublicKey",
     "BuilderTestCase",
     "BuilderTestRun",

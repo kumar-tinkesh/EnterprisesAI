@@ -32,6 +32,7 @@ from src.db.session import get_db
 from src.models import User
 
 from builder.api.v1.agents import get_agent
+from builder.api.v1.attachments import attachments_for_run
 from builder.api.v1.deps import get_end_user, problems_response
 from builder.models import BuilderApproval, BuilderRun
 from builder.runs import states
@@ -61,6 +62,8 @@ class RunStart(BaseModel):
     # A playground chat: continue this one, or start a new one with this message.
     conversation_id: str | None = None
     new_conversation: bool = False
+    # Files uploaded to /attachments, sent with this message (agents only).
+    attachment_ids: list[str] = Field(default_factory=list, max_length=5)
 
 
 class Decision(BaseModel):
@@ -102,6 +105,7 @@ async def start_agent_run(
     agent = await get_agent(db, agent_id, user)
     if not payload.input.strip():
         raise HTTPException(status_code=422, detail="Tell the agent what to do.")
+    attachments = await attachments_for_run(db, user, payload.attachment_ids)
     problems = await agent_run_problems(db, user, agent)
     if problems:
         return problems_response("This agent can't run yet.", problems)
@@ -109,7 +113,7 @@ async def start_agent_run(
     history = await conversation_history(db, conv.id) if conv else None
     run = await create_agent_run(
         db, user, agent, text=payload.input, variables=payload.variables, depth=payload.depth,
-        conversation_id=conv.id if conv else None, history=history,
+        conversation_id=conv.id if conv else None, history=history, attachments=attachments,
     )
     return await run_view(db, run, detail=False)
 

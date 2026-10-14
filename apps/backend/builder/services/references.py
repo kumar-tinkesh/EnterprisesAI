@@ -121,6 +121,42 @@ async def knowledge_problems(
     ]
 
 
+async def sub_agent_problems(
+    db: AsyncSession,
+    user: CurrentUser,
+    sub_agent_ids: list[str],
+    *,
+    node_id: str | None = None,
+    check_connection: bool,
+    self_id: str | None = None,
+) -> list[GraphProblem]:
+    """The agents it hands tasks to: standalone agents of this tenant (not
+    itself) — and for preflight, everything they use is usable by this user."""
+    ids = list(dict.fromkeys(sub_agent_ids))
+    if not ids:
+        return []
+    rows = {
+        a.id: a
+        for a in (
+            await db.execute(select(BuilderAgent).where(BuilderAgent.id.in_(ids), BuilderAgent.tenant_id == user.tenant_id))
+        ).scalars()
+    }
+    problems: list[GraphProblem] = []
+    for sid in ids:
+        sub = rows.get(sid)
+        if sid == self_id:
+            problems.append(GraphProblem("sub_agent_self", "An agent can't hand tasks to itself.", node_id))
+        elif sub is None:
+            problems.append(GraphProblem("sub_agent_missing", "An agent this one hands tasks to was deleted.", node_id))
+        elif sub.workflow_id is not None:
+            problems.append(GraphProblem("sub_agent_not_standalone", f'"{sub.name}" belongs to a workflow; pick a standalone agent to hand tasks to.', node_id))
+        elif check_connection:
+            config = AgentConfig.model_validate(sub.config or {})
+            problems += await tool_problems(db, user, config.tool_ids, node_id=node_id, check_connection=True)
+            problems += await knowledge_problems(db, user.tenant_id, config.knowledge_base_ids, node_id=node_id)
+    return problems
+
+
 async def agent_config_problems(
     db: AsyncSession,
     user: CurrentUser,
@@ -128,9 +164,13 @@ async def agent_config_problems(
     *,
     node_id: str | None = None,
     check_connection: bool,
+    self_id: str | None = None,
 ) -> list[GraphProblem]:
     problems = await tool_problems(db, user, config.tool_ids, node_id=node_id, check_connection=check_connection)
     problems += await knowledge_problems(db, user.tenant_id, config.knowledge_base_ids, node_id=node_id)
+    problems += await sub_agent_problems(
+        db, user, config.sub_agent_ids, node_id=node_id, check_connection=check_connection, self_id=self_id,
+    )
     return _dedupe(problems)
 
 
@@ -180,7 +220,7 @@ async def workflow_reference_problems(
             except ValidationError as exc:
                 problems.append(GraphProblem("agent_overrides", "This step's agent settings are invalid: " + "; ".join(config_errors(exc)), n.id))
                 continue
-            problems += await agent_config_problems(db, user, merged, node_id=n.id, check_connection=check_connection)
+            problems += await agent_config_problems(db, user, merged, node_id=n.id, check_connection=check_connection, self_id=agent.id)
         elif n.type == "tool" and n.tool_id and parse_tool_id(n.tool_id):
             problems += await tool_problems(db, user, [n.tool_id], node_id=n.id, check_connection=check_connection)
 
@@ -211,6 +251,7 @@ __all__ = [
     "tool_problems",
     "knowledge_problems",
     "agent_config_problems",
+    "sub_agent_problems",
     "workflow_reference_problems",
     "check_workflow",
 ]

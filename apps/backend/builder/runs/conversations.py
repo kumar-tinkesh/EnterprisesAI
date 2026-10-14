@@ -101,6 +101,10 @@ async def conversation_history(db: AsyncSession, conversation_id: str) -> list[d
     history: list[dict] = []
     for run in chat_order(list(runs)):
         asked, answered = ((run.input or {}).get("text") or "").strip(), (run.output_text or "").strip()
+        files = [a.get("filename") for a in (run.input or {}).get("attachments") or [] if a.get("filename")]
+        if asked and files:
+            # Their content isn't carried over (it can be long); the agent at least knows they were there.
+            asked += f"\n[Attached then: {', '.join(files)}]"
         if asked and answered:
             history += [
                 {"role": "user", "content": _cap(asked, HISTORY_CHARS)},

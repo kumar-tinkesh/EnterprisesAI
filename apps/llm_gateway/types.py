@@ -28,7 +28,9 @@ class Message:
     """A single chat message."""
 
     role: Role
-    content: str
+    # Text, or OpenAI-style parts for a message with images:
+    # [{"type": "text", "text": ...}, {"type": "image_url", "image_url": {"url": "data:..."}}]
+    content: str | list[dict[str, Any]]
     name: Optional[str] = None
     tool_call_id: Optional[str] = None
     # Set on an ASSISTANT message that asked for tool calls; each answer then

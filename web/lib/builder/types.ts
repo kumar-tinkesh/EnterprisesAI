@@ -28,6 +28,12 @@ export interface AgentConfig {
   reliability?: { retries?: number; request_timeout_seconds?: number | null; fallback_model?: string; retry_on?: string[] };
   approvals?: ApprovalPolicy;
   guardrails?: GuardrailSettings;
+  /** What a person sees on an empty chat: a welcome line and suggested first questions. */
+  chat?: { welcome?: string; starters?: string[] };
+  /** Long-term memory of each person it works for. */
+  memory?: { enabled?: boolean; max_items?: number };
+  /** Other standalone agents it may hand tasks to (each becomes an "ask_<name>" tool). */
+  sub_agent_ids?: string[];
   [key: string]: unknown;
 }
 
@@ -73,6 +79,92 @@ export interface Agent extends DraftAgent {
   can_manage: boolean;
   created_at: string;
   updated_at: string;
+}
+
+/** Something an agent remembers about the signed-in person. */
+export interface AgentMemory {
+  id: string;
+  content: string;
+  /** The run where the agent saved it; null when the person added it. */
+  source_run_id: string | null;
+  created_at: string;
+}
+
+export interface UsageDay {
+  date: string;
+  runs: number;
+  succeeded: number;
+  failed: number;
+  tokens: number;
+  cost_usd: number;
+}
+
+/** Runs, tokens and estimated cost of an agent or workflow over a window. */
+export interface Usage {
+  /** "everyone" for its manager (numbers only), else "mine". */
+  scope: "everyone" | "mine";
+  days: number;
+  runs: number;
+  succeeded: number;
+  failed: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cost_usd: number;
+  unpriced_runs: number;
+  avg_cost_usd: number | null;
+  avg_seconds: number | null;
+  by_purpose: Record<string, number>;
+  daily: UsageDay[];
+}
+
+/** A file sent with a chat message. */
+export interface Attachment {
+  id: string;
+  filename: string;
+  kind: "document" | "image";
+  size: number;
+  chars: number;
+}
+
+export interface Webhook {
+  id: string;
+  agent_id: string;
+  name: string;
+  token_prefix: string;
+  instruction: string;
+  enabled: boolean;
+  requests_per_minute: number;
+  last_used_at: string | null;
+  last_run_id: string | null;
+  created_at: string;
+}
+
+export interface WebhookCreated extends Webhook {
+  /** The URL with its secret token — shown once. */
+  url: string;
+}
+
+/** A server an agent's tools (or its team's) live on, and whether you've connected it. */
+export interface AgentRequirement {
+  server_id: string;
+  name: string;
+  connected: boolean;
+  tools: string[];
+}
+
+export interface AgentRequirements {
+  requirements: AgentRequirement[];
+  ready: boolean;
+}
+
+/** An agent exported as a file (tools by server and tool name, not by id). */
+export interface AgentFile {
+  format: string;
+  format_version: number;
+  agent: { name: string; role: string; goal: string; instructions?: string; llm_provider?: string; llm_model?: string; config: AgentConfig };
+  tools: { server: string; tool: string }[];
+  knowledge_bases: string[];
+  sub_agents: string[];
 }
 
 export interface InputVariable {
@@ -530,12 +622,16 @@ export interface Run {
   workflow_id?: string | null;
   status: RunStatus;
   name: string | null;
-  input: { text: string; variables: Record<string, unknown> };
+  input: { text: string; variables: Record<string, unknown>; attachments?: Pick<Attachment, "id" | "filename" | "kind">[] };
   output_text: string | null;
   output: { text?: string | null; sources?: string[]; guardrails?: GuardrailFlag[] } | null;
   error: string | null;
   prompt_tokens: number | null;
   completion_tokens: number | null;
+  /** Estimated from the tokens and the model that answered; null when its price isn't known. */
+  cost_usd?: number | null;
+  /** Set when a webhook started it. */
+  webhook_id?: string | null;
   recoveries: number;
   created_at: string;
   /** Set when a schedule started it. */

@@ -54,7 +54,15 @@ def hash_key(key: str) -> str:
 
 async def definition_for(db: AsyncSession, kind: str, target: BuilderAgent | BuilderWorkflow, version: int | None) -> tuple[dict, int]:
     """The frozen definition a key runs -> (definition, version number).
-    ``version`` None = the latest saved; else that saved version's snapshot."""
+    ``version`` None = the latest saved; else that saved version's snapshot.
+    Includes the agents its agents may hand tasks to."""
+    from builder.agents.handoff import freeze_sub_agents
+
+    definition, number = await _definition_for(db, kind, target, version)
+    return await freeze_sub_agents(db, target.tenant_id, definition), number
+
+
+async def _definition_for(db: AsyncSession, kind: str, target: BuilderAgent | BuilderWorkflow, version: int | None) -> tuple[dict, int]:
     if version is None or version == target.version:
         if kind == "agent":
             return {"agent": agent_snapshot(target)}, target.version
@@ -75,7 +83,8 @@ async def definition_for(db: AsyncSession, kind: str, target: BuilderAgent | Bui
 
 
 def _agents_in(definition: dict) -> list[dict]:
-    return [definition["agent"]] if "agent" in definition else list((definition.get("agents") or {}).values())
+    agents = [definition["agent"]] if "agent" in definition else list((definition.get("agents") or {}).values())
+    return agents + list((definition.get("sub_agents") or {}).values())
 
 
 def tool_ids_in(definition: dict) -> list[str]:

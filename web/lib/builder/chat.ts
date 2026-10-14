@@ -65,6 +65,29 @@ export function trailSummary(run: Pick<Run, "tool_calls">): string | null {
     .join(" · ");
 }
 
+/** "$0.0042", "$1.25" — enough digits for a single cheap run; null when unknown. */
+export function formatCost(usd: number | null | undefined): string | null {
+  if (usd == null) return null;
+  if (usd === 0) return "$0";
+  if (usd < 0.01) return `$${usd.toFixed(4)}`;
+  if (usd < 1) return `$${usd.toFixed(3)}`;
+  return `$${usd.toFixed(2)}`;
+}
+
+/** 950 -> "950", 12_400 -> "12.4k", 3_200_000 -> "3.2M". */
+export function formatTokens(n: number | null | undefined): string {
+  const v = Math.max(0, n || 0);
+  if (v < 1000) return String(v);
+  if (v < 1_000_000) return `${(v / 1000).toFixed(v < 10_000 ? 1 : 0).replace(/\.0$/, "")}k`;
+  return `${(v / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+}
+
+/** The empty chat's suggested questions: the agent's own, else the general ones. */
+export function startersFor(own: string[] | undefined): { label: string; prompt: string }[] {
+  const mine = (own ?? []).map((s) => s.trim()).filter(Boolean);
+  return mine.length ? mine.map((s) => ({ label: s, prompt: s })) : AGENT_STARTERS;
+}
+
 /** Suggested first messages for an agent. (A workflow gets none: whatever is
  *  sent is its input and starts a real run, so the person writes their own.) */
 export const AGENT_STARTERS: { label: string; prompt: string }[] = [

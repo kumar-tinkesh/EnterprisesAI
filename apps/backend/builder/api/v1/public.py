@@ -5,6 +5,7 @@
                                   200 when it finished within wait_seconds, else 202 — then poll
     GET  /runs/{run_id}           a run this key started
     POST /runs/{run_id}/cancel
+    POST /hooks/{token}           a webhook: run its agent on what was posted (builder.triggers.webhooks)
     GET  /widget.js               a chat bubble for any website:
                                   <script src=".../api/v1/public/widget.js" data-key="eai_pk_..."></script>
 
@@ -19,7 +20,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -130,3 +131,21 @@ async def widget():
     # ASCII-only on purpose (non-ASCII is \u-escaped), and labelled UTF-8, so it reads
     # right on any page whatever that page's own charset.
     return Response(WIDGET, media_type="application/javascript; charset=utf-8", headers={"Cache-Control": "public, max-age=300"})
+
+
+@router.post("/hooks/{token}")
+async def webhook(token: str, request: Request, db: AsyncSession = Depends(get_db)):
+    from builder.triggers.webhooks import hook_for, payload_text, slack_challenge, start_webhook_run
+
+    body = await request.body()
+    if len(body) > 256 * 1024:
+        return JSONResponse(status_code=413, content={"detail": "The body is too large (256 KB at most)."})
+    challenge = slack_challenge(body)
+    try:
+        hook = await hook_for(db, token)
+        if challenge is not None:
+            return {"challenge": challenge}
+        run = await start_webhook_run(db, hook, payload_text(body, request.headers.get("content-type", "")))
+    except PublishError as exc:
+        return _fail(exc)
+    return JSONResponse(status_code=202, content={"run_id": run.id, "status": run.status})

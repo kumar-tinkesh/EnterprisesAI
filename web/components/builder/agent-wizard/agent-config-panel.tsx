@@ -2,13 +2,16 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { CalendarClock, X } from "lucide-react";
+import { CalendarClock, UserRound, Webhook, X } from "lucide-react";
 
 import { BareSections } from "@/components/builder/fields";
 import { AgentSchedules } from "@/components/builder/schedule-fields";
 import { ConnectServerDialog } from "@/components/connections/server-connect";
 import { AbilitiesStep } from "@/components/builder/agent-wizard/step-abilities";
 import { BehaviourStep } from "@/components/builder/agent-wizard/step-behaviour";
+import { ChatStep, MyMemories } from "@/components/builder/agent-wizard/step-chat";
+import { TeamStep } from "@/components/builder/agent-wizard/step-team";
+import { AgentWebhooks } from "@/components/builder/webhook-fields";
 import { EngineStep } from "@/components/builder/agent-wizard/step-engine";
 import { IdentityStep } from "@/components/builder/agent-wizard/step-identity";
 import { Category, useServers, type StepProps } from "@/components/builder/agent-wizard/wizard-ui";
@@ -17,11 +20,13 @@ import { builderApi } from "@/lib/builder/api";
 import type { DraftAgent, ToolCandidate } from "@/lib/builder/types";
 import { cn } from "@/lib/utils";
 
-export type ConfigTab = "identity" | "abilities" | "behaviour" | "engine" | "schedule";
+export type ConfigTab = "identity" | "abilities" | "behaviour" | "engine" | "chat" | "team" | "schedule";
 
 const TABS: { id: ConfigTab; label: string; title: string; hint: string }[] = [
   ...WIZARD_STEPS.filter((s) => s.id !== "describe" && s.id !== "review").map((s) => ({ id: s.id as ConfigTab, label: s.label, title: s.title, hint: s.hint })),
-  { id: "schedule", label: "Schedule", title: "When should it run by itself?", hint: "Run it on a timetable with a fixed request — results land in its run history." },
+  { id: "chat", label: "Chat & memory", title: "What do people see, and what does it remember?", hint: "A welcome line and suggested questions for an empty chat, and a long-term memory of each person." },
+  { id: "team", label: "Team", title: "Who can it hand work to?", hint: "Other agents it may ask to do part of a task, each with its own tools and knowledge." },
+  { id: "schedule", label: "Triggers", title: "When should it run by itself?", hint: "On a timetable, or whenever something posts to its webhook URL. Results land in its run history." },
 ];
 
 /**
@@ -107,13 +112,28 @@ export function AgentConfigPanel({
             {tab === "abilities" && <AbilitiesStep {...props} />}
             {tab === "behaviour" && <BehaviourStep {...props} guardrailReason={null} />}
             {tab === "engine" && <EngineStep {...props} />}
+            {tab === "chat" && <ChatStep {...props} />}
+            {tab === "team" && <TeamStep {...props} agentId={agentId} />}
           </fieldset>
-          {tab === "schedule" && (
-            <Category icon={CalendarClock} tone="sky" title="Schedules" hint="Each one runs the saved version of this agent.">
-              <BareSections.Provider value>
-                <AgentSchedules agentId={agentId} token={token} />
-              </BareSections.Provider>
+          {/* Yours, even on a teammate's agent: outside the owner-only fieldset. */}
+          {tab === "chat" && (
+            <Category icon={UserRound} tone="violet" title="Your memories" hint="Only you see these. It uses them when its memory is on.">
+              <MyMemories agentId={agentId} token={token} />
             </Category>
+          )}
+          {tab === "schedule" && (
+            <>
+              <Category icon={CalendarClock} tone="sky" title="Schedules" hint="Each one runs the saved version of this agent.">
+                <BareSections.Provider value>
+                  <AgentSchedules agentId={agentId} token={token} />
+                </BareSections.Provider>
+              </Category>
+              <Category icon={Webhook} tone="emerald" title="Webhooks" hint="A URL that runs it on whatever is posted: a form, Zapier, a Slack command, forwarded email.">
+                <BareSections.Provider value>
+                  <AgentWebhooks agentId={agentId} token={token} />
+                </BareSections.Provider>
+              </Category>
+            </>
           )}
         </div>
       </div>

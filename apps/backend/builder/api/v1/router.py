@@ -25,7 +25,10 @@ from vendor.models import MCPTool
 from vendor.services import mcp_auth
 from vendor.services.mcp_service.crud import get_mcp_server, is_server_visible_to_user
 
-from builder.api.v1 import agents, assist, conversations, health, insights, publishing, quality, runs, schedules, versions, workflows
+from builder.api.v1 import (
+    agents, assist, attachments, conversations, health, insights, memories, publishing, quality, runs, schedules,
+    transfer, usage, versions, webhooks, workflows,
+)
 from builder.api.v1.deps import get_end_user
 from builder.api.v1.schemas import (
     RuntimeToolOut,
@@ -47,6 +50,8 @@ from builder.services.tool_runtime import (
 )
 
 router = APIRouter()
+# Before agents.router: "/agents/import" must not be read as an agent id.
+router.include_router(transfer.router)
 router.include_router(agents.router, prefix="/agents")
 router.include_router(workflows.router, prefix="/workflows")
 router.include_router(schedules.router, prefix="/schedules")
@@ -58,6 +63,10 @@ router.include_router(insights.router)
 router.include_router(health.router)
 router.include_router(conversations.router)
 router.include_router(assist.router)
+router.include_router(memories.router)
+router.include_router(usage.router)
+router.include_router(attachments.router)
+router.include_router(webhooks.router)
 
 
 def _risk_out(risk: ToolRisk) -> ToolRiskOut:

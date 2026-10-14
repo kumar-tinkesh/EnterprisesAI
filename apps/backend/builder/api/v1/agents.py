@@ -6,6 +6,9 @@
     PATCH  /{agent_id}              update (optimistic: expected_version)
     DELETE /{agent_id}              delete — refused while a workflow step still uses it
     GET    /{agent_id}/preflight    can the caller run it right now?
+
+Memory, usage, webhooks, requirements and export/import live in
+their own modules (memories.py, usage.py, webhooks.py, transfer.py).
 """
 from __future__ import annotations
 
@@ -19,7 +22,10 @@ from src.db.session import get_db
 from builder.agents.config import AgentConfig
 from builder.api.v1.definitions import AgentCreate, AgentOut, AgentUpdate, CheckResult, Problem
 from builder.api.v1.deps import can_manage, get_end_user, problems_response, version_conflict
-from builder.models import BuilderAgent, BuilderPublicKey, BuilderSchedule, BuilderTestCase, BuilderTestRun, BuilderVersion, BuilderWorkflow
+from builder.models import (
+    BuilderAgent, BuilderAgentMemory, BuilderPublicKey, BuilderSchedule, BuilderTestCase, BuilderTestRun, BuilderVersion,
+    BuilderWebhook, BuilderWorkflow,
+)
 from builder.quality.cleanup import delete_tests
 from builder.versions.service import ensure_baseline, record_version
 from builder.services.references import agent_config_problems
@@ -63,6 +69,12 @@ async def workflows_using(db: AsyncSession, tenant_id: str, agent_id: str) -> li
         wf for wf in workflows
         if any(n.get("type") == "agent" and n.get("agent_id") == agent_id for n in wf.nodes or [])
     ]
+
+
+async def agents_handing_to(db: AsyncSession, tenant_id: str, agent_id: str) -> list[BuilderAgent]:
+    """The agents that have this one in their team (config.sub_agent_ids)."""
+    rows = (await db.execute(select(BuilderAgent).where(BuilderAgent.tenant_id == tenant_id, BuilderAgent.id != agent_id))).scalars()
+    return [a for a in rows if agent_id in ((a.config or {}).get("sub_agent_ids") or [])]
 
 
 @router.get("", response_model=list[AgentOut])
@@ -139,7 +151,7 @@ async def update_agent(
     await ensure_baseline(db, "agent", agent)
 
     if payload.config is not None:
-        problems = await agent_config_problems(db, user, payload.config, check_connection=False)
+        problems = await agent_config_problems(db, user, payload.config, check_connection=False, self_id=agent.id)
         if problems:
             return problems_response("This agent points at things that can't be used.", problems)
         agent.config = payload.config.model_dump()
@@ -163,7 +175,13 @@ async def delete_agent(agent_id: str, user: CurrentUser = Depends(get_end_user),
     if users:
         names = ", ".join(f'"{wf.name}"' for wf in users[:5])
         raise HTTPException(status_code=409, detail=f"This agent is used by workflow {names}. Remove those steps first.")
+    leads = await agents_handing_to(db, user.tenant_id, agent.id)
+    if leads:
+        names = ", ".join(f'"{a.name}"' for a in leads[:5])
+        raise HTTPException(status_code=409, detail=f"Agent {names} hands tasks to this one. Remove it from their team first.")
     await db.execute(delete(BuilderSchedule).where(BuilderSchedule.agent_id == agent.id))
+    await db.execute(delete(BuilderAgentMemory).where(BuilderAgentMemory.agent_id == agent.id))
+    await db.execute(delete(BuilderWebhook).where(BuilderWebhook.agent_id == agent.id))
     await db.execute(delete(BuilderVersion).where(BuilderVersion.agent_id == agent.id))
     await delete_tests(db, BuilderTestCase.agent_id == agent.id, BuilderTestRun.agent_id == agent.id)
     await db.execute(delete(BuilderPublicKey).where(BuilderPublicKey.agent_id == agent.id))
@@ -175,5 +193,5 @@ async def delete_agent(agent_id: str, user: CurrentUser = Depends(get_end_user),
 async def preflight_agent(agent_id: str, user: CurrentUser = Depends(get_end_user), db: AsyncSession = Depends(get_db)):
     agent = await get_agent(db, agent_id, user)
     config = AgentConfig.model_validate(agent.config or {})
-    problems = await agent_config_problems(db, user, config, check_connection=True)
+    problems = await agent_config_problems(db, user, config, check_connection=True, self_id=agent.id)
     return CheckResult(ok=not problems, problems=[Problem(**p.as_dict()) for p in problems])

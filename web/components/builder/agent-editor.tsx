@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Background, BackgroundVariant, Controls, ReactFlow, ReactFlowProvider, useReactFlow, type Edge, type NodeChange } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { AlertTriangle, ArrowLeft, Bot, Check, ChevronDown, FlaskConical, Globe, History, Play, Save, Settings2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Bot, Check, ChevronDown, Coins, Download, FlaskConical, Globe, History, Play, Save, Settings2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,6 +14,8 @@ import { BuildBar, barButton, barInput } from "@/components/builder/build-bar";
 import { Playground } from "@/components/builder/playground";
 import { SplitPane } from "@/components/builder/split-pane";
 import { PublishPanel } from "@/components/builder/publish-panel";
+import { ExportPanel } from "@/components/builder/export-panel";
+import { UsagePanel } from "@/components/builder/usage-panel";
 import { TestsPanel } from "@/components/builder/tests-panel";
 import { VersionHistory } from "@/components/builder/version-history";
 import { nodeTypes, useNodeSizes, type StepNodeType } from "@/components/builder/step-node";
@@ -28,7 +30,7 @@ import type { BuildTarget } from "@/lib/builder/use-builder-actions";
 import { useAuthStore } from "@/stores/auth-store";
 import { cn } from "@/lib/utils";
 
-type Selected = { kind: "agent"; tab: ConfigTab } | { kind: "history" } | { kind: "tests" } | { kind: "publish" } | null;
+type Selected = { kind: "agent"; tab: ConfigTab } | { kind: "history" } | { kind: "tests" } | { kind: "publish" } | { kind: "usage" } | { kind: "export" } | null;
 type Notice = { tone: "ok" | "warn" | "error"; text: string; detail?: string[]; reload?: boolean } | null;
 
 const NOTICE_KEY = (id: string) => `builder.agent-notice.${id}`;
@@ -298,6 +300,24 @@ function Editor({ id, onBack, onOpen, onExit }: EditorProps) {
           <Button
             size="sm"
             variant="outline"
+            aria-label="Export"
+            className={cn("h-8 px-2 lg:px-3", selected?.kind === "export" && "bg-indigo-50")}
+            onClick={() => setSelected(selected?.kind === "export" ? null : { kind: "export" })}
+          >
+            <Download /> <span className="hidden xl:inline">Export</span>
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            aria-label="Usage and cost"
+            className={cn("h-8 px-2 lg:px-3", selected?.kind === "usage" && "bg-indigo-50")}
+            onClick={() => setSelected(selected?.kind === "usage" ? null : { kind: "usage" })}
+          >
+            <Coins /> <span className="hidden xl:inline">Usage</span>
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
             aria-label="Tests"
             className={cn("h-8 px-2 lg:px-3", selected?.kind === "tests" && "bg-indigo-50")}
             onClick={() => setSelected(selected?.kind === "tests" ? null : { kind: "tests" })}
@@ -367,6 +387,16 @@ function Editor({ id, onBack, onOpen, onExit }: EditorProps) {
                     dirty={dirty}
                     onClose={() => setSelected(null)}
                   />
+                </div>
+              )}
+              {selected?.kind === "usage" && (
+                <div className="absolute inset-y-0 right-0 z-10 w-full border-l sm:w-96 border-zinc-200 bg-white shadow-lg">
+                  <UsagePanel kind="agent" targetId={id} token={token} onClose={() => setSelected(null)} />
+                </div>
+              )}
+              {selected?.kind === "export" && agentQuery.data && (
+                <div className="absolute inset-y-0 right-0 z-10 w-full border-l sm:w-96 border-zinc-200 bg-white shadow-lg">
+                  <ExportPanel agent={agentQuery.data} token={token} onClose={() => setSelected(null)} />
                 </div>
               )}
               {selected?.kind === "tests" && (

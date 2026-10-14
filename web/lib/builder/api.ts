@@ -7,6 +7,13 @@ import { BACKEND_API_URL, request } from "@/lib/api";
 import type {
   Agent,
   AgentConfig,
+  AgentFile,
+  AgentMemory,
+  Attachment,
+  AgentRequirements,
+  Usage,
+  Webhook,
+  WebhookCreated,
   AgentProfile,
   Health,
   Insights,
@@ -82,6 +89,28 @@ export const builderApi = {
   deleteAgent: (t: string, id: string) => call<void>(t, `/agents/${id}`, "DELETE"),
   agentPreflight: (t: string, id: string) => call<CheckResult>(t, `/agents/${id}/preflight`),
 
+  // Memory, usage, triggers, requirements, files
+  listMemories: (t: string, id: string) => call<AgentMemory[]>(t, `/agents/${id}/memories`),
+  addMemory: (t: string, id: string, content: string) => call<AgentMemory>(t, `/agents/${id}/memories`, "POST", { content }),
+  forgetMemory: (t: string, id: string, memoryId: string) => call<void>(t, `/agents/${id}/memories/${memoryId}`, "DELETE"),
+  forgetAllMemories: (t: string, id: string) => call<void>(t, `/agents/${id}/memories`, "DELETE"),
+  usage: (t: string, kind: "agent" | "workflow", id: string, days = 30) => call<Usage>(t, `/${kind}s/${id}/usage?days=${days}`),
+  listWebhooks: (t: string, agentId: string) => call<Webhook[]>(t, `/agents/${agentId}/webhooks`),
+  createWebhook: (t: string, agentId: string, body: { name: string; instruction: string; requests_per_minute: number }) =>
+    call<WebhookCreated>(t, `/agents/${agentId}/webhooks`, "POST", body),
+  updateWebhook: (t: string, id: string, body: Partial<Pick<Webhook, "name" | "instruction" | "enabled" | "requests_per_minute">>) =>
+    call<Webhook>(t, `/webhooks/${id}`, "PATCH", body),
+  deleteWebhook: (t: string, id: string) => call<void>(t, `/webhooks/${id}`, "DELETE"),
+  agentRequirements: (t: string, id: string) => call<AgentRequirements>(t, `/agents/${id}/requirements`),
+  exportAgent: (t: string, id: string) => call<AgentFile>(t, `/agents/${id}/export`),
+  importAgent: (t: string, file: AgentFile) => call<{ agent: Agent; skipped: string[] }>(t, "/agents/import", "POST", file),
+  uploadAttachment: (t: string, file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    return request<Attachment>(`${B}/attachments`, { method: "POST", body }, t, BACKEND_API_URL);
+  },
+  deleteAttachment: (t: string, id: string) => call<void>(t, `/attachments/${id}`, "DELETE"),
+
   // Workflows
   listWorkflows: (t: string) => call<WorkflowSummary[]>(t, "/workflows"),
   getWorkflow: (t: string, id: string) => call<Workflow>(t, `/workflows/${id}`),
@@ -93,8 +122,8 @@ export const builderApi = {
   workflowPreflight: (t: string, id: string) => call<CheckResult>(t, `/workflows/${id}/preflight`, "POST"),
 
   // Runs
-  startAgentRun: (t: string, id: string, input: string, depth: AnswerDepth = "auto", chat: ChatRef = {}) =>
-    call<Run>(t, `/agents/${id}/runs`, "POST", { input, depth, ...chat }),
+  startAgentRun: (t: string, id: string, input: string, depth: AnswerDepth = "auto", chat: ChatRef = {}, attachmentIds: string[] = []) =>
+    call<Run>(t, `/agents/${id}/runs`, "POST", { input, depth, ...chat, ...(attachmentIds.length ? { attachment_ids: attachmentIds } : {}) }),
   startWorkflowRun: (t: string, id: string, input: string, variables: Record<string, unknown>, depth: AnswerDepth = "auto", chat: ChatRef = {}) =>
     call<Run>(t, `/workflows/${id}/runs`, "POST", { input, variables, depth, ...chat }),
 

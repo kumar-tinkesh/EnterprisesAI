@@ -137,6 +137,11 @@ async def _execute_agent(run: BuilderRun, user: CurrentUser, worker_id: str) -> 
         user=user, agent=agent, config=config, input_text=input_text, approvals=config.approvals, emit=emit_event,
         dry_run=run.purpose == "test", depth=(run.input or {}).get("depth") or "auto",
         history=list((run.input or {}).get("history") or []),
+        sub_agents=dict(run.definition.get("sub_agents") or {}),
+        # Public and webhook runs execute as their owner, but someone else
+        # wrote the request: they don't get to read or fill that person's memory.
+        memory=run.purpose in ("run", "test") and not run.webhook_id,
+        attachment_ids=[a["id"] for a in (run.input or {}).get("attachments") or [] if a.get("id")],
     )
     try:
         result = await run_agent(ctx)
@@ -165,7 +170,7 @@ async def _execute_agent(run: BuilderRun, user: CurrentUser, worker_id: str) -> 
         await emit(run.id, "output", text=result.text, sources=result.sources)
         await _finish(
             run.id, worker_id, states.SUCCEEDED, output_text=result.text, output=output,
-            prompt_tokens=result.prompt_tokens, completion_tokens=result.completion_tokens,
+            prompt_tokens=result.prompt_tokens, completion_tokens=result.completion_tokens, cost_usd=result.cost_usd,
         )
 
 

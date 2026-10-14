@@ -30,6 +30,7 @@ from src.api.deps import CurrentUser
 
 from builder.graph.schema import TRIGGER_TYPES, WorkflowConfig
 from builder.models import BuilderNodeRun, BuilderRun
+from builder.pricing import add_cost
 from builder.runs import lease, states
 from builder.runs.db import session_factory, utcnow
 from builder.runs.events import emit
@@ -139,7 +140,7 @@ async def execute_workflow(run: BuilderRun, user: CurrentUser, worker_id: str) -
     depth = (run.input or {}).get("depth") or "auto"
     step_extras = dict(
         dry_run=dry_run, approval_overrides=config.approval_overrides,
-        knowledge_base_ids=config.knowledge_base_ids(),
+        knowledge_base_ids=config.knowledge_base_ids(), sub_agents=run.definition.get("sub_agents") or {},
     )
 
     async def run_step(node_id: str, node_run_id: str, attempt: int) -> NodeOutcome:
@@ -226,6 +227,7 @@ async def execute_workflow(run: BuilderRun, user: CurrentUser, worker_id: str) -
 
                 state["prompt_tokens"] += outcome.prompt_tokens
                 state["completion_tokens"] += outcome.completion_tokens
+                state["cost_usd"] = add_cost(state.get("cost_usd"), outcome.cost_usd)
                 if outcome.guardrails:
                     state.setdefault("guardrails", []).extend({**f, "node_id": node_id} for f in outcome.guardrails)
                 if outcome.ok:
@@ -277,7 +279,7 @@ async def execute_workflow(run: BuilderRun, user: CurrentUser, worker_id: str) -
     await emit(run.id, "output", text=text, sources=state["sources"])
     if await lease.release(
         run.id, worker_id, status=states.SUCCEEDED, output_text=text, output=output,
-        prompt_tokens=state["prompt_tokens"], completion_tokens=state["completion_tokens"],
+        prompt_tokens=state["prompt_tokens"], completion_tokens=state["completion_tokens"], cost_usd=state.get("cost_usd"),
     ):
         await emit(run.id, "run_status", status=states.SUCCEEDED)
 

@@ -17,7 +17,7 @@ from builder.services.references import agent_config_problems, check_workflow
 
 
 async def agent_run_problems(db: AsyncSession, user: CurrentUser, agent: BuilderAgent) -> list[GraphProblem]:
-    return await agent_config_problems(db, user, AgentConfig.model_validate(agent.config or {}), check_connection=True)
+    return await agent_config_problems(db, user, AgentConfig.model_validate(agent.config or {}), check_connection=True, self_id=agent.id)
 
 
 async def workflow_run_problems(

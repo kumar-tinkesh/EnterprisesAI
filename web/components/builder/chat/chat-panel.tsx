@@ -2,27 +2,31 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowDown, ChevronDown, ChevronRight, Circle, ExternalLink, Plus, Send, SlidersHorizontal, Sparkles, Square, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ChevronDown, ChevronRight, Circle, ExternalLink, Paperclip, Plus, Send, SlidersHorizontal, Sparkles, Square, X } from "lucide-react";
 
 import { Spinner } from "@/components/ui/spinner";
 import { ApprovalCard } from "@/components/builder/approval-card";
-import { AnswerMessage, Avatar, GuardrailNotes, UserMessage } from "@/components/builder/chat/chat-message";
+import { AnswerMessage, Avatar, FileChip, GuardrailNotes, UserMessage } from "@/components/builder/chat/chat-message";
 import { ChatHistory } from "@/components/builder/chat/chat-history";
 import { MarkdownView } from "@/components/builder/chat/markdown-view";
 import { coerce } from "@/components/builder/playground";
 import { ConnectButton } from "@/components/connections/connect-button";
 import { ApiError } from "@/lib/api";
 import { builderApi } from "@/lib/builder/api";
-import { AGENT_STARTERS, dayLabel } from "@/lib/builder/chat";
+import { dayLabel, startersFor } from "@/lib/builder/chat";
 import { inputFields, stepTitle } from "@/lib/builder/graph";
 import { isFinished, type RunView } from "@/lib/builder/run-state";
-import type { Agent, AnswerDepth, ChatRef, Problem, Run, Workflow } from "@/lib/builder/types";
+import type { Agent, AnswerDepth, Attachment, ChatRef, Problem, Run, Workflow } from "@/lib/builder/types";
 import { useRunStream } from "@/lib/builder/use-run-stream";
 import { cn } from "@/lib/utils";
 
 export type ChatTarget = { kind: "agent" | "workflow"; id: string };
 
 const TONE_DOT = { info: "text-sky-500", ok: "text-emerald-500", warn: "text-amber-500", error: "text-red-500" } as const;
+// What the attach button offers: what the backend can read (builder/api/v1/attachments.py).
+const ACCEPT = ".pdf,.docx,.xlsx,.csv,.md,.txt,.png,.jpg,.jpeg";
+const MAX_FILES = 5;
+
 const DEPTHS: { id: AnswerDepth; label: string }[] = [
   { id: "auto", label: "Auto" },
   { id: "short", label: "Short" },
@@ -147,7 +151,18 @@ export function ChatPanel({
   });
   const agents = useQuery({ queryKey: ["builder-agents"], queryFn: () => builderApi.listAgents(token), enabled: !!token && kind === "workflow" });
   const name = detail.data?.name || (kind === "agent" ? "Agent" : "Workflow");
-  const sub = detail.data ? ("goal" in detail.data ? detail.data.goal : detail.data.description) : "";
+  const agentConfig = detail.data && "goal" in detail.data ? detail.data.config : undefined;
+  const welcome = agentConfig?.chat?.welcome?.trim();
+  const sub = welcome || (detail.data ? ("goal" in detail.data ? detail.data.goal : detail.data.description) : "");
+  const starters = startersFor(agentConfig?.chat?.starters);
+  // Each person runs an agent as themselves: say up front which of its accounts (or its team's) they still have to connect.
+  const needs = useQuery({
+    queryKey: ["builder-agent-requirements", id],
+    queryFn: () => builderApi.agentRequirements(token, id),
+    enabled: !!token && kind === "agent",
+  });
+  const missing = (needs.data?.requirements ?? []).filter((r) => !r.connected);
+  const remembers = !!agentConfig?.memory?.enabled;
   const nodes = useMemo(() => (detail.data && "nodes" in detail.data ? detail.data.nodes : []), [detail.data]);
   const fields = useMemo(() => inputFields(nodes), [nodes]);
   const stepName = useCallback(
@@ -211,11 +226,33 @@ export function ChatPanel({
   const [problems, setProblems] = useState<Problem[]>([]);
   const missingRequired = fields.filter((f) => f.required && !(values[f.name] ?? "").trim());
 
+  // ── Files for the next message (agents only) ──
+  const [files, setFiles] = useState<Attachment[]>([]);
+  const [uploading, setUploading] = useState(0);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const picker = useRef<HTMLInputElement>(null);
+  const attach = async (list: FileList | null) => {
+    setFileError(null);
+    const chosen = Array.from(list ?? []).slice(0, Math.max(0, MAX_FILES - files.length));
+    if ((list?.length ?? 0) > chosen.length) setFileError(`At most ${MAX_FILES} files per message.`);
+    for (const file of chosen) {
+      setUploading((n) => n + 1);
+      try {
+        const uploaded = await builderApi.uploadAttachment(token, file);
+        setFiles((cur) => [...cur, uploaded]);
+      } catch (err) {
+        setFileError(err instanceof Error ? `${file.name}: ${err.message}` : `Couldn't attach ${file.name}.`);
+      } finally {
+        setUploading((n) => n - 1);
+      }
+    }
+  };
+
   const send = useMutation({
     mutationFn: async (text: string): Promise<Run> => {
       setProblems([]);
       const ref: ChatRef = chatId ? { conversation_id: chatId } : { new_conversation: true };
-      if (kind === "agent") return builderApi.startAgentRun(token, id, text, depth, ref);
+      if (kind === "agent") return builderApi.startAgentRun(token, id, text, depth, ref, files.map((f) => f.id));
       const variables: Record<string, unknown> = {};
       for (const f of fields) {
         const v = coerce(f, values[f.name] ?? "");
@@ -225,6 +262,7 @@ export function ChatPanel({
     },
     onMutate: (text) => setPendingText(text),
     onSuccess: async (run) => {
+      setFiles([]);
       setLiveRunId(run.id);
       if (run.conversation_id && run.conversation_id !== chatId) setPicked(run.conversation_id);
       await Promise.all([
@@ -244,9 +282,9 @@ export function ChatPanel({
   const stop = useMutation({ mutationFn: () => builderApi.cancelRun(token, liveRunId!) });
 
   const busy = send.isPending || (!!liveRunId && !isFinished(view.status));
-  const canSend = !busy && !!token && (input.trim().length > 0 || (kind === "workflow" && fields.length > 0)) && missingRequired.length === 0;
+  const canSend = !busy && uploading === 0 && !!token && (input.trim().length > 0 || (kind === "workflow" && fields.length > 0)) && missingRequired.length === 0;
   const submit = (text = input) => {
-    if (busy || (!text.trim() && kind === "agent")) return;
+    if (busy || uploading > 0 || (!text.trim() && kind === "agent")) return;
     if (missingRequired.length) {
       setShowInputs(true);
       return;
@@ -370,10 +408,28 @@ export function ChatPanel({
               <div className="mx-auto flex max-w-lg flex-col items-center py-10 text-center">
                 <Avatar name={name} size={56} />
                 <h2 className="mt-4 text-xl font-semibold tracking-tight text-zinc-900">{name}</h2>
-                {sub && <p className="mt-1.5 line-clamp-3 text-xs leading-relaxed text-zinc-500">{sub}</p>}
+                {sub && <p className={cn("mt-1.5 line-clamp-3 leading-relaxed", welcome ? "text-sm text-zinc-700" : "text-xs text-zinc-500")}>{sub}</p>}
+                {missing.length > 0 && (
+                  <div className="mt-4 w-full space-y-1.5 rounded-xl border border-amber-200 bg-amber-50 p-3 text-left">
+                    <p className="text-xs font-semibold text-amber-900">Connect your account{missing.length === 1 ? "" : "s"} first</p>
+                    {missing.map((r) => (
+                      <div key={r.server_id} className="flex items-center gap-2 text-xs text-amber-900">
+                        <span className="min-w-0 flex-1 truncate" title={r.tools.join(", ")}>
+                          {r.name} <span className="text-amber-700">· for {r.tools.length} tool{r.tools.length === 1 ? "" : "s"}</span>
+                        </span>
+                        <ConnectButton
+                          serverId={r.server_id}
+                          serverName={r.name}
+                          token={token}
+                          onConnected={() => void queryClient.invalidateQueries({ queryKey: ["builder-agent-requirements", id] })}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {kind === "agent" ? (
-                  <ul className="mt-6 grid w-full gap-2 sm:grid-cols-3">
-                    {AGENT_STARTERS.map((s) => (
+                  <ul className={cn("mt-6 grid w-full gap-2", starters.length === 4 ? "sm:grid-cols-2" : "sm:grid-cols-3")}>
+                    {starters.map((s) => (
                       <li key={s.label}>
                         <button
                           type="button"
@@ -410,6 +466,7 @@ export function ChatPanel({
                     </div>
                   )}
                   <UserMessage
+                    files={run.input?.attachments}
                     text={run.input?.text || (kind === "workflow" ? "(ran with its inputs)" : "")}
                     onEdit={run.input?.text ? () => {
                       setInput(run.input.text);
@@ -434,7 +491,7 @@ export function ChatPanel({
 
             {pendingText !== null && !liveRun && (
               <div className="flex flex-col gap-4">
-                <UserMessage text={pendingText || "(ran with its inputs)"} />
+                <UserMessage text={pendingText || "(ran with its inputs)"} files={files} />
                 <LiveAnswer name={name} view={{ ...view, timeline: [], approvals: [], output: null, guardrails: [], status: null }} since={null} token={token} stepName={stepName} />
               </div>
             )}
@@ -520,6 +577,16 @@ export function ChatPanel({
             </div>
           )}
 
+          {kind === "agent" && (files.length > 0 || uploading > 0 || fileError) && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {files.map((f) => (
+                <FileChip key={f.id} file={f} onRemove={() => setFiles((cur) => cur.filter((x) => x.id !== f.id))} />
+              ))}
+              {uploading > 0 && <span className="inline-flex items-center gap-1.5 text-[11px] text-zinc-500"><Spinner className="h-3 w-3" /> Reading {uploading} file{uploading === 1 ? "" : "s"}…</span>}
+              {fileError && <span className="text-[11px] text-red-600">{fileError}</span>}
+            </div>
+          )}
+
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -527,6 +594,31 @@ export function ChatPanel({
             }}
             className="flex items-end gap-2 rounded-2xl border border-zinc-300 bg-white px-3 py-2 shadow-sm transition focus-within:border-indigo-400 focus-within:shadow-md"
           >
+            {kind === "agent" && (
+              <>
+                <input
+                  ref={picker}
+                  type="file"
+                  multiple
+                  accept={ACCEPT}
+                  className="hidden"
+                  onChange={(e) => {
+                    void attach(e.target.files);
+                    e.target.value = "";
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => picker.current?.click()}
+                  disabled={busy || files.length >= MAX_FILES}
+                  aria-label="Attach files"
+                  title="Attach a document (PDF, Word, Excel, CSV, text) or an image (JPG, PNG)"
+                  className="mb-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 disabled:opacity-40 cursor-pointer"
+                >
+                  <Paperclip className="h-4 w-4" />
+                </button>
+              </>
+            )}
             <textarea
               ref={composer}
               rows={1}
@@ -573,7 +665,12 @@ export function ChatPanel({
             )}
           </form>
           <p className="text-center text-[10px] text-zinc-400">
-            Runs with your connected accounts. {kind === "agent" ? "It remembers the earlier messages of this chat." : "Each message is a full run."}
+            Runs with your connected accounts.{" "}
+            {kind === "agent"
+              ? remembers
+                ? "It remembers this chat, and what it has learned about you across chats."
+                : "It remembers the earlier messages of this chat."
+              : "Each message is a full run."}
           </p>
         </div>
       </div>

@@ -93,6 +93,31 @@ class GuardrailSettings(_Strict):
         return any((self.injection, self.tool_injection, self.pii_input, self.pii_output, self.groundedness, self.custom_rules))
 
 
+class ChatSettings(_Strict):
+    """What a person sees when they open a chat with the agent."""
+
+    welcome: str = Field(default="", max_length=500)
+    # Suggested first questions, shown as buttons on an empty chat.
+    starters: list[str] = Field(default_factory=list, max_length=4)
+
+    @field_validator("starters")
+    @classmethod
+    def _starters(cls, value: list[str]) -> list[str]:
+        starters = [s.strip() for s in value if s and s.strip()]
+        if any(len(s) > 200 for s in starters):
+            raise ValueError("each starter must be at most 200 characters")
+        return list(dict.fromkeys(starters))
+
+
+class MemorySettings(_Strict):
+    """Long-term memory (``builder.agents.memory``): facts the agent saves
+    about each person it works for, given back to it in their later chats."""
+
+    enabled: bool = False
+    # The most it keeps per person; the oldest go first.
+    max_items: int = Field(default=50, ge=5, le=200)
+
+
 class AgentConfig(_Strict):
     llm: LLMSettings = Field(default_factory=LLMSettings)
     # mcp:<server_id>:<tool_name>
@@ -103,6 +128,11 @@ class AgentConfig(_Strict):
     reliability: ReliabilitySettings = Field(default_factory=ReliabilitySettings)
     approvals: ToolApprovalPolicy = Field(default_factory=ToolApprovalPolicy)
     guardrails: GuardrailSettings = Field(default_factory=GuardrailSettings)
+    chat: ChatSettings = Field(default_factory=ChatSettings)
+    memory: MemorySettings = Field(default_factory=MemorySettings)
+    # Other standalone agents it may hand a task to (each becomes a tool;
+    # see builder.agents.handoff). One level deep: theirs aren't used.
+    sub_agent_ids: list[str] = Field(default_factory=list, max_length=5)
 
     @field_validator("tool_ids")
     @classmethod
@@ -112,7 +142,7 @@ class AgentConfig(_Strict):
             raise ValueError(f"not a tool reference (mcp:<server_id>:<tool_name>): {', '.join(bad[:3])}")
         return list(dict.fromkeys(value))
 
-    @field_validator("knowledge_base_ids")
+    @field_validator("knowledge_base_ids", "sub_agent_ids")
     @classmethod
     def _dedupe(cls, value: list[str]) -> list[str]:
         return list(dict.fromkeys(value))
@@ -173,6 +203,8 @@ __all__ = [
     "ToolSettings",
     "ReliabilitySettings",
     "GuardrailSettings",
+    "ChatSettings",
+    "MemorySettings",
     "apply_profile",
     "merge_config",
 ]

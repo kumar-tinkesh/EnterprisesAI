@@ -58,6 +58,7 @@ class NodeOutcome:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     guardrails: list[dict] = field(default_factory=list)  # an agent step's guardrail findings
+    cost_usd: float | None = None
 
 
 @dataclass
@@ -84,6 +85,8 @@ class StepContext:
     knowledge_base_ids: list[str] = field(default_factory=list)
     # How much answer: "auto" | "short" | "detailed" (only steps that answer the run).
     depth: str = "auto"
+    # Snapshots of the agents its agent steps may hand tasks to (builder.agents.handoff).
+    sub_agents: dict[str, dict] = field(default_factory=dict)
 
     @property
     def node_id(self) -> str:
@@ -156,7 +159,7 @@ async def run_agent_step(ctx: StepContext) -> NodeOutcome:
     agent_ctx = AgentContext(
         run_id=ctx.run_id, node_run_id=ctx.node_run_id, node_id=ctx.node_id, attempt=ctx.attempt,
         user=ctx.user, agent=agent, config=config, input_text=task, approvals=approvals, emit=ctx.emit,
-        dry_run=ctx.dry_run, depth=ctx.depth,
+        dry_run=ctx.dry_run, depth=ctx.depth, sub_agents=ctx.sub_agents,
     )
     try:
         result = await run_agent(agent_ctx)
@@ -168,7 +171,7 @@ async def run_agent_step(ctx: StepContext) -> NodeOutcome:
     return NodeOutcome(
         ok=True, output=result.text, sources=result.sources,
         prompt_tokens=result.prompt_tokens, completion_tokens=result.completion_tokens,
-        guardrails=result.guardrails,
+        guardrails=result.guardrails, cost_usd=result.cost_usd,
     )
 
 

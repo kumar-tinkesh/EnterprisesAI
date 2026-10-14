@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ago, dayLabel, formatDuration, hueOf, initials, runDurationMs, trailSummary } from "@/lib/builder/chat";
+import { AGENT_STARTERS, ago, dayLabel, formatCost, formatDuration, formatTokens, hueOf, initials, runDurationMs, startersFor, trailSummary } from "@/lib/builder/chat";
 import type { RunToolCall } from "@/lib/builder/types";
 
 const call = (patch: Partial<RunToolCall>): RunToolCall => ({
@@ -29,5 +29,15 @@ describe("chat helpers", () => {
     expect(trailSummary({ tool_calls: [] })).toBeNull();
     expect(trailSummary({ tool_calls: [call({})] })).toBe("Used 1 tool");
     expect(trailSummary({ tool_calls: [call({}), call({ status: "failed", is_error: true }), call({ status: "declined" })] })).toBe("Used 3 tools · 1 failed · 1 declined");
+  });
+
+  it("formats cost and tokens", () => {
+    expect([formatCost(null), formatCost(0), formatCost(0.00421), formatCost(0.125), formatCost(12.5)]).toEqual([null, "$0", "$0.0042", "$0.125", "$12.50"]);
+    expect([formatTokens(950), formatTokens(1500), formatTokens(12_400), formatTokens(3_000_000)]).toEqual(["950", "1.5k", "12k", "3M"]);
+  });
+
+  it("uses an agent's own starters when it has them", () => {
+    expect(startersFor(["  Order status ", ""])).toEqual([{ label: "Order status", prompt: "Order status" }]);
+    expect(startersFor([])).toBe(AGENT_STARTERS);
   });
 });

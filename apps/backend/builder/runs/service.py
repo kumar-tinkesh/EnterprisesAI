@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import CurrentUser
 
+from builder.agents.runtime import message_text
 from builder.models import BuilderAgent, BuilderApproval, BuilderNodeRun, BuilderRun, BuilderToolCall
 from builder.runs import states
 from builder.runs.db import as_utc, utcnow
@@ -46,9 +47,14 @@ async def create_run(
     db: AsyncSession, user: CurrentUser, kind: str, target_id: str, *, definition: dict, version: int, text: str,
     variables: dict | None = None, schedule_id: str | None = None, purpose: str = "run", public_key_id: str | None = None,
     depth: str = "auto", conversation_id: str | None = None, history: list[dict] | None = None,
+    attachments: list[dict] | None = None, webhook_id: str | None = None,
 ) -> BuilderRun:
     """Queue a run of an already-frozen ``definition`` (see agent_snapshot /
-    workflow_definition), executing as ``user``."""
+    workflow_definition), executing as ``user``. The agents it may hand tasks
+    to are frozen with it here (builder.agents.handoff)."""
+    from builder.agents.handoff import freeze_sub_agents
+
+    definition = await freeze_sub_agents(db, user.tenant_id, definition)
     run = BuilderRun(
         tenant_id=user.tenant_id,
         owner_id=user.id,
@@ -61,6 +67,8 @@ async def create_run(
             **({"depth": depth} if depth != "auto" else {}),
             # The chat's earlier turns (builder.runs.conversations) — context for an agent run.
             **({"history": history} if history else {}),
+            # Files sent with it: [{id, filename, kind}] (the content stays in builder_attachments).
+            **({"attachments": attachments} if attachments else {}),
         },
         status=states.QUEUED,
         state={},
@@ -68,6 +76,7 @@ async def create_run(
         purpose=purpose,
         public_key_id=public_key_id,
         conversation_id=conversation_id,
+        webhook_id=webhook_id,
     )
     db.add(run)
     await db.commit()
@@ -81,11 +90,12 @@ async def create_agent_run(
     db: AsyncSession, user: CurrentUser, agent: BuilderAgent, *, text: str, variables: dict | None = None,
     schedule_id: str | None = None, purpose: str = "run", depth: str = "auto",
     conversation_id: str | None = None, history: list[dict] | None = None,
+    attachments: list[dict] | None = None, webhook_id: str | None = None,
 ) -> BuilderRun:
     return await create_run(
         db, user, "agent", agent.id, definition={"agent": agent_snapshot(agent)}, version=agent.version,
         text=text, variables=variables, schedule_id=schedule_id, purpose=purpose, depth=depth,
-        conversation_id=conversation_id, history=history,
+        conversation_id=conversation_id, history=history, attachments=attachments, webhook_id=webhook_id,
     )
 
 
@@ -221,13 +231,14 @@ async def run_view(db: AsyncSession, run: BuilderRun, *, detail: bool = True) ->
         "id": run.id, "kind": run.kind, "agent_id": run.agent_id, "workflow_id": run.workflow_id,
         "definition_version": run.definition_version, "status": run.status, "input": run.input,
         "output_text": run.output_text, "output": run.output, "error": run.error,
-        "prompt_tokens": run.prompt_tokens, "completion_tokens": run.completion_tokens,
+        "prompt_tokens": run.prompt_tokens, "completion_tokens": run.completion_tokens, "cost_usd": run.cost_usd,
         "recoveries": run.attempts, "created_at": as_utc(run.created_at), "started_at": as_utc(run.started_at),
         "finished_at": as_utc(run.finished_at),
         "name": ((run.definition or {}).get("agent") or (run.definition or {}).get("workflow") or {}).get("name"),
         "schedule_id": run.schedule_id,
         "purpose": run.purpose,
         "conversation_id": run.conversation_id,
+        "webhook_id": run.webhook_id,
     }
     if not detail:
         return view
@@ -240,7 +251,7 @@ async def run_view(db: AsyncSession, run: BuilderRun, *, detail: bool = True) ->
             "output_text": n.output_text, "error": n.error, "prompt_tokens": n.prompt_tokens,
             "completion_tokens": n.completion_tokens, "started_at": n.started_at, "finished_at": n.finished_at,
             "transcript": [
-                {k: (_cap(v, TRANSCRIPT_CHARS) if k == "content" else v) for k, v in m.items()}
+                {k: (_cap(message_text(v), TRANSCRIPT_CHARS) if k == "content" else v) for k, v in m.items()}
                 for m in (n.state or {}).get("messages", []) if m.get("role") != "system"
             ],
         }
