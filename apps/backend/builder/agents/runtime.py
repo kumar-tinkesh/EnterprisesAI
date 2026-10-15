@@ -78,6 +78,11 @@ _RETRYABLE = {
 }
 
 
+# Tools set to "retry" on failure: tries after the first, and the wait before each.
+TOOL_RETRIES = 2
+TOOL_RETRY_DELAY_SECONDS = 1.0
+
+
 class AgentFailed(Exception):
     """The agent can't finish (model unavailable, a tool failed with on_failure=stop, …)."""
 
@@ -212,6 +217,7 @@ async def _complete(ctx: AgentContext, messages: list[dict], tool_defs: list[dic
             temperature=llm.temperature if llm.temperature is not None else 0.3,
             max_tokens=llm.max_output_tokens,
             stop=llm.stop_sequences or None,
+            reasoning_effort=None if llm.reasoning_effort == "auto" else llm.reasoning_effort,
             tools=[ToolDefinition(**d) for d in tool_defs] if tool_defs else None,
         )
         for attempt in range(1 + rel.retries):
@@ -408,8 +414,16 @@ async def _run_call(
         approvals=ctx.approvals, timeout=ctx.config.tools.timeout_seconds,
         requester=ctx.agent.get("name") or "The agent", emit=ctx.emit, dry_run=ctx.dry_run,
     )
+    key = f"{ctx.node_id}:a{ctx.attempt}:t{turn}:c{index}"
     try:
-        outcome = await ledgered_call(site, tool, f"{ctx.node_id}:a{ctx.attempt}:t{turn}:c{index}", arguments)
+        outcome = await ledgered_call(site, tool, key, arguments)
+        # "retry": a failed call is tried again (each try its own ledger entry,
+        # so a resumed run doesn't repeat one), then handed back like "continue".
+        for retry in range(TOOL_RETRIES if ctx.config.tools.on_failure == "retry" else 0):
+            if not outcome.is_error or outcome.declined:
+                break
+            await asyncio.sleep(TOOL_RETRY_DELAY_SECONDS * (retry + 1))
+            outcome = await ledgered_call(site, tool, f"{key}:r{retry + 1}", arguments)
     except InvalidArguments as exc:
         return "Error: " + exc.message + " " + "; ".join(exc.errors)
     if outcome.is_error and not outcome.declined and ctx.config.tools.on_failure == "stop":

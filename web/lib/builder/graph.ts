@@ -132,6 +132,89 @@ export function removeSteps(
   };
 }
 
+/** The settings a step's overrides switch on: "llm.temperature", "tool_ids", "llm_model", … */
+export function overriddenParams(overrides: Record<string, unknown> | null | undefined): string[] {
+  return Object.entries(overrides ?? {}).flatMap(([k, v]) =>
+    v && typeof v === "object" && !Array.isArray(v) ? Object.keys(v).map((sub) => `${k}.${sub}`) : [k],
+  );
+}
+
+/** Room one step takes on the canvas, with a gap (the cards are 270 wide). */
+const STEP_W = 330;
+const STEP_H = 200;
+
+/** A copy of a step just below it, not yet connected. A trigger has no copy: a workflow has one. */
+export function duplicateStep(nodes: WorkflowNode[], id: string): WorkflowNode | null {
+  const src = nodes.find((n) => n.id === id);
+  if (!src || isTrigger(src.type)) return null;
+  const copy: WorkflowNode = structuredClone(src);
+  copy.id = uniqueId("n", nodes.map((n) => n.id));
+  copy.position = freeSpot(nodes, { x: (src.position?.x ?? 0) + 40, y: (src.position?.y ?? 0) + STEP_H });
+  if (src.label) copy.label = `${src.label} (copy)`;
+  return copy;
+}
+
+/** Whether a step can be followed by a one-tap "Next" (a condition's lines need a branch chosen). */
+export function canAddAfter(type: NodeType): boolean {
+  return type !== "output" && type !== "condition";
+}
+
+/**
+ * A new step right after ``sourceId``. When that step leads to exactly one
+ * other, the new one goes in between and everything after it moves right to
+ * make room; otherwise it's added as one more line out of it.
+ */
+export function insertAfter(
+  nodes: WorkflowNode[],
+  edges: WorkflowEdge[],
+  sourceId: string,
+  type: NodeType,
+): { nodes: WorkflowNode[]; edges: WorkflowEdge[]; id: string } | null {
+  const src = nodes.find((n) => n.id === sourceId);
+  if (!src || !canAddAfter(src.type) || isTrigger(type)) return null;
+  const at = src.position ?? { x: 0, y: 0 };
+  const out = edges.filter((e) => e.source === sourceId);
+  const between = out.length === 1 && type !== "output";
+
+  let placed = nodes;
+  if (between) {
+    const after = downstream(edges, out[0].target);
+    after.delete(sourceId); // a loop back to the source keeps it where it is
+    placed = nodes.map((n) => (after.has(n.id) ? { ...n, position: { x: (n.position?.x ?? 0) + STEP_W, y: n.position?.y ?? 0 } } : n));
+  }
+  const node = newNode(type, placed, between ? { x: at.x + STEP_W, y: at.y } : freeSpot(placed, { x: at.x + STEP_W, y: at.y }));
+  const all = [...placed, node];
+  let next = between ? edges.filter((e) => e.id !== out[0].id) : edges;
+  next = connect(all, next, sourceId, node.id);
+  if (between) next = connect(all, next, node.id, out[0].target);
+  return { nodes: all, edges: next, id: node.id };
+}
+
+/** ``start`` and every step reachable from it. */
+function downstream(edges: WorkflowEdge[], start: string): Set<string> {
+  const seen = new Set([start]);
+  const queue = [start];
+  while (queue.length) {
+    const id = queue.shift()!;
+    for (const e of edges) {
+      if (e.source === id && !seen.has(e.target)) {
+        seen.add(e.target);
+        queue.push(e.target);
+      }
+    }
+  }
+  return seen;
+}
+
+/** ``want``, or the nearest spot below it that no step covers. */
+function freeSpot(nodes: WorkflowNode[], want: { x: number; y: number }): { x: number; y: number } {
+  const taken = (p: { x: number; y: number }) =>
+    nodes.some((n) => Math.abs((n.position?.x ?? 0) - p.x) < STEP_W - 40 && Math.abs((n.position?.y ?? 0) - p.y) < STEP_H - 10);
+  let spot = want;
+  for (let i = 0; i < 20 && taken(spot); i++) spot = { x: spot.x, y: spot.y + STEP_H };
+  return spot;
+}
+
 export function updateStep(nodes: WorkflowNode[], id: string, patch: Partial<WorkflowNode>): WorkflowNode[] {
   return nodes.map((n) => (n.id === id ? { ...n, ...patch } : n));
 }

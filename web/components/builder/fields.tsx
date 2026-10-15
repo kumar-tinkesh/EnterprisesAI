@@ -51,6 +51,81 @@ export function Toggle({ checked, onChange, label }: { checked: boolean; onChang
   );
 }
 
+/** An on/off switch (the step popup's Override). */
+export function Switch({ checked, onChange, label, disabled }: { checked: boolean; onChange: (v: boolean) => void; label: string; disabled?: boolean }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+      onClick={(e) => {
+        e.stopPropagation();
+        onChange(!checked);
+      }}
+      className={cn(
+        "relative inline-flex h-4 w-7 shrink-0 cursor-pointer items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+        checked ? "bg-indigo-600" : "bg-zinc-300",
+      )}
+    >
+      <span className={cn("inline-block h-3 w-3 rounded-full bg-white shadow transition-transform", checked ? "translate-x-3.5" : "translate-x-0.5")} />
+    </button>
+  );
+}
+
+/** Set by a workflow step's popup: each setting gets its own switch, and only
+ *  settings switched on are the step's own (the rest are the agent's). */
+export const OverrideParams = React.createContext<{ isOn: (key: string) => boolean; toggle: (key: string, on: boolean) => void } | null>(null);
+
+/** One setting. Normally a plain field; inside ``OverrideParams`` a card with
+ *  its name and a switch, showing the control only while switched on. */
+export function Param({ k, label, hint, children }: { k: string; label: string; hint?: string; children: React.ReactNode }) {
+  const params = React.useContext(OverrideParams);
+  if (!params) return <Field label={label} hint={hint}>{children}</Field>;
+  const on = params.isOn(k);
+  return (
+    <div className="rounded-lg border border-zinc-200 bg-white px-2.5 py-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className={cn("text-xs font-medium", on ? "text-zinc-900" : "text-zinc-600")}>{label}</span>
+        <Switch label={`Override ${label} for this step`} checked={on} onChange={(v) => params.toggle(k, v)} />
+      </div>
+      {on && (
+        <div className="mt-2">{children}</div>
+      )}
+    </div>
+  );
+}
+
+/** An on/off setting: a checkbox normally, an On/Off choice as a step override. */
+export function BoolParam({ k, label, checked, onChange }: { k: string; label: string; checked: boolean; onChange: (v: boolean) => void }) {
+  const params = React.useContext(OverrideParams);
+  if (!params) return <Toggle label={label} checked={checked} onChange={onChange} />;
+  return (
+    <Param k={k} label={label}>
+      <div className="flex gap-1">
+        {([true, false] as const).map((v) => (
+          <button
+            key={String(v)}
+            type="button"
+            onClick={() => onChange(v)}
+            className={cn("rounded-md px-2.5 py-1 text-[11px] font-medium cursor-pointer", checked === v ? "bg-indigo-600 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200")}
+          >
+            {v ? "On" : "Off"}
+          </button>
+        ))}
+      </div>
+    </Param>
+  );
+}
+
+/** Two fields side by side (stacked when each is a step-override card). */
+export function Pair({ children }: { children: React.ReactNode }) {
+  const params = React.useContext(OverrideParams);
+  return <div className={params ? "space-y-2" : "grid grid-cols-2 gap-2"}>{children}</div>;
+}
+
 /** Inside a provider set to true, sections drop their own heading and padding —
  *  for hosts (the guided agent setup) that put each section in their own card. */
 export const BareSections = React.createContext(false);
@@ -66,7 +141,7 @@ export function Section({ title, children, action }: { title: string; children: 
     );
   }
   return (
-    <section className="space-y-3 border-b border-zinc-100 px-4 py-4 last:border-0">
+    <section className="space-y-3 border-b border-zinc-100 px-3.5 py-3.5 last:border-0">
       <div className="flex items-center justify-between">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">{title}</h3>
         {action}

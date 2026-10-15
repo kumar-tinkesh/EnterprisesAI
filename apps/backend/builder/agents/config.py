@@ -183,6 +183,18 @@ def apply_profile(config: dict | None, profile: str) -> dict:
     return merge_config(config, preset["config"])
 
 
+# A workflow step may also run its agent on another model. These sit in the
+# step's ``config_overrides`` beside the config keys, but belong to the agent.
+STEP_MODEL_KEYS = ("llm_provider", "llm_model")
+
+
+def split_step_overrides(overrides: dict | None) -> tuple[dict, dict]:
+    """A step's overrides as (config overrides, {llm_provider/llm_model it sets})."""
+    config = {k: v for k, v in (overrides or {}).items() if k not in STEP_MODEL_KEYS}
+    model = {k: (overrides or {})[k] for k in STEP_MODEL_KEYS if (overrides or {}).get(k)}
+    return config, model
+
+
 def merge_config(base: dict | None, overrides: dict | None) -> dict:
     """An agent's config with a workflow step's ``config_overrides`` on top —
     nested sections merge key by key; lists and scalars are replaced."""
@@ -207,4 +219,6 @@ __all__ = [
     "MemorySettings",
     "apply_profile",
     "merge_config",
+    "split_step_overrides",
+    "STEP_MODEL_KEYS",
 ]

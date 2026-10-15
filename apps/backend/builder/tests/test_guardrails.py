@@ -92,6 +92,8 @@ async def test_groundedness(monkeypatch):
     monkeypatch.setattr(engine, "similarity", lambda answer, evidence: score(0.2))
     fast = await engine.check_output("Made up", ["The refund window is 30 days."], GuardrailSettings(groundedness=True), None)
     assert fast.flags[0].rule == "ungrounded" and "0.20" in fast.flags[0].message
+    lenient = await engine.check_output("Made up", ["The refund window is 30 days."], GuardrailSettings(groundedness=True, groundedness_min=0.1), None)
+    assert lenient.flags == []  # the bar is the agent's own
 
     judge, calls = _judge('{"supported": false, "unsupported_claims": ["It is 60 days"], "reason": "source says 30"}')
     strict = GuardrailSettings(groundedness=True, groundedness_mode="llm", on_violation="block")

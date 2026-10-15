@@ -141,6 +141,77 @@ async def start_workflow_run(
     return await run_view(db, run, detail=False)
 
 
+class StepTest(BaseModel):
+    """One step of a workflow as it is on the canvas (saved or not) and what to give it."""
+
+    node: dict[str, Any]
+    input: str = Field(default="", max_length=20_000)
+    variables: dict[str, Any] = Field(default_factory=dict)
+
+
+# Steps that do something by themselves (a condition or an approval only means something between other steps).
+TESTABLE_STEPS = ("agent", "tool")
+
+
+@router.post("/workflows/{workflow_id}/steps/test", status_code=202)
+async def test_workflow_step(
+    workflow_id: str,
+    payload: StepTest,
+    user: CurrentUser = Depends(get_end_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Run one step by itself: input → the step → output, on the normal queue.
+
+    The step is taken as sent, so unsaved edits (overrides, a new agent still
+    being drafted, pinned tool values) are what runs. It's a real run (tools
+    really act), kept out of run history and the person's memory
+    (``purpose="step"``)."""
+    from builder.api.v1.workflows import _get_workflow
+    from builder.agents.config import AgentConfig
+    from builder.graph.schema import WorkflowConfig, WorkflowEdge, WorkflowNode
+    from builder.runs.service import create_run, workflow_definition
+    from builder.services.references import check_workflow
+
+    wf = await _get_workflow(db, workflow_id, user)
+    try:
+        node = WorkflowNode.model_validate(payload.node)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"This step isn't valid: {exc}") from exc
+    if node.type not in TESTABLE_STEPS:
+        raise HTTPException(status_code=422, detail="Only agent and tool steps can be tested on their own.")
+    node = node.model_copy(update={"id": "step", "retry": None})
+    nodes = [WorkflowNode(id="in", type="input"), node, WorkflowNode(id="out", type="output")]
+    edges = [WorkflowEdge(id="e1", source="in", target="step"), WorkflowEdge(id="e2", source="step", target="out")]
+    config = WorkflowConfig.model_validate(wf.config or {})
+    problems = await check_workflow(db, user, workflow_id=wf.id, nodes=nodes, edges=edges, config=config, check_connection=True)
+    if problems:
+        return problems_response("This step can't run yet.", problems)
+
+    snapshot = {
+        "id": wf.id, "name": f"{wf.name} · {node.label or node.type.replace('_', ' ')}",
+        "nodes": [n.model_dump(mode="json", exclude_none=True) for n in nodes],
+        "edges": [e.model_dump(mode="json", exclude_none=True) for e in edges],
+        "config": config.model_dump(mode="json"), "version": wf.version,
+    }
+    frozen: dict[str, dict] = {}
+    if node.type == "agent" and node.draft_agent is not None:
+        # A new agent isn't saved until the workflow is: it runs from its draft.
+        draft, draft_id = node.draft_agent, f"draft-{wf.id}"
+        frozen[draft_id] = {
+            "id": draft_id, "name": draft.name, "role": draft.role, "goal": draft.goal,
+            "instructions": draft.instructions or "", "llm_provider": draft.llm_provider or "",
+            "llm_model": draft.llm_model or "", "config": AgentConfig.model_validate(draft.config).model_dump(), "version": 0,
+        }
+        snapshot["nodes"][1] = {**snapshot["nodes"][1], "agent_id": draft_id}
+        snapshot["nodes"][1].pop("draft_agent", None)
+    definition = await workflow_definition(db, user.tenant_id, snapshot, frozen)
+    run = await create_run(
+        db, user, "workflow", wf.id, definition=definition, version=wf.version,
+        text=payload.input, variables=payload.variables, purpose="step",
+    )
+    return await run_view(db, run, detail=False)
+
+
 @router.get("/runs")
 async def list_runs(
     agent_id: str | None = None,

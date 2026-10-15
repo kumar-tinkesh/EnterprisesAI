@@ -20,7 +20,7 @@ export interface ApprovalPolicy {
 }
 
 export interface AgentConfig {
-  llm?: { temperature?: number | null; max_output_tokens?: number | null; reasoning_effort?: string };
+  llm?: { temperature?: number | null; max_output_tokens?: number | null; reasoning_effort?: string; stop_sequences?: string[] };
   tool_ids?: string[];
   knowledge_base_ids?: string[];
   response?: { tone?: string; verbosity?: string; language?: string; citations?: string; formats?: string[] };

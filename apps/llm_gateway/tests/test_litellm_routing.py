@@ -177,6 +177,23 @@ async def test_complete_calls_litellm_with_prefix_and_api_key():
 
 
 @pytest.mark.asyncio
+async def test_reasoning_effort_goes_only_to_models_that_reason():
+    sent: dict[str, dict] = {}
+
+    async def fake_acompletion(**kwargs):
+        sent[kwargs["model"]] = kwargs
+        return _completion_resp(model=kwargs["model"])
+
+    with patch("litellm.acompletion", new=fake_acompletion):
+        for model in ("o4-mini", "gpt-4.1-mini"):
+            client = OpenAIClient(ProviderConfig(api_key="sk", default_model=model))
+            await client.complete(CompletionRequest(messages=[Message(role=Role.USER, content="Hi")], reasoning_effort="high"))
+
+    assert sent["openai/o4-mini"]["reasoning_effort"] == "high"
+    assert "reasoning_effort" not in sent["openai/gpt-4.1-mini"]  # it would reject the parameter
+
+
+@pytest.mark.asyncio
 async def test_complete_extracts_reasoning_and_tool_calls():
     client = OpenAIClient(ProviderConfig(api_key="sk"))
     resp_obj = _completion_resp(

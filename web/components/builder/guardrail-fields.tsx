@@ -1,12 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useContext, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Plus, ShieldCheck, Sparkles, X } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
-import { Field, Section, Select, Toggle } from "@/components/builder/fields";
+import { BoolParam, OverrideParams, Param, Section, Select } from "@/components/builder/fields";
 import { builderApi } from "@/lib/builder/api";
 import type { DraftAgent, GuardrailSettings } from "@/lib/builder/types";
 
@@ -30,6 +30,7 @@ export function GuardrailFields({
   const [reasoning, setReasoning] = useState<string | null>(null);
   const rules = value.custom_rules ?? [];
   const set = (patch: Partial<GuardrailSettings>) => onChange({ ...value, ...patch });
+  const inStep = !!useContext(OverrideParams);
   const addRule = () => {
     const r = rule.trim();
     if (r && !rules.includes(r) && rules.length < 10) set({ custom_rules: [...rules, r] });
@@ -53,7 +54,7 @@ export function GuardrailFields({
     <Section
       title="Guardrails"
       action={
-        !readOnly && (
+        !readOnly && !inStep && (
           <button
             type="button"
             disabled={suggest.isPending || !agent.goal?.trim()}
@@ -73,27 +74,47 @@ export function GuardrailFields({
       )}
       {suggest.isError && <p className="text-xs text-red-600">{suggest.error instanceof Error ? suggest.error.message : "Couldn't suggest guardrails."}</p>}
 
-      <Toggle label="Refuse requests that try to override its instructions" checked={!!value.injection} onChange={(v) => set({ injection: v })} />
-      <Toggle label="Treat instructions inside tool results as data" checked={!!value.tool_injection} onChange={(v) => set({ tool_injection: v })} />
-      <p className="-mt-1.5 pl-6 text-[11px] text-zinc-400">For tools that read emails, web pages or documents other people wrote.</p>
-      <Toggle label="Hide personal data from the model" checked={!!value.pii_input} onChange={(v) => set({ pii_input: v })} />
-      <Toggle label="Hide personal data in answers" checked={!!value.pii_output} onChange={(v) => set({ pii_output: v })} />
-      <p className="-mt-1.5 pl-6 text-[11px] text-zinc-400">Emails, phone numbers, cards, Aadhaar, PAN, API keys.</p>
+      <BoolParam k="guardrails.injection" label="Refuse requests that try to override its instructions" checked={!!value.injection} onChange={(v) => set({ injection: v })} />
+      <BoolParam k="guardrails.tool_injection" label="Treat instructions inside tool results as data" checked={!!value.tool_injection} onChange={(v) => set({ tool_injection: v })} />
+      {!inStep && <p className="-mt-1.5 pl-6 text-[11px] text-zinc-400">For tools that read emails, web pages or documents other people wrote.</p>}
+      <BoolParam k="guardrails.pii_input" label="Hide personal data from the model" checked={!!value.pii_input} onChange={(v) => set({ pii_input: v })} />
+      <BoolParam k="guardrails.pii_output" label="Hide personal data in answers" checked={!!value.pii_output} onChange={(v) => set({ pii_output: v })} />
+      {!inStep && <p className="-mt-1.5 pl-6 text-[11px] text-zinc-400">Emails, phone numbers, cards, Aadhaar, PAN, API keys.</p>}
 
-      <Toggle
+      <BoolParam
+        k="guardrails.groundedness"
         label="Check answers against its knowledge"
         checked={!!value.groundedness}
         onChange={(v) => set({ groundedness: v })}
       />
       {!hasKnowledge && value.groundedness && <p className="-mt-1.5 pl-6 text-[11px] text-amber-700">Pick a knowledge base above — there's nothing to check against yet.</p>}
       {value.groundedness && (
-        <Select className="ml-6 w-[calc(100%-1.5rem)]" value={value.groundedness_mode ?? "fast"} onChange={(e) => set({ groundedness_mode: e.target.value as "fast" | "llm" })}>
-          <option value="fast">Quick — catches answers that leave the documents</option>
-          <option value="llm">Strict — checks every claim (one extra model call)</option>
-        </Select>
+        <Param k="guardrails.groundedness_mode" label="How it checks">
+          <Select value={value.groundedness_mode ?? "fast"} onChange={(e) => set({ groundedness_mode: e.target.value as "fast" | "llm" })}>
+            <option value="fast">Quick — catches answers that leave the documents</option>
+            <option value="llm">Strict — checks every claim (one extra model call)</option>
+          </Select>
+        </Param>
+      )}
+      {value.groundedness && (value.groundedness_mode ?? "fast") === "fast" && (
+        <Param k="guardrails.groundedness_min" label="How close to the documents">
+        <label className="flex items-center gap-2 text-[11px] text-zinc-600">
+          <input
+            type="range"
+            min={0.2}
+            max={0.8}
+            step={0.05}
+            value={value.groundedness_min ?? 0.45}
+            onChange={(e) => set({ groundedness_min: Number(e.target.value) })}
+            className="flex-1 accent-indigo-600"
+            aria-label="How close an answer must stay to the documents"
+          />
+          <span className="w-8 text-right font-mono">{(value.groundedness_min ?? 0.45).toFixed(2)}</span>
+        </label>
+        </Param>
       )}
 
-      <Field label="Rules it must follow" hint="Told to the agent and checked on every answer (one extra model call).">
+      <Param k="guardrails.custom_rules" label="Rules it must follow" hint="Told to the agent and checked on every answer (one extra model call).">
         <div className="space-y-1.5">
           {rules.map((r) => (
             <div key={r} className="flex items-start gap-1.5 rounded-md bg-zinc-50 px-2 py-1.5 text-xs text-zinc-800">
@@ -126,15 +147,15 @@ export function GuardrailFields({
             </div>
           )}
         </div>
-      </Field>
+      </Param>
 
       {judged && (
-        <Field label="When a rule is broken or a claim isn't supported">
+        <Param k="guardrails.on_violation" label="When a rule is broken or a claim isn't supported">
           <Select value={value.on_violation ?? "flag"} onChange={(e) => set({ on_violation: e.target.value as "flag" | "block" })}>
             <option value="flag">Show the answer with a warning</option>
             <option value="block">Withhold the answer</option>
           </Select>
-        </Field>
+        </Param>
       )}
     </Section>
   );

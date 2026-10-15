@@ -54,6 +54,14 @@ litellm.suppress_debug_logging = True
 logger = logging.getLogger("llm_gateway.litellm")
 
 
+
+def _reasons(model: str) -> bool:
+    """Whether ``model`` takes a reasoning effort (others reject the parameter)."""
+    try:
+        return bool(litellm.supports_reasoning(model=model))
+    except Exception:  # noqa: BLE001 — an unknown model just doesn't get it
+        return False
+
 class LiteLLMClient(BaseLLMClient):
     """
     Base implementation backed by LiteLLM.
@@ -310,6 +318,8 @@ class LiteLLMClient(BaseLLMClient):
             kwargs["tool_choice"] = request.tool_choice
         if request.response_format:
             kwargs["response_format"] = request.response_format
+        if request.reasoning_effort and _reasons(model):
+            kwargs["reasoning_effort"] = request.reasoning_effort
         return kwargs
 
     @staticmethod

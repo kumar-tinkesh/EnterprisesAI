@@ -141,6 +141,8 @@ async def execute_workflow(run: BuilderRun, user: CurrentUser, worker_id: str) -
     step_extras = dict(
         dry_run=dry_run, approval_overrides=config.approval_overrides,
         knowledge_base_ids=config.knowledge_base_ids(), sub_agents=run.definition.get("sub_agents") or {},
+        # As for an agent's run: someone else's request (public, webhook) doesn't touch the owner's memory.
+        memory=run.purpose in ("run", "test") and not run.webhook_id,
     )
 
     async def run_step(node_id: str, node_run_id: str, attempt: int) -> NodeOutcome:

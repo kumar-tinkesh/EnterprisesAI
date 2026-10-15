@@ -26,7 +26,7 @@ from sqlalchemy import select
 
 from src.api.deps import CurrentUser
 
-from builder.agents.config import AgentConfig, merge_config
+from builder.agents.config import AgentConfig, merge_config, split_step_overrides
 from builder.agents.runtime import AgentContext, AgentFailed, GuardrailBlocked, run_agent
 from builder.agents.tools import resolve_agent_tools
 from builder.graph.condition_rules import eval_rule, normalize_condition_config
@@ -87,6 +87,8 @@ class StepContext:
     depth: str = "auto"
     # Snapshots of the agents its agent steps may hand tasks to (builder.agents.handoff).
     sub_agents: dict[str, dict] = field(default_factory=dict)
+    # Agent steps may use their agent's long-term memory (a person's own run, not a public/webhook one).
+    memory: bool = False
 
     @property
     def node_id(self) -> str:
@@ -140,7 +142,10 @@ async def run_agent_step(ctx: StepContext) -> NodeOutcome:
     agent = ctx.agents.get(ctx.node.get("agent_id") or "")
     if agent is None:
         return NodeOutcome(ok=False, error="The agent for this step is missing from the run's definition.")
-    config = AgentConfig.model_validate(merge_config(agent.get("config") or {}, ctx.node.get("config_overrides") or {}))
+    overrides, model = split_step_overrides(ctx.node.get("config_overrides"))
+    config = AgentConfig.model_validate(merge_config(agent.get("config") or {}, overrides))
+    if model:
+        agent = {**agent, **model}
     if ctx.knowledge_base_ids:
         config.knowledge_base_ids = list(dict.fromkeys(config.knowledge_base_ids + ctx.knowledge_base_ids))[:20]
     # The stricter of the agent's and the workflow's approval rules applies,
@@ -159,7 +164,7 @@ async def run_agent_step(ctx: StepContext) -> NodeOutcome:
     agent_ctx = AgentContext(
         run_id=ctx.run_id, node_run_id=ctx.node_run_id, node_id=ctx.node_id, attempt=ctx.attempt,
         user=ctx.user, agent=agent, config=config, input_text=task, approvals=approvals, emit=ctx.emit,
-        dry_run=ctx.dry_run, depth=ctx.depth, sub_agents=ctx.sub_agents,
+        dry_run=ctx.dry_run, depth=ctx.depth, sub_agents=ctx.sub_agents, memory=ctx.memory,
     )
     try:
         result = await run_agent(agent_ctx)

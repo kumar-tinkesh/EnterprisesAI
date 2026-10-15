@@ -118,6 +118,18 @@ export function WorkflowSettings({
                   </label>
                 </div>
               )}
+              <label className="block">
+                <span className="mb-1 block text-[11px] font-medium text-zinc-600">Most steps per run</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={500}
+                  className={selectCls}
+                  value={config.max_steps ?? 50}
+                  onChange={(e) => set({ max_steps: Math.min(500, Math.max(1, Number(e.target.value) || 50)) })}
+                />
+                <span className="mt-1 block text-[10.5px] text-zinc-500">Stops a loop that never ends (a condition that keeps going back).</span>
+              </label>
               <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-zinc-200 bg-zinc-50 p-2.5">
                 <input type="checkbox" className="mt-0.5 h-4 w-4 accent-indigo-600" checked={!!config.include_step_summary} onChange={(e) => set({ include_step_summary: e.target.checked })} />
                 <span>

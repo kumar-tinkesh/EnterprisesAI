@@ -1,11 +1,12 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Plus, Trash2, X } from "lucide-react";
+import { useState } from "react";
+import { AlertTriangle, ChevronDown, ChevronRight, Plus, Trash2, X } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AgentStepConfig } from "@/components/builder/agent-step-config";
+import { NODE_LOOK } from "@/components/builder/flow-node";
 import { Field, JsonField, RiskBadge, Section, Select, Textarea, Toggle } from "@/components/builder/fields";
 import { WorkflowScheduleFields } from "@/components/builder/schedule-fields";
 import { ToolPicker } from "@/components/builder/tool-picker";
@@ -17,7 +18,6 @@ import type {
   ConditionRule,
   InputVariable,
   Problem,
-  WorkflowConfig,
   WorkflowEdge,
   WorkflowNode,
 } from "@/lib/builder/types";
@@ -27,7 +27,7 @@ const RULE_OPS = ["contains", "not_contains", "equals", "not_equals", "starts_wi
 function Problems({ problems }: { problems: Problem[] }) {
   if (!problems.length) return null;
   return (
-    <div className="space-y-1 border-b border-red-100 bg-red-50 px-4 py-3">
+    <div className="space-y-1 border-b border-red-100 bg-red-50 px-3.5 py-2.5">
       {problems.map((p, i) => (
         <p key={i} className="flex gap-1.5 text-xs text-red-700">
           <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
@@ -38,16 +38,55 @@ function Problems({ problems }: { problems: Problem[] }) {
   );
 }
 
-function PanelHeader({ title, subtitle, onClose }: { title: string; subtitle?: string; onClose: () => void }) {
+function PanelHeader({
+  title,
+  subtitle,
+  Icon,
+  onDelete,
+  deleteLabel = "Delete step",
+  onClose,
+}: {
+  title: string;
+  subtitle?: string;
+  Icon?: typeof X;
+  onDelete?: () => void;
+  deleteLabel?: string;
+  onClose: () => void;
+}) {
   return (
-    <div className="flex items-start justify-between border-b border-zinc-200 px-4 py-3">
-      <div>
-        <h2 className="text-sm font-semibold text-zinc-900">{title}</h2>
-        {subtitle && <p className="text-xs text-zinc-500">{subtitle}</p>}
+    <div className="flex items-center gap-2.5 border-b border-zinc-200 px-3.5 py-2.5">
+      {Icon && (
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600"><Icon className="h-3.5 w-3.5" /></span>
+      )}
+      <div className="min-w-0 flex-1">
+        <h2 className="truncate text-sm font-semibold text-zinc-900">{title}</h2>
+        {subtitle && <p className="truncate text-[11px] text-zinc-500">{subtitle}</p>}
       </div>
-      <button type="button" aria-label="Close" onClick={onClose} className="text-zinc-400 hover:text-zinc-700 cursor-pointer">
-        <X className="h-4 w-4" />
+      {onDelete && (
+        <button type="button" aria-label={deleteLabel} title={deleteLabel} onClick={onDelete} className="rounded-md p-1.5 text-zinc-400 hover:bg-red-50 hover:text-red-600 cursor-pointer">
+          <Trash2 className="h-3.5 w-3.5" />
+        </button>
+      )}
+      <button type="button" aria-label="Close" title="Close" onClick={onClose} className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 cursor-pointer">
+        <X className="h-3.5 w-3.5" />
       </button>
+    </div>
+  );
+}
+
+/** A part of the popup that folds away, with a one-line summary while folded. */
+function Fold({ title, summary, defaultOpen = false, children }: { title: string; summary: string; defaultOpen?: boolean; children: React.ReactNode }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="border-b border-zinc-100">
+      <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="flex w-full items-center gap-2 px-3.5 py-2.5 text-left cursor-pointer hover:bg-zinc-50">
+        <span className="min-w-0 flex-1">
+          <span className="block text-xs font-semibold text-zinc-900">{title}</span>
+          {!open && <span className="block truncate text-[11px] text-zinc-500">{summary}</span>}
+        </span>
+        {open ? <ChevronDown className="h-4 w-4 text-zinc-400" /> : <ChevronRight className="h-4 w-4 text-zinc-400" />}
+      </button>
+      {open && <div className="space-y-3 px-3.5 pb-3.5">{children}</div>}
     </div>
   );
 }
@@ -88,16 +127,26 @@ export function StepInspector({
     return n ? n.label || (n.type === "agent" ? n.draft_agent?.name || agents[n.agent_id ?? ""]?.name : null) || NODE_META[n.type].title : id;
   };
 
+  const retries = !isTrigger(node.type) && node.type !== "output" && node.type !== "join";
+  const attempts = node.retry?.max_attempts ?? 1;
+  // A saved agent's step keeps its name and attempts in its Agent overview.
+  const inOverview = node.type === "agent" && !node.draft_agent && !!node.agent_id && !!agents[node.agent_id];
   return (
-    <div className="flex h-full flex-col">
-      <PanelHeader title={meta.title} subtitle={meta.hint} onClose={onClose} />
+    <div className="flex max-h-full min-h-0 flex-col">
+      <PanelHeader
+        title={node.label || meta.title}
+        subtitle={node.label ? meta.title : meta.hint}
+        Icon={NODE_LOOK[node.type].Icon}
+        onDelete={isTrigger(node.type) ? undefined : onDelete}
+        onClose={onClose}
+      />
       <Problems problems={problems} />
-      <div className="flex-1 overflow-y-auto">
-        <Section title="Step">
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {!inOverview && <Fold title={retries ? "Name and retries" : "Name"} summary={`${node.label || "No label"}${retries ? ` · ${attempts === 1 ? "no retry" : `${attempts} attempts`}` : ""}`}>
           <Field label="Label" hint="Shown on the canvas and in run history.">
             <Input className="h-9" value={node.label ?? ""} placeholder={meta.title} onChange={(e) => onChange({ label: e.target.value || null })} />
           </Field>
-          {!isTrigger(node.type) && node.type !== "output" && node.type !== "join" && (
+          {retries && (
             <Field label="Attempts if it fails">
               <Input
                 className="h-9"
@@ -112,7 +161,7 @@ export function StepInspector({
               />
             </Field>
           )}
-        </Section>
+        </Fold>}
 
         {isTrigger(node.type) && (
           <Section title="Starts">
@@ -189,13 +238,6 @@ export function StepInspector({
           </Section>
         )}
       </div>
-      {!isTrigger(node.type) && (
-        <div className="border-t border-zinc-200 p-3">
-          <Button variant="outline" size="sm" className="w-full text-red-600" onClick={onDelete}>
-            <Trash2 /> Delete step
-          </Button>
-        </div>
-      )}
     </div>
   );
 }
@@ -363,58 +405,15 @@ export function EdgeInspector({
   onClose: () => void;
 }) {
   return (
-    <div className="flex h-full flex-col">
-      <PanelHeader title="Line" subtitle={`${edge.source} → ${edge.target}`} onClose={onClose} />
+    <div className="flex max-h-full min-h-0 flex-col">
+      <PanelHeader title="Line" subtitle={`${edge.source} → ${edge.target}`} onDelete={onDelete} deleteLabel="Remove line" onClose={onClose} />
       {fromCondition && (
         <Section title="Branch label">
           <Input className="h-9" value={edge.condition ?? ""} onChange={(e) => onChange({ condition: e.target.value || null })} />
           <p className="text-xs text-zinc-400">In AI mode the condition picks a line by this label.</p>
         </Section>
       )}
-      <div className="p-3">
-        <Button variant="outline" size="sm" className="w-full text-red-600" onClick={onDelete}>
-          <Trash2 /> Remove line
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-// ── Workflow settings ────────────────────────────────────────────────────────
-
-export function SettingsPanel({ config, onChange, onClose }: { config: WorkflowConfig; onChange: (c: WorkflowConfig) => void; onClose: () => void }) {
-  const approvals = { read: false, edit: true, delete: true, ...(config.approvals ?? {}) };
-  return (
-    <div className="flex h-full flex-col">
-      <PanelHeader title="Workflow settings" onClose={onClose} />
-      <div className="flex-1 overflow-y-auto">
-        <Section title="When a step fails">
-          <Select value={config.on_node_failure ?? "abort"} onChange={(e) => onChange({ ...config, on_node_failure: e.target.value as WorkflowConfig["on_node_failure"] })}>
-            <option value="abort">Stop the run</option>
-            <option value="retry">Try again, then stop</option>
-            <option value="skip">Skip it and carry on</option>
-          </Select>
-          {config.on_node_failure === "retry" && (
-            <Field label="Extra attempts">
-              <Input className="h-9" type="number" min={0} max={5} value={config.node_retry_count ?? 0} onChange={(e) => onChange({ ...config, node_retry_count: Number(e.target.value) || 0 })} />
-            </Field>
-          )}
-        </Section>
-        <Section title="Limits">
-          <Field label="Longest run (seconds of work)" hint="Time spent waiting for approvals doesn't count.">
-            <Input className="h-9" type="number" min={30} value={config.max_run_seconds ?? 1800} onChange={(e) => onChange({ ...config, max_run_seconds: Number(e.target.value) || 1800 })} />
-          </Field>
-          <Field label="Most steps per run" hint="Stops a loop that never exits.">
-            <Input className="h-9" type="number" min={1} max={500} value={config.max_steps ?? 50} onChange={(e) => onChange({ ...config, max_steps: Number(e.target.value) || 50 })} />
-          </Field>
-        </Section>
-        <Section title="Ask me before tool steps run">
-          <Toggle label="Tools that only read" checked={approvals.read} onChange={(v) => onChange({ ...config, approvals: { ...approvals, read: v } })} />
-          <Toggle label="Tools that change data" checked={approvals.edit} onChange={(v) => onChange({ ...config, approvals: { ...approvals, edit: v } })} />
-          <Toggle label="Tools that delete" checked={approvals.delete} onChange={(v) => onChange({ ...config, approvals: { ...approvals, delete: v } })} />
-          <p className="text-xs text-zinc-400">Agent steps also follow their own agent&apos;s rules — the stricter of the two applies.</p>
-        </Section>
-      </div>
+      {!fromCondition && <p className="px-3.5 py-3 text-xs text-zinc-500">A plain line: the next step gets this one&apos;s output.</p>}
     </div>
   );
 }

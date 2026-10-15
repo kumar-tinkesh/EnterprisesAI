@@ -12,14 +12,13 @@ import {
   ReactFlowProvider,
   useReactFlow,
   type Connection,
-  type Edge,
   type EdgeChange,
   type NodeChange,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import {
   AlertTriangle, AlignLeft, ArrowLeft, Check, ChevronDown, Eye, FlaskConical, Globe, History, Layers, LayoutGrid, MessageSquare,
-  Play, Plus, RotateCcw, Save, Send, Settings2, ShieldCheck, Wand2, X,
+  Play, Plus, Redo2, RotateCcw, Save, Send, Settings2, ShieldCheck, Undo2, Wand2, X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -27,11 +26,13 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { ApprovalCard } from "@/components/builder/approval-card";
 import { BuildBar, barButton, barInput } from "@/components/builder/build-bar";
+import { flowEdgeTypes, type FlowEdgeType } from "@/components/builder/flow-edge";
 import { CanvasContext, NODE_LOOK, flowNodeTypes, type CanvasCtx, type FlowNodeType } from "@/components/builder/flow-node";
 import { EdgeInspector, StepInspector } from "@/components/builder/inspector";
 import { Playground } from "@/components/builder/playground";
 import { PublishPanel } from "@/components/builder/publish-panel";
 import { SplitPane } from "@/components/builder/split-pane";
+import { StepResult, StepTest, canTestStep } from "@/components/builder/step-test";
 import { useNodeSizes } from "@/components/builder/step-node";
 import { TestsPanel } from "@/components/builder/tests-panel";
 import { VersionHistory, timeAgo } from "@/components/builder/version-history";
@@ -39,7 +40,7 @@ import { WorkflowSettings } from "@/components/builder/workflow-settings";
 import { ApiError } from "@/lib/api";
 import { builderApi } from "@/lib/builder/api";
 import { arrange } from "@/lib/builder/arrange";
-import { connect, draftKey, forSave, inputFields, newNode, problemsByStep, removeSteps, stepTitle, unsavedKey, updateStep } from "@/lib/builder/graph";
+import { connect, draftKey, duplicateStep, forSave, inputFields, insertAfter, newNode, problemsByStep, removeSteps, stepTitle, unsavedKey, updateStep } from "@/lib/builder/graph";
 import { emptyRunView, isFinished, type RunView } from "@/lib/builder/run-state";
 import type { Agent, AnswerDepth, NodeType, Problem, WorkflowConfig, WorkflowEdge, WorkflowNode } from "@/lib/builder/types";
 import type { BuildTarget } from "@/lib/builder/use-builder-actions";
@@ -56,7 +57,8 @@ interface Doc {
 }
 
 type Selection =
-  | { kind: "node"; id: string }
+  /** ``open``: its settings are showing (a click only selects it, which shows its toolbar). */
+  | { kind: "node"; id: string; open?: boolean }
   | { kind: "edge"; id: string }
   | { kind: "settings" }
   | { kind: "history" }
@@ -129,6 +131,10 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
   // A run started from the canvas (Run / the AI bar), shown on the nodes.
   const [canvasRunId, setCanvasRunId] = useState<string | null>(null);
   const [runCardOpen, setRunCardOpen] = useState(false);
+  // The step being tried on its own (the toolbar's Test).
+  const [testId, setTestId] = useState<string | null>(null);
+  // The step whose last answer is showing (its Result).
+  const [resultId, setResultId] = useState<string | null>(null);
   const loaded = useRef(false);
   const inputKey = `builder.input.${id}`;
 
@@ -216,10 +222,64 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
     return map;
   }, [agentsQuery.data, wfQuery.data]);
 
-  const change = useCallback((fn: (d: Doc) => Doc) => {
-    setDoc((d) => (d ? fn(d) : d));
+  // Undo / redo: every change keeps the graph it replaced. Changes with the
+  // same ``key`` close together (a drag, typing in one step) count as one.
+  const docRef = useRef<Doc | null>(null);
+  docRef.current = doc;
+  const past = useRef<Doc[]>([]);
+  const future = useRef<Doc[]>([]);
+  const lastChange = useRef<{ key: string; at: number } | null>(null);
+  const [historySize, setHistorySize] = useState({ past: 0, future: 0 });
+  const change = useCallback((fn: (d: Doc) => Doc, key?: string) => {
+    const d = docRef.current;
+    if (!d) return;
+    const next = fn(d);
+    if (next === d) return;
+    const now = Date.now();
+    const last = lastChange.current;
+    if (!(key && last?.key === key && now - last.at < 1000)) {
+      past.current = [...past.current.slice(-49), d];
+      future.current = [];
+    }
+    lastChange.current = key ? { key, at: now } : null;
+    docRef.current = next;
+    setDoc(next);
     setDirty(true);
+    setHistorySize({ past: past.current.length, future: 0 });
   }, []);
+  const step = useCallback((from: React.MutableRefObject<Doc[]>, to: React.MutableRefObject<Doc[]>) => {
+    const d = docRef.current;
+    const back = from.current.at(-1);
+    if (!d || !back) return;
+    from.current = from.current.slice(0, -1);
+    to.current = [...to.current, d];
+    lastChange.current = null;
+    // The graph comes back; the saved version it's checked against stays current.
+    const next = { ...back, version: d.version };
+    docRef.current = next;
+    setDoc(next);
+    setDirty(true);
+    setHistorySize({ past: past.current.length, future: future.current.length });
+  }, []);
+  const undo = useCallback(() => step(past, future), [step]);
+  const redo = useCallback(() => step(future, past), [step]);
+  const canEdit = !!wfQuery.data?.can_manage && previewVersion === null;
+  useEffect(() => {
+    if (!canEdit) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const el = e.target as HTMLElement | null;
+      // Typing keeps the field's own undo.
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable)) return;
+      const k = e.key.toLowerCase();
+      if (k === "z" && !e.shiftKey) undo();
+      else if ((k === "z" && e.shiftKey) || k === "y") redo();
+      else return;
+      e.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [canEdit, undo, redo]);
 
   // Live checks against the backend as the graph changes.
   useEffect(() => {
@@ -410,7 +470,12 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
     [shown?.nodes, selection, shownAgents, byStep, liveView, sizes, previewing, outputs, playOpen],
   );
 
-  const flowEdges: Edge[] = useMemo(
+  const canEditLines = !previewing && !!wfQuery.data?.can_manage;
+  const removeLine = useCallback((edgeId: string) => {
+    change((d) => ({ ...d, edges: d.edges.filter((e) => e.id !== edgeId) }));
+    setSelection((s) => (s?.kind === "edge" && s.id === edgeId ? null : s));
+  }, [change]);
+  const flowEdges: FlowEdgeType[] = useMemo(
     () =>
       (shown?.edges ?? []).map((e) => {
         const flowing = !previewing && liveView.steps[e.source] === "succeeded" && liveView.steps[e.target] === "running";
@@ -419,17 +484,15 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
           id: e.id,
           source: e.source,
           target: e.target,
-          label: e.condition ?? undefined,
           selected: selection?.kind === "edge" && selection.id === e.id,
           animated: flowing,
-          type: "smoothstep",
+          type: "flow" as const,
+          data: { branch: e.condition ?? null, onDelete: canEditLines ? removeLine : undefined },
           markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: flowing ? "#38bdf8" : done ? "#34d399" : "#818cf8" },
           style: { strokeWidth: flowing ? 2.5 : 2, stroke: flowing ? "#38bdf8" : done ? "#34d399" : "#6366f1" },
-          labelStyle: { fontSize: 11, fontWeight: 600, fill: "#fde68a" },
-          labelBgStyle: { fill: "#27272a" },
         };
       }),
-    [shown?.edges, selection, liveView, previewing],
+    [shown?.edges, selection, liveView, previewing, canEditLines, removeLine],
   );
 
   const onNodesChange = useCallback(
@@ -444,7 +507,7 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
             const c = moved.find((m) => m.type === "position" && m.id === n.id);
             return c && c.type === "position" && c.position ? { ...n, position: c.position } : n;
           }),
-        }));
+        }), `move:${moved.map((m) => ("id" in m ? m.id : "")).join(",")}`);
       }
       const removed = changes.filter((c) => c.type === "remove").map((c) => (c.type === "remove" ? c.id : ""));
       if (removed.length) {
@@ -452,7 +515,8 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
         setSelection(null);
       }
       const picked = changes.find((c) => c.type === "select" && c.selected);
-      if (picked && picked.type === "select") setSelection({ kind: "node", id: picked.id });
+      // Selecting shows the step's toolbar; its settings stay open if they were (on another step).
+      if (picked && picked.type === "select") setSelection((s) => ({ kind: "node", id: picked.id, open: s?.kind === "node" && !!s.open }));
     },
     [change, track, previewing],
   );
@@ -486,6 +550,29 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
     return () => clearTimeout(t);
   }, [previewVersion, preview, flow]);
 
+  // A step whose settings open off screen (or under the popup) is brought into view beside it.
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const openId = selection?.kind === "node" && selection.open ? selection.id : testId ?? resultId;
+  useEffect(() => {
+    if (!openId) return;
+    const t = setTimeout(() => {
+      const n = flow.getNode(openId);
+      const box = canvasRef.current?.getBoundingClientRect();
+      if (!n || !box) return;
+      const zoom = flow.getZoom();
+      const w = (n.measured?.width ?? 270) * zoom;
+      const h = (n.measured?.height ?? 120) * zoom;
+      const p = flow.flowToScreenPosition(n.position);
+      const popup = Math.min(372, box.width * 0.5);
+      const visible = p.x >= box.left && p.x + w <= box.right - popup && p.y >= box.top && p.y + h <= box.bottom;
+      if (visible) return;
+      // Centre it in the part of the canvas the popup leaves free.
+      const shift = popup / 2 / zoom;
+      flow.setCenter(n.position.x + w / zoom / 2 + shift, n.position.y + h / zoom / 2, { zoom, duration: 300 });
+    }, 60);
+    return () => clearTimeout(t);
+  }, [openId, flow]);
+
   const addStep = (type: NodeType, at?: { x: number; y: number }) => {
     if (!doc) return;
     let spot = at ?? flow.screenToFlowPosition({ x: window.innerWidth * (playOpen ? 0.3 : 0.45), y: window.innerHeight * 0.4 });
@@ -496,7 +583,7 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
     }
     const node = newNode(type, doc.nodes, spot);
     change((d) => ({ ...d, nodes: [...d.nodes, node] }));
-    setSelection({ kind: "node", id: node.id });
+    setSelection({ kind: "node", id: node.id, open: true });
     setAddOpen(false);
   };
   const tidy = () => {
@@ -512,10 +599,45 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
       edges: shown?.edges ?? [],
       inputText,
       setInputText,
-      patch: (nodeId, p) => change((d) => ({ ...d, nodes: updateStep(d.nodes, nodeId, p) })),
-      open: (nodeId) => setSelection({ kind: "node", id: nodeId }),
+      patch: (nodeId, p) => change((d) => ({ ...d, nodes: updateStep(d.nodes, nodeId, p) }), `patch:${nodeId}`),
+      open: (nodeId) => setSelection({ kind: "node", id: nodeId, open: true }),
+      duplicate: (nodeId) => {
+        const d = docRef.current;
+        const copy = d && duplicateStep(d.nodes, nodeId);
+        if (!copy) return;
+        change((x) => ({ ...x, nodes: [...x.nodes, copy] }));
+        setSelection({ kind: "node", id: copy.id });
+      },
+      remove: (nodeId) => {
+        change((d) => ({ ...d, ...removeSteps(d.nodes, d.edges, [nodeId]) }));
+        setSelection(null);
+      },
+      addAfter: (nodeId, type) => {
+        const d = docRef.current;
+        const r = d && insertAfter(d.nodes, d.edges, nodeId, type);
+        if (!r) return;
+        change((x) => ({ ...x, nodes: r.nodes, edges: r.edges }));
+        setSelection({ kind: "node", id: r.id, open: true });
+      },
+      test: (nodeId) => {
+        setSelection({ kind: "node", id: nodeId });
+        setTestId(nodeId);
+      },
+      canTest: (n) => canTestStep(n) && !previewing,
+      showResult: (nodeId) => {
+        setSelection({ kind: "node", id: nodeId });
+        setTestId(null);
+        setResultId(nodeId);
+      },
     }),
     [token, previewing, wfQuery.data?.can_manage, shownAgents, shown?.edges, inputText, setInputText, change],
+  );
+  // Test stays open only while its step is the one selected (Configure, another step or the pane closes it).
+  useEffect(() => {
+    const peeking = (id: string | null) => !!id && !(selection?.kind === "node" && selection.id === id && !selection.open);
+    if (peeking(testId)) setTestId(null);
+    if (peeking(resultId)) setResultId(null);
+  }, [selection, testId, resultId]
   );
 
   const workflows = useQuery({ queryKey: ["builder-workflows"], queryFn: () => builderApi.listWorkflows(token), enabled: !!token && switchOpen });
@@ -526,8 +648,12 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
   if (!doc) return <Centered spinner />;
 
   const canManage = !!wfQuery.data?.can_manage;
-  const selectedNode = selection?.kind === "node" ? doc.nodes.find((n) => n.id === selection.id) : undefined;
+  const selectedNode = selection?.kind === "node" && selection.open ? doc.nodes.find((n) => n.id === selection.id) : undefined;
   const selectedEdge = selection?.kind === "edge" ? doc.edges.find((e) => e.id === selection.id) : undefined;
+  const testNode = testId && !previewing ? doc.nodes.find((n) => n.id === testId) : undefined;
+  const resultNode = resultId && outputs[resultId] && !testNode ? doc.nodes.find((n) => n.id === resultId) : undefined;
+  // The popup docked right; the canvas run's card steps aside while it shows.
+  const panelOpen = !previewing && !!(selectedNode || selectedEdge || testNode || resultNode || selection?.kind === "settings");
   const standalone = (agentsQuery.data ?? []).filter((a) => !a.workflow_id);
   const overrides = doc.config.approval_overrides ?? {};
   const approvalOn = !(overrides.edit === "never" && overrides.delete === "never");
@@ -594,6 +720,12 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
             {/* The occasional ones, as one quiet row of icons. */}
             <div className="flex shrink-0 items-center rounded-lg border border-zinc-200 p-0.5">
               {canManage && (
+                <>
+                  <IconTool label="Undo (Ctrl+Z)" disabled={previewing || !historySize.past} onClick={undo}><Undo2 /></IconTool>
+                  <IconTool label="Redo (Ctrl+Shift+Z)" disabled={previewing || !historySize.future} onClick={redo}><Redo2 /></IconTool>
+                </>
+              )}
+              {canManage && (
                 <IconTool label={approvalOn ? "Approval on: asks before tools that change or delete data" : "Approval off: tools run without asking"} pressed={approvalOn} disabled={previewing} onClick={toggleApproval}>
                   <ShieldCheck className={approvalOn ? "text-emerald-500" : undefined} />
                 </IconTool>
@@ -657,6 +789,7 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
             open={playOpen}
             left={
               <div
+                ref={canvasRef}
                 className="relative h-full"
                 onDragOver={(e) => {
                   if (e.dataTransfer.types.includes(DRAG_TYPE)) e.preventDefault();
@@ -671,10 +804,12 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
                 <ReactFlow
                   nodes={flowNodes}
                   edges={flowEdges}
+                  edgeTypes={flowEdgeTypes}
                   nodeTypes={flowNodeTypes}
                   onNodesChange={onNodesChange}
                   onEdgesChange={onEdgesChange}
                   onConnect={onConnect}
+                  onNodeDoubleClick={(_, n) => !previewing && setSelection({ kind: "node", id: n.id, open: true })}
                   onPaneClick={() => {
                     if (previewing) return;
                     setSelection((s) => (s && (s.kind === "node" || s.kind === "edge") ? null : s));
@@ -737,8 +872,30 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
                 )}
 
                 {/* ── the open step / line / settings, docked right ── */}
-                {!previewing && (selectedNode || selectedEdge || selection?.kind === "settings") && (
-                  <div className={cn("absolute inset-y-0 right-0 z-30 overflow-y-auto border-l border-zinc-200 bg-white shadow-lg", selection?.kind === "settings" ? "w-[410px] p-4" : "w-[400px]")}>
+                {panelOpen && (
+                  <div
+                    className={cn(
+                      "absolute z-30 bg-white shadow-xl",
+                      selection?.kind === "settings"
+                        ? "inset-y-0 right-0 w-[410px] overflow-y-auto border-l border-zinc-200 p-4"
+                        // A step or a line: a popup over the canvas, as tall as it needs.
+                        : "right-3 top-3 flex max-h-[calc(100%-1.5rem)] w-[min(360px,calc(100%-1.5rem))] flex-col overflow-hidden rounded-xl border border-zinc-200",
+                    )}
+                  >
+                    {resultNode && (
+                      <StepResult title={stepTitle(resultNode, agentsById)} text={outputs[resultNode.id]} onClose={() => setResultId(null)} />
+                    )}
+                    {testNode && (
+                      <StepTest
+                        key={testNode.id}
+                        workflowId={id}
+                        node={testNode}
+                        title={stepTitle(testNode, agentsById)}
+                        token={token}
+                        initialInput={inputText}
+                        onClose={() => setTestId(null)}
+                      />
+                    )}
                     {selectedNode && (
                       <StepInspector
                         key={selectedNode.id}
@@ -750,7 +907,7 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
                         problems={byStep[selectedNode.id] ?? []}
                         token={token}
                         workflowId={id}
-                        onChange={(patch) => change((d) => ({ ...d, nodes: updateStep(d.nodes, selectedNode.id, patch) }))}
+                        onChange={(patch) => change((d) => ({ ...d, nodes: updateStep(d.nodes, selectedNode.id, patch) }), `patch:${selectedNode.id}`)}
                         onEdgeChange={(edgeId, patch) => change((d) => ({ ...d, edges: d.edges.map((e) => (e.id === edgeId ? { ...e, ...patch } : e)) }))}
                         onDelete={() => {
                           change((d) => ({ ...d, ...removeSteps(d.nodes, d.edges, [selectedNode.id]) }));
@@ -797,7 +954,7 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
                 )}
 
                 {/* ── the canvas run ── */}
-                {canvasRunId && runCardOpen && !playOpen && (
+                {canvasRunId && runCardOpen && !playOpen && !panelOpen && (
                   <div className="absolute bottom-3 right-3 z-20 w-96 max-w-[calc(100%-1.5rem)] rounded-xl border border-zinc-200 bg-white p-3 shadow-lg">
                     <div className="mb-2 flex items-center gap-2">
                       <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-semibold",

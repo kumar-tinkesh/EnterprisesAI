@@ -29,7 +29,7 @@ from vendor.models import MCPTool, VendorMCPServer
 from vendor.services import mcp_auth
 from vendor.services.mcp_service.crud import is_server_visible_to_user
 
-from builder.agents.config import AgentConfig, merge_config
+from builder.agents.config import AgentConfig, merge_config, split_step_overrides
 from builder.graph.schema import WorkflowConfig, WorkflowNode, parse_tool_id
 from builder.graph.schema import WorkflowEdge
 from builder.graph.validation import GraphProblem, validate_graph
@@ -198,7 +198,7 @@ async def workflow_reference_problems(
         if n.type == "agent" and n.draft_agent is not None:
             # A draft (new, or replacing the step's saved agent) is what will be saved.
             try:
-                merged = AgentConfig.model_validate(merge_config(n.draft_agent.config, n.config_overrides))
+                merged = AgentConfig.model_validate(merge_config(n.draft_agent.config, split_step_overrides(n.config_overrides)[0]))
             except ValidationError as exc:
                 problems.append(GraphProblem("agent_overrides", "This step's new agent has invalid settings: " + "; ".join(config_errors(exc)), n.id))
                 continue
@@ -216,7 +216,7 @@ async def workflow_reference_problems(
                 ))
                 continue
             try:
-                merged = AgentConfig.model_validate(merge_config(agent.config, n.config_overrides))
+                merged = AgentConfig.model_validate(merge_config(agent.config, split_step_overrides(n.config_overrides)[0]))
             except ValidationError as exc:
                 problems.append(GraphProblem("agent_overrides", "This step's agent settings are invalid: " + "; ".join(config_errors(exc)), n.id))
                 continue

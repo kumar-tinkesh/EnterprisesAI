@@ -261,6 +261,7 @@ class LLMGateway:
             "tools": [t.to_dict() for t in (request.tools or [])],
             "tool_choice": request.tool_choice,
             "response_format": request.response_format,
+            "reasoning_effort": request.reasoning_effort,
         }
         digest = hashlib.sha256(
             json.dumps(payload, sort_keys=True, default=str).encode()

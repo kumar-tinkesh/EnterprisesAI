@@ -126,6 +126,9 @@ export const builderApi = {
     call<Run>(t, `/agents/${id}/runs`, "POST", { input, depth, ...chat, ...(attachmentIds.length ? { attachment_ids: attachmentIds } : {}) }),
   startWorkflowRun: (t: string, id: string, input: string, variables: Record<string, unknown>, depth: AnswerDepth = "auto", chat: ChatRef = {}) =>
     call<Run>(t, `/workflows/${id}/runs`, "POST", { input, variables, depth, ...chat }),
+  /** Run one step by itself, as it is on the canvas (unsaved edits too). */
+  testStep: (t: string, workflowId: string, node: WorkflowNode, input: string, variables: Record<string, unknown> = {}) =>
+    call<Run>(t, `/workflows/${workflowId}/steps/test`, "POST", { node, input, variables }),
 
   // Playground chats
   listConversations: (t: string, params: { agent_id?: string; workflow_id?: string }) =>

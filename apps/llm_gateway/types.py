@@ -239,5 +239,8 @@ class CompletionRequest:
     tools: Optional[list[ToolDefinition]] = None
     tool_choice: Optional[str | dict[str, Any]] = None
     response_format: Optional[dict[str, Any]] = None
+    # "low" / "medium" / "high": how hard a reasoning model thinks. Only sent
+    # to models that reason; the rest ignore it.
+    reasoning_effort: Optional[str] = None
     stream: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)  # tenant_id, trace_id etc.

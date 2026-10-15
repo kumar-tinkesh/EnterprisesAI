@@ -1,16 +1,17 @@
 "use client";
 
-import { createContext, memo, useContext } from "react";
+import { createContext, memo, useContext, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import { Handle, NodeToolbar, Position, type Node, type NodeProps } from "@xyflow/react";
 import {
-  AlertTriangle, BookOpen, Bot, CalendarClock, CheckCircle2, CircleDot, GitBranch, Hand, Loader2, LogIn, Merge,
-  PlayCircle, Send, Wrench, XCircle,
+  AlertTriangle, BookOpen, Bot, CalendarClock, CheckCircle2, CircleDot, Copy, FileText, GitBranch, Hand, Loader2, LogIn, Merge,
+  Play, PlayCircle, Plus, RotateCcw, Send, Settings2, Trash2, Wrench, XCircle,
 } from "lucide-react";
 
 import { ConnectButton } from "@/components/connections/connect-button";
 import { builderApi } from "@/lib/builder/api";
-import { serverIdOf, toolName } from "@/lib/builder/graph";
+import { PALETTE, canAddAfter, isTrigger, overriddenParams, serverIdOf, toolName } from "@/lib/builder/graph";
 import type { StepState } from "@/lib/builder/run-state";
 import { describeSchedule } from "@/lib/builder/schedule";
 import type { Agent, NodeType, Problem, WorkflowEdge, WorkflowNode } from "@/lib/builder/types";
@@ -25,7 +26,17 @@ export interface CanvasCtx {
   inputText: string;
   setInputText: (text: string) => void;
   patch: (nodeId: string, patch: Partial<WorkflowNode>) => void;
+  /** Show the step's settings. */
   open: (nodeId: string) => void;
+  duplicate: (nodeId: string) => void;
+  remove: (nodeId: string) => void;
+  /** A new step of ``type`` right after this one. */
+  addAfter: (nodeId: string, type: NodeType) => void;
+  /** Run this step by itself (agent and tool steps that are set up). */
+  test: (nodeId: string) => void;
+  canTest: (node: WorkflowNode) => boolean;
+  /** Show the step's whole answer from the last run. */
+  showResult: (nodeId: string) => void;
 }
 export const CanvasContext = createContext<CanvasCtx | null>(null);
 
@@ -63,10 +74,10 @@ const RING: Record<StepState, string> = {
 const NO_INPUT: NodeType[] = ["input", "manual_trigger", "schedule_trigger"];
 
 function StateIcon({ state }: { state?: StepState }) {
-  if (state === "running") return <Loader2 className="h-4 w-4 animate-spin text-white" aria-label="Running" />;
-  if (state === "succeeded") return <CheckCircle2 className="h-4 w-4 text-white" aria-label="Done" />;
-  if (state === "failed") return <XCircle className="h-4 w-4 text-white" aria-label="Failed" />;
-  if (state === "waiting") return <CircleDot className="h-4 w-4 text-white" aria-label="Waiting for you" />;
+  if (state === "running") return <Loader2 className="h-4 w-4 animate-spin text-sky-400" aria-label="Running" />;
+  if (state === "succeeded") return <CheckCircle2 className="h-4 w-4 text-emerald-400" aria-label="Done" />;
+  if (state === "failed") return <XCircle className="h-4 w-4 text-red-400" aria-label="Failed" />;
+  if (state === "waiting") return <CircleDot className="h-4 w-4 text-amber-400" aria-label="Waiting for you" />;
   return null;
 }
 
@@ -79,6 +90,50 @@ function Chip({ children, tone = "zinc", title }: { children: React.ReactNode; t
     sky: "border-sky-400/30 bg-sky-500/10 text-sky-300",
   };
   return <span title={title} className={cn("inline-flex max-w-full items-center gap-1 truncate rounded-md border px-1.5 py-0.5 text-[11px]", tones[tone])}>{children}</span>;
+}
+
+/** "N tools" on an agent step; click it for the list (in a layer of its own,
+ *  so the node card doesn't clip it). Amber when the step changed them. */
+function ToolsChip({ toolIds, changed }: { toolIds: string[]; changed: boolean }) {
+  const [at, setAt] = useState<{ top: number; left: number } | null>(null);
+  const ref = useRef<HTMLButtonElement>(null);
+  if (toolIds.length === 0) return null;
+  return (
+    <>
+      <button
+        ref={ref}
+        type="button"
+        title="Tools this step can call"
+        aria-expanded={!!at}
+        onClick={(e) => {
+          e.stopPropagation();
+          const r = ref.current?.getBoundingClientRect();
+          setAt(at || !r ? null : { top: r.bottom + 4, left: r.left });
+        }}
+        className={cn(
+          "nodrag inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] cursor-pointer",
+          changed ? "border-amber-400/30 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20" : "border-violet-400/30 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20",
+        )}
+      >
+        <Wrench className="h-3 w-3" /> {toolIds.length} tool{toolIds.length === 1 ? "" : "s"}
+      </button>
+      {at &&
+        createPortal(
+          <>
+            <div className="fixed inset-0 z-[999]" onClick={() => setAt(null)} />
+            <div style={at} className="fixed z-[1000] max-h-60 w-60 overflow-y-auto rounded-lg border border-white/10 bg-zinc-900 p-1.5 shadow-2xl">
+              <p className="px-1.5 pb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Tools this step can call</p>
+              {toolIds.map((id) => (
+                <p key={id} title={id} className="flex items-center gap-1.5 truncate rounded px-1.5 py-1 text-[11px] text-zinc-200 hover:bg-white/5">
+                  <Wrench className="h-3 w-3 shrink-0 text-zinc-500" /> {toolName(id)}
+                </p>
+              ))}
+            </div>
+          </>,
+          document.body,
+        )}
+    </>
+  );
 }
 
 function ToolBody({ node, ctx }: { node: WorkflowNode; ctx: CanvasCtx }) {
@@ -162,16 +217,21 @@ function Body({ node, ctx }: { node: WorkflowNode; ctx: CanvasCtx }) {
           </button>
         );
       }
-      const tools = a.config?.tool_ids?.length ?? 0;
-      const kbs = a.config?.knowledge_base_ids?.length ?? 0;
-      const overrides = Object.keys(node.config_overrides ?? {}).length;
+      // What the step really runs with: its own overrides over the agent's.
+      const own = node.config_overrides ?? {};
+      const toolIds = (own.tool_ids as string[] | undefined) ?? a.config?.tool_ids ?? [];
+      const kbs = ((own.knowledge_base_ids as string[] | undefined) ?? a.config?.knowledge_base_ids ?? []).length;
+      const attempts = node.retry?.max_attempts ?? 1;
+      const overrides = overriddenParams(node.config_overrides).length;
+      const model = (node.config_overrides?.llm_model as string | undefined) || a.llm_model;
       return (
         <div className="flex flex-wrap gap-1.5">
-          <Chip><span className="font-mono">{a.llm_model || "default model"}</span></Chip>
-          {tools > 0 && <Chip tone="violet"><Wrench className="h-3 w-3" /> {tools}</Chip>}
-          {kbs > 0 && <Chip tone="sky"><BookOpen className="h-3 w-3" /> {kbs}</Chip>}
+          <Chip tone={model !== a.llm_model ? "amber" : "zinc"}><span className="font-mono">{model || "default model"}</span></Chip>
+          <ToolsChip toolIds={toolIds} changed={"tool_ids" in own} />
+          {kbs > 0 && <Chip tone={"knowledge_base_ids" in own ? "amber" : "sky"}><BookOpen className="h-3 w-3" /> {kbs}</Chip>}
+          {attempts > 1 && <Chip title={`Tried up to ${attempts} times if it fails`}><RotateCcw className="h-3 w-3" /> {attempts}</Chip>}
           {node.draft_agent && <Chip tone="amber">{node.agent_id ? "customized" : "new — saved with the workflow"}</Chip>}
-          {overrides > 0 && <Chip tone="amber">{overrides} step override{overrides === 1 ? "" : "s"}</Chip>}
+          {overrides > 0 && <Chip tone="amber">{overrides} setting{overrides === 1 ? "" : "s"} changed</Chip>}
         </div>
       );
     }
@@ -200,6 +260,88 @@ function Body({ node, ctx }: { node: WorkflowNode; ctx: CanvasCtx }) {
   }
 }
 
+function ToolButton({ label, danger, onClick, children }: { label: string; danger?: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      className={cn(
+        "nodrag flex h-7 items-center gap-1 rounded-md px-1.5 text-[11px] font-medium text-zinc-300 transition-colors cursor-pointer [&_svg]:h-3.5 [&_svg]:w-3.5",
+        danger ? "hover:bg-red-500/15 hover:text-red-300" : "hover:bg-white/10 hover:text-white",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+/** Above the selected step: what you can do with it. */
+function StepToolbar({ node, ctx, hasResult }: { node: WorkflowNode; ctx: CanvasCtx; hasResult: boolean }) {
+  const [nextOpen, setNextOpen] = useState(false);
+  const trigger = isTrigger(node.type);
+  return (
+    <NodeToolbar position={Position.Top} offset={8} className="relative">
+      <div className="flex items-center gap-0.5 rounded-lg border border-white/10 bg-[#1c1c21] p-0.5 shadow-lg shadow-black/40">
+        {ctx.canTest(node) && (
+          <ToolButton label="Test this step by itself" onClick={() => ctx.test(node.id)}>
+            <Play /> Test
+          </ToolButton>
+        )}
+        {hasResult && (
+          <ToolButton label="This step's answer from the last run" onClick={() => ctx.showResult(node.id)}>
+            <FileText /> Result
+          </ToolButton>
+        )}
+        <ToolButton label="Configure this step" onClick={() => ctx.open(node.id)}>
+          <Settings2 /> Configure
+        </ToolButton>
+        {!ctx.readOnly && (
+          <>
+            {canAddAfter(node.type) && (
+              <ToolButton label="Add a step after this one" onClick={() => setNextOpen((o) => !o)}>
+                <Plus /> Next
+              </ToolButton>
+            )}
+            {!trigger && (
+              <>
+                <span className="mx-0.5 h-4 w-px bg-white/10" />
+                <ToolButton label="Copy this step" onClick={() => ctx.duplicate(node.id)}><Copy /></ToolButton>
+                <ToolButton label="Delete this step" danger onClick={() => ctx.remove(node.id)}><Trash2 /></ToolButton>
+              </>
+            )}
+          </>
+        )}
+      </div>
+      {nextOpen && (
+        <div className="absolute left-0 top-full z-10 mt-1 w-52 rounded-lg border border-white/10 bg-[#1c1c21] p-1 shadow-xl shadow-black/50">
+          {PALETTE.map((type) => {
+            const look = LOOK[type];
+            return (
+              <button
+                key={type}
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setNextOpen(false);
+                  ctx.addAfter(node.id, type);
+                }}
+                className="nodrag flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-zinc-200 hover:bg-white/10 cursor-pointer"
+              >
+                <look.Icon className="h-3.5 w-3.5 text-zinc-400" /> {look.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </NodeToolbar>
+  );
+}
+
 function FlowNodeView({ data, selected }: NodeProps<FlowNodeType>) {
   const ctx = useContext(CanvasContext);
   const { node } = data;
@@ -209,21 +351,24 @@ function FlowNodeView({ data, selected }: NodeProps<FlowNodeType>) {
   return (
     <div
       className={cn(
-        "w-[270px] overflow-hidden rounded-2xl border bg-[#141418] text-left shadow-xl shadow-black/40 transition-shadow",
+        "w-[270px] overflow-hidden rounded-xl border bg-[#141418] text-left shadow-lg shadow-black/30 transition-shadow",
         selected ? "border-indigo-400" : hasProblems ? "border-red-500/60" : "border-white/10",
         data.state && RING[data.state],
       )}
       title={hasProblems ? data.problems.map((p) => p.message).join("\n") : undefined}
     >
+      <StepToolbar node={node} ctx={ctx} hasResult={!!data.output} />
       {!NO_INPUT.includes(node.type) && <Handle type="target" position={Position.Left} className="!h-3 !w-3 !border-2 !border-[#141418] !bg-indigo-400" />}
-      <div className={cn("flex items-center gap-2.5 bg-gradient-to-r px-3 py-2.5", look.head)}>
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/15 text-white"><look.Icon className="h-4 w-4" /></span>
+      {/* The step's colour: a thin line on top and its icon, so the card stays quiet. */}
+      <div className={cn("h-0.5 bg-gradient-to-r", look.head)} />
+      <div className="flex items-center gap-2.5 px-3 pt-2.5">
+        <span className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br text-white", look.head)}><look.Icon className="h-3.5 w-3.5" /></span>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold text-white">{look.label}</p>
-          <p className="truncate text-[11px] text-white/80">{data.title !== look.label ? data.title : look.hint}</p>
+          <p className="truncate text-[13px] font-semibold text-zinc-100">{data.title !== look.label ? data.title : look.label}</p>
+          <p className="truncate text-[10.5px] text-zinc-500">{data.title !== look.label ? look.label : look.hint}</p>
         </div>
         {hasProblems && (
-          <span className="flex items-center gap-0.5 rounded-full bg-black/30 px-1.5 py-0.5 text-[10px] font-semibold text-red-200">
+          <span className="flex items-center gap-0.5 rounded-full bg-red-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-red-300">
             <AlertTriangle className="h-3 w-3" /> {data.problems.length}
           </span>
         )}
@@ -233,7 +378,17 @@ function FlowNodeView({ data, selected }: NodeProps<FlowNodeType>) {
         <Body node={node} ctx={ctx} />
         {data.detail && <p className="mt-2 truncate rounded-md bg-sky-500/10 px-2 py-1 text-[10.5px] text-sky-300">{data.detail}</p>}
         {data.output && !data.detail && (
-          <p className="mt-2 line-clamp-2 rounded-md bg-white/5 px-2 py-1 text-[10.5px] text-zinc-400" title={data.output}>{data.output}</p>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              ctx.showResult(node.id);
+            }}
+            className="nodrag mt-2 line-clamp-2 w-full rounded-md bg-white/5 px-2 py-1 text-left text-[10.5px] text-zinc-400 hover:bg-white/10 hover:text-zinc-200 cursor-pointer"
+            title="See the whole answer"
+          >
+            {data.output}
+          </button>
         )}
       </div>
       {node.type !== "output" && <Handle type="source" position={Position.Right} className="!h-3 !w-3 !border-2 !border-[#141418] !bg-indigo-400" />}

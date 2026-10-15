@@ -488,3 +488,16 @@ async def test_websocket_token_check():
     from builder.api.v1.runs import websocket_user
 
     assert await websocket_user("not-a-jwt") is None
+
+
+@pytest.mark.parametrize(("on_failure", "tries"), [("retry", 3), ("continue", 1)])
+async def test_a_failing_tool_is_tried_again_only_when_set_to_retry(tenant_client, demo, gateway, runtime, monkeypatch, on_failure, tries):
+    monkeypatch.setattr("builder.agents.runtime.TOOL_RETRY_DELAY_SECONDS", 0)
+    agent = await make_agent(tenant_client, demo, ["fail"], tools={"on_failure": on_failure})
+    gateway([reply(calls=[("demo__fail", {})]), reply("It didn't work.")])
+    run_id = await start(tenant_client, agent)
+    await worker(runtime).drain()
+
+    run = await get_run(tenant_client, run_id)
+    assert run["status"] == "succeeded" and run["output_text"] == "It didn't work."
+    assert [c["tool_name"] for c in run["tool_calls"]] == ["fail"] * tries
