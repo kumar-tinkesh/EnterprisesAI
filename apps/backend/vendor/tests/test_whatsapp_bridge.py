@@ -1,21 +1,14 @@
-"""Tests for the native per-user device-pairing bridge (WhatsApp) — process
-lifecycle state machine (with a fake subprocess standing in for the real
-compiled Go binary) and the REST API's guard conditions.
-
-The fake subprocess replays scripted stdout lines through the *real*
-``===EAI_QR_START===``/``===EAI_QR_END===`` delimiter protocol and the real
-"Connected to WhatsApp!" signal (see vendor_src/README.md), so these tests
-exercise the actual parsing/state-machine logic in
-``vendor.services.whatsapp_bridge.manager`` — only the OS process itself is
-faked.
+"""Tests for per-user device-pairing bridges (WhatsApp): the manager's
+lifecycle against a fake whatsapp-orchestrator (each user's bridge really
+runs in its own container, which the orchestrator owns), the token that
+guards each bridge's REST API, and the REST API's guard conditions.
 """
 from __future__ import annotations
 
-import asyncio
-import contextlib
-
 import pytest
+from sqlalchemy import select
 
+from vendor.models import VendorMCPBridgeInstance
 from vendor.services import mcp_auth
 from vendor.services.whatsapp_bridge import manager as bridge_manager
 
@@ -51,346 +44,173 @@ async def _create_device_pairing_server(admin_client, db, *, name="whatsapp.mcp"
     return server_id
 
 
-class _FakeStdout:
-    """Stands in for a real subprocess's stdout pipe. Critically, each
-    ``readline()`` actually yields control back to the event loop first
-    (``asyncio.sleep(0)``) — a real pipe read always does this implicitly
-    (bytes arrive over time); without it, the background reader task
-    (``_watch_process``, a separate asyncio Task) races ahead of and
-    interleaves with whatever coroutine is concurrently awaiting
-    ``start_bridge()`` in the same test, which is a timing artifact of the
-    fake process having zero I/O latency — not a bug in the manager, and
-    not representative of the real subprocess it stands in for."""
+class _FakeOrchestrator:
+    """Stands in for the whatsapp-orchestrator service's HTTP API."""
 
-    def __init__(self, lines: list[bytes], *, hang_at_eof: bool = False):
-        self._lines = list(lines)
-        self._hang_at_eof = hang_at_eof
+    def __init__(self):
+        self.calls: list[tuple[str, str, dict | None, dict | None]] = []
+        self.bridge_status: dict = {"status": "starting", "qr": ""}
+        self.fail: bool = False
 
-    async def readline(self) -> bytes:
-        await asyncio.sleep(0)
-        if self._lines:
-            return self._lines.pop(0)
-        if self._hang_at_eof:
-            # A real bridge process, once connected, keeps running
-            # indefinitely serving its REST API — it does not exit just
-            # because it printed a status line. Model that by blocking
-            # forever here instead of signalling EOF, so the reader task
-            # (and this instance's registry entry) stays alive exactly
-            # like the real, still-running process it stands in for.
-            await asyncio.Event().wait()
-        return b""
+    async def __call__(self, method, path, *, json=None, params=None):
+        self.calls.append((method, path, json, params))
+        if self.fail:
+            raise bridge_manager.BridgeError("WhatsApp orchestrator unreachable: boom")
+        if method == "GET":
+            return dict(self.bridge_status)
+        return {"status": "starting"}
+
+    def started_tokens(self) -> list[str]:
+        return [j["token"] for m, _p, j, _q in self.calls if m == "POST"]
 
 
-class _FakeProcess:
-    def __init__(self, lines: list[str], exit_code: int = 0, *, hang_at_eof: bool = False):
-        self.stdout = _FakeStdout([(line + "\n").encode() for line in lines], hang_at_eof=hang_at_eof)
-        self.returncode: int | None = None
-        self._exit_code = exit_code
-        self.terminated = False
-        self.killed = False
-
-    async def wait(self) -> int:
-        self.returncode = self._exit_code
-        return self.returncode
-
-    def terminate(self) -> None:
-        self.terminated = True
-        self.returncode = self._exit_code
-
-    def kill(self) -> None:
-        self.killed = True
-        self.returncode = self._exit_code
+@pytest.fixture
+def orch(monkeypatch):
+    fake = _FakeOrchestrator()
+    monkeypatch.setattr(bridge_manager, "_orchestrator", fake)
+    return fake
 
 
-def _qr_success_lines() -> list[str]:
-    return [
-        "Starting WhatsApp client...",
-        "Scan this QR code with your WhatsApp app:",
-        "===EAI_QR_START===",
-        "█████ FAKE QR BLOCK █████",
-        "█████████████████████████",
-        "===EAI_QR_END===",
-        "Successfully connected and authenticated!",
-        "Connected to WhatsApp!",
-    ]
+async def _row(db, server_id: str, user_id: str) -> VendorMCPBridgeInstance:
+    db.expire_all()
+    return (
+        await db.execute(
+            select(VendorMCPBridgeInstance).where(
+                VendorMCPBridgeInstance.server_id == server_id,
+                VendorMCPBridgeInstance.user_id == user_id,
+            )
+        )
+    ).scalars().one()
 
 
-async def _wait_until(predicate, *, timeout: float = 2.0) -> None:
-    loop = asyncio.get_event_loop()
-    deadline = loop.time() + timeout
-    while loop.time() < deadline:
-        if predicate():
-            return
-        await asyncio.sleep(0.01)
-    raise AssertionError("condition not met within timeout")
+async def _server(admin_client, db, name="whatsapp.mcp"):
+    from vendor.services.mcp_service import get_mcp_server
 
-
-async def _wait_until_async(predicate, *, timeout: float = 2.0) -> None:
-    loop = asyncio.get_event_loop()
-    deadline = loop.time() + timeout
-    while loop.time() < deadline:
-        if await predicate():
-            return
-        await asyncio.sleep(0.01)
-    raise AssertionError("condition not met within timeout")
-
-
-@pytest.fixture(autouse=True)
-def _fake_binary_exists(monkeypatch, tmp_path):
-    """start_bridge refuses to run if the configured binary path doesn't
-    exist on disk — true in the test environment (no real compiled bridge).
-    Stub the check; the fake process below stands in for the real one.
-    Also redirect the data-dir root under pytest's tmp_path — the real
-    default (/data/...) isn't writable outside the deployed container.
-
-    Deliberately does *not* touch ``bridge_manager.SessionLocal`` — it
-    already resolves to the same test database as the ``db``/``admin_client``
-    fixtures (conftest.py sets ``DATABASE_URL`` before ``src.db.session`` is
-    first imported), and each concurrent caller (the background stdout
-    watcher vs. ``start_bridge``'s own inline persist call) needs its *own*
-    independent session, exactly like production — sharing one across
-    concurrent coroutines corrupts both (AsyncSession isn't safe for
-    concurrent use)."""
-    monkeypatch.setattr(bridge_manager.os.path, "isfile", lambda _path: True)
-
-    def _fake_instance_data_dir(server_id: str, user_id: str) -> str:
-        return str(tmp_path / "whatsapp_bridges" / server_id / user_id)
-
-    monkeypatch.setattr(bridge_manager, "_instance_data_dir", _fake_instance_data_dir)
-
-
-@pytest.fixture(autouse=True)
-async def _cleanup_registry():
-    yield
-    # Don't leak a "running" fake process/task across tests if one crashed
-    # mid-assertion — and *wait* for the cancellation to actually land, or
-    # a straggler task can still be mid-flight (e.g. about to open its own
-    # DB session) when the *next* test starts, racing with and corrupting
-    # that test's own session use.
-    tasks = []
-    for key in list(bridge_manager._registry.keys()):
-        running = bridge_manager._registry.pop(key, None)
-        if running and running.reader_task:
-            running.reader_task.cancel()
-            tasks.append(running.reader_task)
-    for task in tasks:
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
+    server_id = await _create_device_pairing_server(admin_client, db, name=name)
+    return server_id, await get_mcp_server(db, server_id=server_id)
 
 
 @pytest.mark.asyncio
-async def test_start_bridge_reaches_awaiting_qr_then_connected(admin_client, db, monkeypatch):
-    server_id = await _create_device_pairing_server(admin_client, db)
-    from vendor.services.mcp_service import get_mcp_server
-
-    server = await get_mcp_server(db, server_id=server_id)
-
-    async def fake_spawn(*_args, **_kwargs):
-        return _FakeProcess(_qr_success_lines(), hang_at_eof=True)
-
-    monkeypatch.setattr(bridge_manager.asyncio, "create_subprocess_exec", fake_spawn)
+async def test_start_asks_orchestrator_for_a_container_with_a_stored_token(admin_client, db, orch):
+    server_id, server = await _server(admin_client, db)
 
     result = await bridge_manager.start_bridge(db, server=server, user_id="tu_1", tenant_id="tenant_test_01")
-    # The immediate return is a snapshot only — with a real subprocess
-    # there's always some latency before its first output, so this is
-    # reliably "starting"; the fake process here has near-zero latency, so
-    # it can legitimately have already progressed by the time we return.
-    assert result["status"] in ("starting", "awaiting_qr", "connected")
 
-    await _wait_until(
-        lambda: bridge_manager._registry[(server_id, "tu_1")].status == "connected"
-    )
-
-    status = await bridge_manager.get_status(db, server_id=server_id, user_id="tu_1")
-    assert status["status"] == "connected"
-
-    # The catalog-visibility system (VendorMCPCredential), not just the
-    # bridge's own table, must also reflect the connection. The in-memory
-    # status flips *before* that DB write (a real caller's own "connected"
-    # observation and this mirroring write aren't atomic), so poll rather
-    # than assume it's already landed the instant get_status() says so.
-    async def _creds_mirrored() -> bool:
-        creds = await mcp_auth.load_server_credentials(db, server_id=server_id, user_id="tu_1")
-        return creds.get("_bridge") == "connected"
-
-    await _wait_until_async(_creds_mirrored)
+    assert result == {"status": "starting"}
+    row = await _row(db, server_id, "tu_1")
+    (method, path, body, _), = orch.calls
+    assert (method, path) == ("POST", f"/instances/{row.id}/start")
+    token = body["token"]
+    assert len(token) >= 32
+    assert row.status == "starting"
+    assert row.data_dir == bridge_manager.volume_name(row.id)
+    # Stored encrypted, never in the clear.
+    assert token not in (row.token_encrypted or "")
+    assert bridge_manager._instance_token(row) == token
 
 
 @pytest.mark.asyncio
-async def test_concurrent_users_get_distinct_ports(admin_client, db, monkeypatch):
-    """Regression test for a real bug found in live testing: the real
-    bridge binary doesn't bind its REST port at startup — only much later,
-    after a successful pairing — so an OS-level "is this port free right
-    now" check alone can't detect a collision between two users starting
-    around the same time; both can pass that check for the *same* port
-    before either has actually bound it. Port allocation must be based on
-    this module's own bookkeeping (registry + DB), not just the OS."""
-    server_id = await _create_device_pairing_server(admin_client, db)
-    from vendor.services.mcp_service import get_mcp_server
-
-    server = await get_mcp_server(db, server_id=server_id)
-
-    async def fake_spawn(*_args, **_kwargs):
-        # Never reaches "Connected to WhatsApp!" — mirrors the real binary
-        # never having bound its port at this stage either.
-        return _FakeProcess(["Scan this QR code with your WhatsApp app:"], hang_at_eof=True)
-
-    monkeypatch.setattr(bridge_manager.asyncio, "create_subprocess_exec", fake_spawn)
-
-    await bridge_manager.start_bridge(db, server=server, user_id="tu_race_a", tenant_id="tenant_test_01")
-    await bridge_manager.start_bridge(db, server=server, user_id="tu_race_b", tenant_id="tenant_test_01")
-
-    port_a = bridge_manager._registry[(server_id, "tu_race_a")].port
-    port_b = bridge_manager._registry[(server_id, "tu_race_b")].port
-    assert port_a != port_b, f"both users got the same port: {port_a}"
-
-
-@pytest.mark.asyncio
-async def test_qr_text_captured_between_delimiters(admin_client, db, monkeypatch):
-    server_id = await _create_device_pairing_server(admin_client, db)
-    from vendor.services.mcp_service import get_mcp_server
-
-    server = await get_mcp_server(db, server_id=server_id)
-
-    lines = [
-        "Scan this QR code with your WhatsApp app:",
-        "===EAI_QR_START===",
-        "LINE1",
-        "LINE2",
-        "===EAI_QR_END===",
-    ]
-
-    async def fake_spawn(*_args, **_kwargs):
-        # A real bridge doesn't exit just because it printed the QR — it
-        # waits (up to ~3 minutes) for the scan. Model that so the registry
-        # entry doesn't disappear out from under this test.
-        return _FakeProcess(lines, hang_at_eof=True)
-
-    monkeypatch.setattr(bridge_manager.asyncio, "create_subprocess_exec", fake_spawn)
-
+async def test_status_goes_qr_then_connected_and_mirrors_credential(admin_client, db, orch):
+    server_id, server = await _server(admin_client, db)
     await bridge_manager.start_bridge(db, server=server, user_id="tu_2", tenant_id="tenant_test_01")
-    await _wait_until(
-        lambda: bridge_manager._registry.get((server_id, "tu_2"))
-        and bridge_manager._registry[(server_id, "tu_2")].status == "awaiting_qr"
-    )
+
+    orch.bridge_status = {"status": "waiting_for_scan", "qr": "2@abc,def"}
     status = await bridge_manager.get_status(db, server_id=server_id, user_id="tu_2")
-    assert status["status"] == "awaiting_qr"
-    assert status["qr"] == "LINE1\nLINE2"
+    assert status == {"status": "awaiting_qr", "qr": "2@abc,def"}
+    assert await bridge_manager.get_mcp_env(db, server_id=server_id, user_id="tu_2") is None
+
+    orch.bridge_status = {"status": "connected", "qr": ""}
+    status = await bridge_manager.get_status(db, server_id=server_id, user_id="tu_2")
+    assert status == {"status": "connected"}
+    creds = await mcp_auth.load_server_credentials(db, server_id=server_id, user_id="tu_2")
+    assert creds.get("_bridge") == "connected"
+
+    row = await _row(db, server_id, "tu_2")
+    env = await bridge_manager.get_mcp_env(db, server_id=server_id, user_id="tu_2")
+    assert env == {
+        "WHATSAPP_API_BASE_URL": f"http://eai-wa-bridge-{row.id}:8080/api",
+        "WHATSAPP_BRIDGE_TOKEN": orch.started_tokens()[0],
+    }
 
 
 @pytest.mark.asyncio
-async def test_qr_scan_timeout_marks_error(admin_client, db, monkeypatch):
-    server_id = await _create_device_pairing_server(admin_client, db)
-    from vendor.services.mcp_service import get_mcp_server
+async def test_each_user_gets_their_own_container_and_token(admin_client, db, orch):
+    server_id, server = await _server(admin_client, db)
+    await bridge_manager.start_bridge(db, server=server, user_id="tu_a", tenant_id="tenant_test_01")
+    await bridge_manager.start_bridge(db, server=server, user_id="tu_b", tenant_id="tenant_test_01")
 
-    server = await get_mcp_server(db, server_id=server_id)
+    paths = [p for m, p, _j, _q in orch.calls if m == "POST"]
+    tokens = orch.started_tokens()
+    assert len(set(paths)) == 2
+    assert len(set(tokens)) == 2
 
-    lines = [
-        "Scan this QR code with your WhatsApp app:",
-        "===EAI_QR_START===",
-        "X",
-        "===EAI_QR_END===",
-        "Timeout waiting for QR code scan",
-    ]
 
-    async def fake_spawn(*_args, **_kwargs):
-        return _FakeProcess(lines, exit_code=1)
-
-    monkeypatch.setattr(bridge_manager.asyncio, "create_subprocess_exec", fake_spawn)
-
+@pytest.mark.asyncio
+async def test_qr_timeout_marks_error(admin_client, db, orch):
+    server_id, server = await _server(admin_client, db)
     await bridge_manager.start_bridge(db, server=server, user_id="tu_3", tenant_id="tenant_test_01")
-    # Unlike "connected", a real bridge process genuinely exits after this
-    # log line (see vendor_src/bridge/main.go) — so the in-memory registry
-    # entry is expected to disappear once the reader task's finally block
-    # runs. Check the *durable* (DB-backed) status instead of the transient
-    # in-memory one, matching how a real caller (the frontend polling
-    # status-as-user) would observe the outcome after the process is gone.
-    async def _is_error() -> bool:
-        status = await bridge_manager.get_status(db, server_id=server_id, user_id="tu_3")
-        return status["status"] == "error"
 
-    await _wait_until_async(_is_error)
+    orch.bridge_status = {"status": "timeout", "qr": ""}
+    status = await bridge_manager.get_status(db, server_id=server_id, user_id="tu_3")
+    assert status["status"] == "error"
+    assert "Timed out" in status["error"]
 
 
 @pytest.mark.asyncio
-async def test_stop_bridge_keeps_session_by_default(admin_client, db, monkeypatch, tmp_path):
-    server_id = await _create_device_pairing_server(admin_client, db)
-    from vendor.services.mcp_service import get_mcp_server
-
-    server = await get_mcp_server(db, server_id=server_id)
-
-    async def fake_spawn(*_args, **_kwargs):
-        return _FakeProcess(_qr_success_lines(), hang_at_eof=True)
-
-    monkeypatch.setattr(bridge_manager.asyncio, "create_subprocess_exec", fake_spawn)
+async def test_disconnect_keeps_session_and_token_forget_rotates_them(admin_client, db, orch):
+    server_id, server = await _server(admin_client, db)
     await bridge_manager.start_bridge(db, server=server, user_id="tu_4", tenant_id="tenant_test_01")
-    await _wait_until(
-        lambda: bridge_manager._registry[(server_id, "tu_4")].status == "connected"
-    )
+    orch.bridge_status = {"status": "connected", "qr": ""}
+    await bridge_manager.get_status(db, server_id=server_id, user_id="tu_4")
+    first_token = orch.started_tokens()[0]
 
     await bridge_manager.stop_bridge(db, server_id=server_id, user_id="tu_4", wipe=False)
+    assert orch.calls[-1][3] == {"purge": "false"}
+    assert (await _row(db, server_id, "tu_4")).status == "not_connected"
+    assert await mcp_auth.load_server_credentials(db, server_id=server_id, user_id="tu_4") == {}
+    assert await bridge_manager.get_status(db, server_id=server_id, user_id="tu_4") == {"status": "not_connected"}
 
-    assert (server_id, "tu_4") not in bridge_manager._registry
-    status = await bridge_manager.get_status(db, server_id=server_id, user_id="tu_4")
-    assert status["status"] == "not_connected"
-    # catalog-visibility credential row removed on disconnect too
-    creds = await mcp_auth.load_server_credentials(db, server_id=server_id, user_id="tu_4")
-    assert creds == {}
-
-    from vendor.models import VendorMCPBridgeInstance
-    from sqlalchemy import select
-
-    row = (
-        await db.execute(
-            select(VendorMCPBridgeInstance).where(
-                VendorMCPBridgeInstance.server_id == server_id,
-                VendorMCPBridgeInstance.user_id == "tu_4",
-            )
-        )
-    ).scalars().first()
-    assert row is not None
-    assert row.status == "not_connected"
-
-
-@pytest.mark.asyncio
-async def test_forget_bridge_wipes_data_dir(admin_client, db, monkeypatch, tmp_path):
-    server_id = await _create_device_pairing_server(admin_client, db)
     from vendor.services.mcp_service import get_mcp_server
 
     server = await get_mcp_server(db, server_id=server_id)
+    await bridge_manager.start_bridge(db, server=server, user_id="tu_4", tenant_id="tenant_test_01")
+    assert orch.started_tokens()[-1] == first_token  # same container env, no new QR
 
-    async def fake_spawn(*_args, **_kwargs):
-        return _FakeProcess(_qr_success_lines(), hang_at_eof=True)
-
-    monkeypatch.setattr(bridge_manager.asyncio, "create_subprocess_exec", fake_spawn)
-    await bridge_manager.start_bridge(db, server=server, user_id="tu_5", tenant_id="tenant_test_01")
-    await _wait_until(
-        lambda: bridge_manager._registry[(server_id, "tu_5")].status == "connected"
-    )
-
-    from vendor.models import VendorMCPBridgeInstance
-    from sqlalchemy import select
-
-    row = (
-        await db.execute(
-            select(VendorMCPBridgeInstance).where(
-                VendorMCPBridgeInstance.server_id == server_id,
-                VendorMCPBridgeInstance.user_id == "tu_5",
-            )
-        )
-    ).scalars().first()
-    data_dir = row.data_dir
-    import os
-
-    os.makedirs(data_dir, exist_ok=True)
-    with open(os.path.join(data_dir, "marker"), "w") as f:
-        f.write("x")
-
-    await bridge_manager.stop_bridge(db, server_id=server_id, user_id="tu_5", wipe=True)
-    assert not os.path.exists(data_dir)
+    await bridge_manager.stop_bridge(db, server_id=server_id, user_id="tu_4", wipe=True)
+    assert orch.calls[-1][3] == {"purge": "true"}
+    server = await get_mcp_server(db, server_id=server_id)
+    await bridge_manager.start_bridge(db, server=server, user_id="tu_4", tenant_id="tenant_test_01")
+    assert orch.started_tokens()[-1] != first_token
 
 
-# ── REST API guard conditions (no process spawned at all) ────────────────
+@pytest.mark.asyncio
+async def test_connect_as_user_reports_orchestrator_failure(admin_client, tenant_client, db, orch):
+    server_id = await _create_device_pairing_server(admin_client, db, name="wa-down")
+    orch.fail = True
+    resp = await tenant_client.post(f"{BASE}/mcp/{server_id}/bridge/connect-as-user")
+    assert resp.status_code == 502
+    assert "orchestrator" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_user_runtime_points_at_their_own_container(admin_client, db, orch):
+    import sys
+
+    from vendor.services.mcp_service import build_runtime_config
+
+    server_id, server = await _server(admin_client, db)
+    await bridge_manager.start_bridge(db, server=server, user_id="tu_rt", tenant_id=None)
+    orch.bridge_status = {"status": "connected", "qr": ""}
+    await bridge_manager.get_status(db, server_id=server_id, user_id="tu_rt")
+
+    config = await build_runtime_config(db, server=server, user_id="tu_rt", tenant_id=None)
+    row = await _row(db, server_id, "tu_rt")
+    assert config["command"] == sys.executable
+    assert config["env_vars"]["WHATSAPP_API_BASE_URL"] == f"http://eai-wa-bridge-{row.id}:8080/api"
+    assert config["env_vars"]["WHATSAPP_BRIDGE_TOKEN"] == orch.started_tokens()[0]
+
+
+# ── REST API guard conditions (no container started at all) ─────────────
 
 
 @pytest.mark.asyncio
@@ -438,3 +258,46 @@ async def test_status_as_user_not_connected_when_never_started(admin_client, ten
     resp = await tenant_client.get(f"{BASE}/mcp/{server_id}/bridge/status-as-user")
     assert resp.status_code == 200
     assert resp.json()["status"] == "not_connected"
+
+
+@pytest.mark.asyncio
+async def test_admin_test_runs_vendored_server_without_bridge(admin_client, db, monkeypatch):
+    """The vendor admin's test must not spawn the raw upstream clone: it runs
+    our vendored server with the backend's interpreter, needs no bridge, and
+    leaves the server VERIFIED as device_pairing so users can pair."""
+    import sys
+
+    import vendor.services.mcp_service as ms
+    from apps.backend.config import get_backend_settings
+    from vendor.services.mcp_service import get_mcp_server
+
+    server_id = await _create_device_pairing_server(admin_client, db)
+    server = await get_mcp_server(db, server_id=server_id)
+    server.status = "UNCONNECTED"
+    captured: dict = {}
+
+    async def _fake_connect(self, config):
+        captured.update(config)
+        return {"transport": "stdio", "bound_tools": ["send_message"],
+                "tools": [{"name": "send_message"}], "auth_type": "none"}
+
+    monkeypatch.setattr("vendor.services.mcp_service.MCPClient.connect", _fake_connect)
+
+    res = await ms.test_mcp_connection(db, server=server)
+
+    assert captured["command"] == sys.executable
+    assert captured["args"] == [get_backend_settings().WHATSAPP_MCP_SERVER_SCRIPT]
+    assert captured["source_repo_url"] is None
+    assert captured["env_vars"] == {}
+    assert res["status"] == "VERIFIED"
+    assert server.auth_type == "device_pairing"
+
+
+@pytest.mark.asyncio
+async def test_user_runtime_without_live_bridge_is_refused(admin_client, db):
+    from vendor.services.mcp_service import build_runtime_config, get_mcp_server
+
+    server_id = await _create_device_pairing_server(admin_client, db)
+    server = await get_mcp_server(db, server_id=server_id)
+    with pytest.raises(mcp_auth.McpAuthError, match="isn't connected yet"):
+        await build_runtime_config(db, server=server, user_id="tu_nobridge", tenant_id=None)

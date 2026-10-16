@@ -10,6 +10,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Globe, Link2, QrCode, Trash2, Unlink, X } from "lucide-react";
+import QRCodeLib from "qrcode";
 
 import { vendorApi, ApiError, type MCPServerEntry, type BridgeStatus } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -393,9 +394,7 @@ export function WhatsAppBridgeModal({
                 Open WhatsApp on your phone → Settings → Linked Devices → Link a Device, then
                 scan this code.
               </p>
-              <pre className="mx-auto w-fit overflow-auto rounded-md bg-white p-2 text-[6px] leading-[6px] tracking-tighter">
-                {status.qr}
-              </pre>
+              <QrCanvas value={status.qr} />
               <p className="text-[11px] text-zinc-400">Waiting for you to scan…</p>
             </>
           )}
@@ -494,4 +493,13 @@ export function ConnectServerDialog({
     );
   }
   return createPortal(dialog, document.body);
+}
+
+/** The bridge hands over the raw WhatsApp pairing payload; draw it as a QR. */
+function QrCanvas({ value }: { value: string }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    if (ref.current) QRCodeLib.toCanvas(ref.current, value, { width: 200, margin: 1 }, () => {});
+  }, [value]);
+  return <canvas ref={ref} className="mx-auto block rounded-lg" />;
 }

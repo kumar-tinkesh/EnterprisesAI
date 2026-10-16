@@ -314,3 +314,115 @@ class TestAnalyzeRepo:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+_SLACK_INDEX_TS = '''
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+const predefinedChannelIds = process.env.SLACK_CHANNEL_IDS;
+const logLevel = process.env.SLACK_LOG_URL || "https://example.com";
+async function main() {
+  const botToken = process.env.SLACK_BOT_TOKEN;
+  const teamId = process.env.SLACK_TEAM_ID;
+  if (!botToken || !teamId) {
+    console.error("Please set SLACK_BOT_TOKEN and SLACK_TEAM_ID environment variables");
+    process.exit(1);
+  }
+}
+'''
+
+_SLACK_README = '''
+Navigate to "OAuth & Permissions" and save the "Bot User OAuth Token".
+```json
+{"mcpServers": {"slack": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-slack"],
+  "env": {"SLACK_BOT_TOKEN": "xoxb-your-bot-token", "SLACK_TEAM_ID": "T01234567"}}}}
+```
+'''
+
+
+class TestOfficialSlackLayout:
+    """Monorepo subpath server whose credentials live only in source + README JSON."""
+
+    def _scanned(self):
+        return {
+            "package.json": '{"name": "@modelcontextprotocol/server-slack", "bin": {"mcp-server-slack": "dist/index.js"}}',
+            "README.md": _SLACK_README,
+            "index.ts": _SLACK_INDEX_TS,
+            "_source_files": {"index.ts": _SLACK_INDEX_TS},
+            "_server_subdir": "src/slack",
+        }
+
+    def test_env_vars_from_source_and_readme_json(self):
+        env = _extract_env_vars(self._scanned())
+        assert "SLACK_BOT_TOKEN" in env
+        assert "SLACK_TEAM_ID" in env
+        assert "SLACK_CHANNEL_IDS" not in env  # not credential-shaped
+
+    def test_normalized_config_matches_curated_connector(self):
+        from vendor.services.repo_analyzer import _build_normalized_config
+
+        cfg = _build_normalized_config(
+            scanned=self._scanned(),
+            source_type="github",
+            source_url="https://github.com/modelcontextprotocol/servers-archived/tree/main/src/slack",
+            source_subpath="src/slack",
+        )
+        assert cfg.command == "npx"
+        assert cfg.args == ["-y", "@modelcontextprotocol/server-slack"]
+        assert cfg.transport_type == "stdio"
+        # README says "OAuth", but a stdio server takes env vars.
+        assert cfg.auth_type == "env"
+        assert cfg.required_env == ["SLACK_BOT_TOKEN", "SLACK_TEAM_ID"]
+        fields = {f.name: f for f in cfg.auth_fields}
+        assert fields["SLACK_BOT_TOKEN"].type == "secret"
+        assert fields["SLACK_TEAM_ID"].type == "text"
+        assert fields["SLACK_BOT_TOKEN"].location == "env"
+        assert fields["SLACK_LOG_URL"].required is False
+
+    def test_python_getenv_default_is_optional_environ_is_required(self):
+        from vendor.services.repo_analyzer import _classify_env_vars
+
+        src = 'import os\nA = os.environ["FOO_API_KEY"]\nB = os.getenv("BAR_TOKEN", "x")\n'
+        required, optional = _classify_env_vars(
+            {"_source_files": {"main.py": src}}, ["FOO_API_KEY", "BAR_TOKEN"]
+        )
+        assert required == ["FOO_API_KEY"]
+        assert optional == ["BAR_TOKEN"]
+
+
+class TestRawManifestSubpath:
+    @pytest.mark.asyncio
+    async def test_subpath_never_falls_back_to_repo_root(self):
+        from vendor.services.repo_analyzer import scanners
+
+        base = "https://raw.githubusercontent.com/o/mono/main/"
+        files = {
+            base + "package.json": '{"name": "@o/monorepo-root", "private": true}',
+            base + "README.md": "root readme",
+            base + "src/slack/package.json": '{"name": "@o/server-slack", "bin": "dist/index.js"}',
+            base + "src/slack/index.ts": "process.env.SLACK_BOT_TOKEN",
+        }
+
+        class _Res:
+            def __init__(self, url):
+                self.status_code = 200 if url in files else 404
+                self.text = files.get(url, "")
+
+        class _Client:
+            def __init__(self, *a, **k):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def get(self, url):
+                return _Res(url)
+
+        with patch.object(scanners, "AsyncClient", _Client):
+            scanned = await scanners._fetch_github_raw_manifests("o", "mono", subpath="src/slack")
+
+        assert '"@o/server-slack"' in scanned["package.json"]
+        assert "README.md" not in scanned
+        assert scanned["_server_subdir"] == "src/slack"
+        assert scanned["_source_files"]["index.ts"] == "process.env.SLACK_BOT_TOKEN"

@@ -66,6 +66,9 @@ class NormalizedMCPConfig:
     # --- auth ---
     auth_type: str = "none"
     auth_fields: list[AuthField] = field(default_factory=list)
+    # Env vars the server provably can't start without (see
+    # inference._classify_env_vars) — checked before spawning it.
+    required_env: list[str] = field(default_factory=list)
 
     # --- legacy compat ---
     required_env_vars: list[str] = field(default_factory=list)

@@ -24,10 +24,16 @@ async def _read_file_safely(file_path: Path) -> str:
         return ""
 
 
+_SOURCE_EXTENSIONS = (".ts", ".js", ".mjs", ".py", ".go", ".rs")
+# Enough for a whole single-file server: its env checks often sit in main()
+# at the very end.
+_SOURCE_MAX_CHARS = 65536
+
+
 async def _scan_source_files(dir_path: Path) -> dict[str, str]:
     """Scan .ts, .js, .py, .go, .rs source files for transport patterns."""
     source_files: dict[str, str] = {}
-    extensions = {".ts", ".js", ".mjs", ".py", ".go", ".rs"}
+    extensions = set(_SOURCE_EXTENSIONS)
     count = 0
     try:
         for fp in sorted(dir_path.rglob("*")):
@@ -39,7 +45,7 @@ async def _scan_source_files(dir_path: Path) -> dict[str, str]:
             ):
                 try:
                     content = await asyncio.to_thread(fp.read_text, errors="ignore")
-                    source_files[fp.name] = content[:8192]
+                    source_files[fp.name] = content[:_SOURCE_MAX_CHARS]
                     count += 1
                 except Exception:
                     pass
@@ -186,42 +192,53 @@ async def _fetch_github_raw_manifests(
         "mcp_server.py",
         "index.js",
         "index.ts",
+        "src/index.ts",
+        "src/index.js",
+        "src/server.ts",
+        "main.go",
     ]
-    candidate_subpaths: list[str] = []
+    # An explicit subpath (".../tree/main/src/slack") IS the server — in a
+    # monorepo the root's package.json/README describe a different package,
+    # so never fall back to them. Without one, also try the usual subdirs.
     if subpath:
-        candidate_subpaths.append(subpath)
-    candidate_subpaths.extend([
-        f"{repo}-mcp-server",
-        f"{repo}-server",
-        f"{repo}-mcp",
-        "mcp-server",
-        "server",
-    ])
+        prefixes = [f"{subpath.strip('/')}/"]
+    else:
+        prefixes = ["", *(f"{d}/" for d in (
+            f"{repo}-mcp-server",
+            f"{repo}-server",
+            f"{repo}-mcp",
+            "mcp-server",
+            "server",
+        ))]
+
+    branches_to_try = [branch] if branch != "main" else ["main", "master", "HEAD"]
+
+    async def fetch(client: AsyncClient, fname: str) -> tuple[str, str] | None:
+        for b in branches_to_try:
+            for prefix in prefixes:
+                raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{b}/{prefix}{fname}"
+                try:
+                    res = await client.get(raw_url)
+                    if res.status_code == 200:
+                        return prefix, res.text
+                except Exception:
+                    pass
+        return None
 
     scanned: dict[str, Any] = {}
     async with AsyncClient(follow_redirects=True, timeout=10.0) as client:
-        for fname in files_to_check:
-            branches_to_try = [branch] if branch != "main" else ["main", "master", "HEAD"]
-            for b in branches_to_try:
-                paths_to_try: list[str] = [fname]
-                for sub in candidate_subpaths:
-                    paths_to_try.append(f"{sub}/{fname}")
-
-                for fpath in paths_to_try:
-                    raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{b}/{fpath}"
-                    try:
-                        res = await client.get(raw_url)
-                        if res.status_code == 200:
-                            scanned[fname] = res.text
-                            if fname.endswith(".py"):
-                                scanned.setdefault("python_files", []).append(fname)
-                            if "/" in fpath:
-                                scanned["_server_subdir"] = fpath.rsplit("/", 1)[0]
-                            break
-                    except Exception:
-                        pass
-                if fname in scanned:
-                    break
+        found = await asyncio.gather(*(fetch(client, f) for f in files_to_check))
+    for fname, hit in zip(files_to_check, found):
+        if hit is None:
+            continue
+        prefix, text = hit
+        scanned[fname] = text
+        if fname.endswith(".py"):
+            scanned.setdefault("python_files", []).append(fname)
+        if fname.endswith(_SOURCE_EXTENSIONS):
+            scanned.setdefault("_source_files", {})[fname] = text[:_SOURCE_MAX_CHARS]
+        if prefix:
+            scanned["_server_subdir"] = prefix.rstrip("/")
 
     if subpath and "_server_subdir" not in scanned:
         scanned["_server_subdir"] = subpath

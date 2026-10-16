@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import re
 import shutil
+import sys
 from pathlib import Path
 
 from sqlalchemy import delete
@@ -55,7 +56,11 @@ async def _resolve_and_build_config(
         logger.warning(
             "Could not natively resolve credentials for %s: %s", server.server_url, exc
         )
-        auth = {"headers": {}, "credentials": request_credentials or {}}
+        auth = {
+            "headers": {},
+            "credentials": request_credentials or {},
+            "auth_type": auth_config.get("auth_type") or "none",
+        }
 
     # Self-healing for Go commands with invalid module path or missing stdio subcommand
     if server.command == "go" or getattr(server, "runtime_type", None) == "go":
@@ -88,6 +93,19 @@ async def _resolve_and_build_config(
     }
 
     if transport == "stdio":
+        # Fail fast on env vars the server provably can't start without —
+        # otherwise it exits on its own and all we'd see is "connection closed".
+        provided = {
+            str(k).upper()
+            for source in (auth["credentials"] or {}, server.env_vars or {})
+            for k, v in source.items()
+            if isinstance(v, str) and v.strip()
+        }
+        missing = [n for n in auth_config.get("required_env") or [] if n.upper() not in provided]
+        if missing:
+            raise mcp_auth.McpAuthError(
+                f"{', '.join(missing)} {'is' if len(missing) == 1 else 'are'} required."
+            )
         config.update({
             "command": server.command,
             "args": server.args or [],
@@ -95,34 +113,33 @@ async def _resolve_and_build_config(
             "source_repo_url": server.source_repo_url or server.server_url,
             "env_vars": server.env_vars,
         })
-        # device_pairing (e.g. WhatsApp): the generic detected command/args
-        # above point at a fresh, unauthenticated clone of the upstream
-        # repo — real end-user usage instead requires *this user's own*
-        # long-running, QR-authenticated bridge (see
-        # vendor.services.whatsapp_bridge). Redirect the stdio process at
-        # our vendored MCP server pointed at that bridge's port/store
-        # instead, and refuse outright if it isn't connected yet.
-        if auth_config.get("auth_type") == "device_pairing" and user_id is not None:
-            bridge_status = await bridge_manager.get_status(
-                db, server_id=str(server.id), user_id=user_id
-            )
-            endpoint = bridge_manager.get_running_endpoint(str(server.id), user_id)
-            if bridge_status["status"] != "connected" or endpoint is None:
-                raise mcp_auth.McpAuthError(
-                    "Your WhatsApp bridge isn't connected yet — connect it and scan the "
-                    "QR code first (see the bridge connect flow for this server)."
+        # device_pairing (e.g. WhatsApp): the detected command/args point at
+        # a fresh, unauthenticated clone of the upstream repo, which can't
+        # work. Always run our vendored MCP server instead, with the backend's
+        # own interpreter (it has the server's deps; the PATH python3 doesn't).
+        #  - vendor admin test (no user): no bridge — listing tools needs none,
+        #    the tools only reach the bridge when called.
+        #  - a user: pointed at *their own* QR-paired bridge container (with
+        #    its token); refused outright if it isn't connected yet.
+        if auth_config.get("auth_type") == "device_pairing":
+            bridge_env: dict[str, str] = {}
+            if user_id is not None:
+                mcp_env = await bridge_manager.get_mcp_env(
+                    db, server_id=str(server.id), user_id=user_id
                 )
-            port, data_dir = endpoint
+                if mcp_env is None:
+                    raise mcp_auth.McpAuthError(
+                        "Your WhatsApp bridge isn't connected yet — connect it and scan the "
+                        "QR code first (see the bridge connect flow for this server)."
+                    )
+                bridge_env = mcp_env
             settings = get_backend_settings()
             config.update({
-                "command": "python3",
+                "command": sys.executable,
                 "args": [settings.WHATSAPP_MCP_SERVER_SCRIPT],
                 "working_directory": None,
                 "source_repo_url": None,
-                "env_vars": {
-                    "WHATSAPP_API_BASE_URL": f"http://127.0.0.1:{port}/api",
-                    "WHATSAPP_MESSAGES_DB_PATH": f"{data_dir}/store/messages.db",
-                },
+                "env_vars": bridge_env,
             })
     elif transport in ("streamable_http", "sse"):
         config.update({
@@ -170,7 +187,12 @@ async def test_mcp_connection(
 
     server.bound_tools = result["bound_tools"]
     server.status = "VERIFIED"
-    server.auth_type = result.get("auth_type", server.auth_type)
+    if (server.auth_config or {}).get("auth_type") == "device_pairing":
+        # Pairing happens per user, so the test ran with no credentials and
+        # reports "none" — keep the column in step with auth_config instead.
+        server.auth_type = "device_pairing"
+    else:
+        server.auth_type = result.get("auth_type", server.auth_type)
     await db.flush()
 
     await db.execute(delete(MCPTool).where(MCPTool.mcp_server_id == server.id))
@@ -206,7 +228,7 @@ async def test_mcp_connection(
         "tools": result["tools"],
         "server_info": result.get("server_info"),
         "protocol_version": result.get("protocol_version"),
-        "auth_type": result.get("auth_type", server.auth_type),
+        "auth_type": server.auth_type,
         "status": "VERIFIED",
     }
 

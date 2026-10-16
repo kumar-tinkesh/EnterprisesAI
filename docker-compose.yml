@@ -174,14 +174,22 @@ services:
       # live run events come back over Redis pub/sub.
       BUILDER_QUEUE_BACKEND: redis
       REDIS_URL: redis://redis:6379/0
+      # Per-user WhatsApp bridge containers (see whatsapp-orchestrator below)
+      WHATSAPP_ORCHESTRATOR_URL: http://whatsapp-orchestrator:8090
+      WHATSAPP_ORCHESTRATOR_API_KEY: ${WHATSAPP_ORCHESTRATOR_API_KEY:-dev-only-change-me}
     volumes:
       - ./data:/data  # Shared database with auth service
       - ./data/.keys:/app/apps/auth/.keys  # Shared RSA keypair with auth service
+    networks:
+      - default
+      - whatsapp  # to reach users' bridge containers (token-guarded)
     depends_on:
       auth:
         condition: service_healthy
       redis:
         condition: service_healthy
+      whatsapp-orchestrator:
+        condition: service_started
     healthcheck:
       test:
         [
@@ -214,12 +222,51 @@ services:
       REDIS_URL: redis://redis:6379/0
     volumes:
       - ./data:/data
+    networks:
+      - default
+      - whatsapp  # agent runs call users' WhatsApp bridge containers
     stop_grace_period: 30s
     depends_on:
       backend:
         condition: service_healthy
       redis:
         condition: service_healthy
+
+  # --- WhatsApp: per-user bridge containers ---------------------------------
+  # Image that whatsapp-orchestrator starts one container of per paired user.
+  # Not a long-lived service: its own container just runs `true` and exits —
+  # the orchestrator waits on that, so the image always exists first.
+  whatsapp-bridge-image:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.whatsapp_bridge
+    image: enterpriseai-whatsapp-bridge:latest
+    pull_policy: build
+    command: ["true"]
+    restart: "no"
+
+  # The only service with docker.sock mounted — see
+  # apps/whatsapp_orchestrator/main.py for why that isn't the backend's job.
+  whatsapp-orchestrator:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.whatsapp_orchestrator
+    image: enterpriseai-whatsapp-orchestrator
+    container_name: enterpriseai-whatsapp-orchestrator
+    restart: unless-stopped
+    environment:
+      ORCHESTRATOR_API_KEY: ${WHATSAPP_ORCHESTRATOR_API_KEY:-dev-only-change-me}
+      WHATSAPP_BRIDGE_IMAGE: enterpriseai-whatsapp-bridge:latest
+      WHATSAPP_NETWORK: enterpriseai_whatsapp
+      WHATSAPP_MAX_CONTAINERS: ${WHATSAPP_MAX_CONTAINERS:-0}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - default
+      - whatsapp
+    depends_on:
+      whatsapp-bridge-image:
+        condition: service_completed_successfully
 
   # --- Optional: PostgreSQL (profile "postgres") ---------------------------
   db:
@@ -270,3 +317,11 @@ services:
 volumes:
   pgdata:
   redisdata:
+
+networks:
+  # Users' WhatsApp bridge containers live here, not on `default` — they have
+  # no reason to reach redis/auth/the database, only to be reachable (by
+  # container name, token-guarded) from backend, worker and the orchestrator.
+  whatsapp:
+    name: enterpriseai_whatsapp  # pinned: the orchestrator attaches bridges by this literal name
+    driver: bridge

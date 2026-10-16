@@ -353,18 +353,12 @@ class MCPTool(Base, TimestampMixin):
 # ---------------------------------------------------------------------------
 
 class VendorMCPBridgeInstance(Base, TimestampMixin):
-    """Tracks one running (or previously-run) background bridge process for
-    a ``device_pairing``-auth server (e.g. WhatsApp), owned by exactly one
-    end user.
-
-    Unlike ``VendorMCPCredential``, there is no secret to encrypt here — the
-    "credential" *is* the long-running, QR-authenticated bridge process
-    itself. This row is the durable record of that process's identity
-    (its isolated ``data_dir`` and allocated ``port``) and last-known
-    status; the live OS process handle lives only in
-    ``vendor.services.whatsapp_bridge.manager``'s in-memory registry and is
-    re-derived (re-spawned against the same ``data_dir``) on backend
-    restart rather than persisted.
+    """Tracks one bridge for a ``device_pairing``-auth server (e.g. WhatsApp),
+    owned by exactly one end user. The bridge itself runs in its own
+    container (``eai-wa-bridge-<id>``, started by the whatsapp-orchestrator
+    service — see ``vendor.services.whatsapp_bridge.manager``) with its own
+    session volume, so this row — not any process's memory — is the source
+    of truth every backend/worker process reads.
 
     ``status`` values: ``not_connected`` | ``starting`` | ``awaiting_qr`` |
     ``connected`` | ``error``. Unique per ``(server_id, user_id)`` — exactly
@@ -392,12 +386,12 @@ class VendorMCPBridgeInstance(Base, TimestampMixin):
     user_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
 
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="not_connected")
-    # Isolated working directory for this instance's Go bridge process —
-    # holds its own store/{messages,whatsapp}.db, never shared with any
-    # other user's instance.
+    # Name of this instance's session volume (store/{messages,whatsapp}.db),
+    # mounted only into its own bridge container.
     data_dir: Mapped[str] = mapped_column(String(512), nullable=False)
-    # Allocated REST API port for this instance's bridge (each instance
-    # needs its own — the upstream bridge hardcodes one port per process).
+    # The bridge container's REST API port (on its own network address).
     port: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Fernet-encrypted token the bridge's REST API requires on every request.
+    token_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     last_connected_at: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)

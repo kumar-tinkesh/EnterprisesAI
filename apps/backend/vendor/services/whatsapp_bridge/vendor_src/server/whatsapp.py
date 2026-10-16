@@ -1,19 +1,38 @@
-import sqlite3
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Optional, List, Tuple
-import os
 import os.path
 import requests
 import json
 import audio
 
-_DEFAULT_MESSAGES_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'whatsapp-bridge', 'store', 'messages.db')
-# Overridable so multiple isolated bridge instances (one per end-user) can
-# each point this server at their own bridge's store/port instead of the
-# single shared default path/port the upstream project assumes.
-MESSAGES_DB_PATH = os.environ.get("WHATSAPP_MESSAGES_DB_PATH", _DEFAULT_MESSAGES_DB_PATH)
+# Vendor addition (not upstream): env-configurable. Upstream assumed this
+# Python process always runs as a child of the Go bridge's own working
+# directory and talks to it on localhost — true only when both run in the
+# same container. Our per-account bridge runs in its own isolated container
+# (see apps/whatsapp_orchestrator/), reachable over the whatsapp docker
+# network by name, not localhost — hence WHATSAPP_API_BASE_URL being
+# set per user (see vendor.services.whatsapp_bridge.manager.get_mcp_env). Every read below (list_messages, search_contacts,
+# ...) that upstream ran as a local SQLite query against messages.db is
+# instead a call to one of the bridge's own read endpoints (see
+# vendor_src/bridge/main.go's "Vendor addition" REST handlers) — this
+# process has no local access to that per-instance file, and never will
+# under this architecture, so there's no MESSAGES_DB_PATH here anymore.
 WHATSAPP_API_BASE_URL = os.environ.get("WHATSAPP_API_BASE_URL", "http://localhost:8080/api")
+# EnterpriseAI addition: the per-instance token the bridge requires on every
+# request (unset = none, for standalone upstream use).
+_BRIDGE_HEADERS = {"X-Bridge-Token": os.environ["WHATSAPP_BRIDGE_TOKEN"]} if os.environ.get("WHATSAPP_BRIDGE_TOKEN") else {}
+
+
+def _bridge_post(path: str, payload: dict) -> dict:
+    """POSTs to one of the bridge's read endpoints and returns the decoded
+    JSON body. Raises requests.RequestException / ValueError on transport or
+    non-2xx failure — every caller below already sits inside a try/except
+    that logs and degrades (empty list / None), matching upstream's own
+    sqlite3.Error handling shape."""
+    response = requests.post(f"{WHATSAPP_API_BASE_URL}{path}", json=payload, headers=_BRIDGE_HEADERS, timeout=15)
+    response.raise_for_status()
+    return response.json()
 
 @dataclass
 class Message:
@@ -52,49 +71,37 @@ class MessageContext:
     before: List[Message]
     after: List[Message]
 
+
+def _to_message(msg: dict) -> Message:
+    return Message(
+        timestamp=datetime.fromisoformat(msg["timestamp"]),
+        sender=msg["sender"],
+        chat_name=msg["chat_name"],
+        content=msg["content"],
+        is_from_me=msg["is_from_me"],
+        chat_jid=msg["chat_jid"],
+        id=msg["id"],
+        media_type=msg["media_type"],
+    )
+
+
+def _to_chat(chat: dict) -> Chat:
+    return Chat(
+        jid=chat["jid"],
+        name=chat["name"],
+        last_message_time=datetime.fromisoformat(chat["last_message_time"]) if chat["last_message_time"] else None,
+        last_message=chat["last_message"],
+        last_sender=chat["last_sender"],
+        last_is_from_me=chat["last_is_from_me"],
+    )
+
+
 def get_sender_name(sender_jid: str) -> str:
     try:
-        conn = sqlite3.connect(MESSAGES_DB_PATH)
-        cursor = conn.cursor()
-        
-        # First try matching by exact JID
-        cursor.execute("""
-            SELECT name
-            FROM chats
-            WHERE jid = ?
-            LIMIT 1
-        """, (sender_jid,))
-        
-        result = cursor.fetchone()
-        
-        # If no result, try looking for the number within JIDs
-        if not result:
-            # Extract the phone number part if it's a JID
-            if '@' in sender_jid:
-                phone_part = sender_jid.split('@')[0]
-            else:
-                phone_part = sender_jid
-                
-            cursor.execute("""
-                SELECT name
-                FROM chats
-                WHERE jid LIKE ?
-                LIMIT 1
-            """, (f"%{phone_part}%",))
-            
-            result = cursor.fetchone()
-        
-        if result and result[0]:
-            return result[0]
-        else:
-            return sender_jid
-        
-    except sqlite3.Error as e:
-        print(f"Database error while getting sender name: {e}")
+        return _bridge_post("/contacts/name", {"jid": sender_jid}).get("name", sender_jid)
+    except requests.RequestException as e:
+        print(f"Bridge error while getting sender name: {e}")
         return sender_jid
-    finally:
-        if 'conn' in locals():
-            conn.close()
 
 def format_message(message: Message, show_chat_info: bool = True) -> None:
     """Print a single message with consistent formatting."""
@@ -140,72 +147,28 @@ def list_messages(
 ) -> List[Message]:
     """Get messages matching the specified criteria with optional context."""
     try:
-        conn = sqlite3.connect(MESSAGES_DB_PATH)
-        cursor = conn.cursor()
-        
-        # Build base query
-        query_parts = ["SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.media_type FROM messages"]
-        query_parts.append("JOIN chats ON messages.chat_jid = chats.jid")
-        where_clauses = []
-        params = []
-        
-        # Add filters
+        # Validated and normalized to ISO-8601 here (same validation upstream
+        # did before binding to the SQL param) — the bridge's /api/messages
+        # just forwards these through to its own "timestamp > ?"/"< ?" params.
         if after:
             try:
-                after = datetime.fromisoformat(after)
+                after = datetime.fromisoformat(after).isoformat()
             except ValueError:
                 raise ValueError(f"Invalid date format for 'after': {after}. Please use ISO-8601 format.")
-            
-            where_clauses.append("messages.timestamp > ?")
-            params.append(after)
-
         if before:
             try:
-                before = datetime.fromisoformat(before)
+                before = datetime.fromisoformat(before).isoformat()
             except ValueError:
                 raise ValueError(f"Invalid date format for 'before': {before}. Please use ISO-8601 format.")
-            
-            where_clauses.append("messages.timestamp < ?")
-            params.append(before)
 
-        if sender_phone_number:
-            where_clauses.append("messages.sender = ?")
-            params.append(sender_phone_number)
-            
-        if chat_jid:
-            where_clauses.append("messages.chat_jid = ?")
-            params.append(chat_jid)
-            
-        if query:
-            where_clauses.append("LOWER(messages.content) LIKE LOWER(?)")
-            params.append(f"%{query}%")
-            
-        if where_clauses:
-            query_parts.append("WHERE " + " AND ".join(where_clauses))
-            
-        # Add pagination
-        offset = page * limit
-        query_parts.append("ORDER BY messages.timestamp DESC")
-        query_parts.append("LIMIT ? OFFSET ?")
-        params.extend([limit, offset])
-        
-        cursor.execute(" ".join(query_parts), tuple(params))
-        messages = cursor.fetchall()
-        
-        result = []
-        for msg in messages:
-            message = Message(
-                timestamp=datetime.fromisoformat(msg[0]),
-                sender=msg[1],
-                chat_name=msg[2],
-                content=msg[3],
-                is_from_me=msg[4],
-                chat_jid=msg[5],
-                id=msg[6],
-                media_type=msg[7]
-            )
-            result.append(message)
-            
+        data = _bridge_post("/messages", {
+            "after": after or "", "before": before or "",
+            "sender_phone_number": sender_phone_number or "", "chat_jid": chat_jid or "",
+            "query": query or "", "limit": limit, "page": page,
+        })
+
+        result = [_to_message(msg) for msg in data.get("messages", [])]
+
         if include_context and result:
             # Add context for each message
             messages_with_context = []
@@ -214,18 +177,15 @@ def list_messages(
                 messages_with_context.extend(context.before)
                 messages_with_context.append(context.message)
                 messages_with_context.extend(context.after)
-            
+
             return format_messages_list(messages_with_context, show_chat_info=True)
-            
+
         # Format and display messages without context
-        return format_messages_list(result, show_chat_info=True)    
-        
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
+        return format_messages_list(result, show_chat_info=True)
+
+    except requests.RequestException as e:
+        print(f"Bridge error: {e}")
         return []
-    finally:
-        if 'conn' in locals():
-            conn.close()
 
 
 def get_message_context(
@@ -235,90 +195,26 @@ def get_message_context(
 ) -> MessageContext:
     """Get context around a specific message."""
     try:
-        conn = sqlite3.connect(MESSAGES_DB_PATH)
-        cursor = conn.cursor()
-        
-        # Get the target message first
-        cursor.execute("""
-            SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.chat_jid, messages.media_type
-            FROM messages
-            JOIN chats ON messages.chat_jid = chats.jid
-            WHERE messages.id = ?
-        """, (message_id,))
-        msg_data = cursor.fetchone()
-        
-        if not msg_data:
+        response = requests.post(
+            f"{WHATSAPP_API_BASE_URL}/messages/context",
+            json={"message_id": message_id, "before": before, "after": after},
+            headers=_BRIDGE_HEADERS,
+            timeout=15,
+        )
+        if response.status_code == 404:
             raise ValueError(f"Message with ID {message_id} not found")
-            
-        target_message = Message(
-            timestamp=datetime.fromisoformat(msg_data[0]),
-            sender=msg_data[1],
-            chat_name=msg_data[2],
-            content=msg_data[3],
-            is_from_me=msg_data[4],
-            chat_jid=msg_data[5],
-            id=msg_data[6],
-            media_type=msg_data[8]
-        )
-        
-        # Get messages before
-        cursor.execute("""
-            SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.media_type
-            FROM messages
-            JOIN chats ON messages.chat_jid = chats.jid
-            WHERE messages.chat_jid = ? AND messages.timestamp < ?
-            ORDER BY messages.timestamp DESC
-            LIMIT ?
-        """, (msg_data[7], msg_data[0], before))
-        
-        before_messages = []
-        for msg in cursor.fetchall():
-            before_messages.append(Message(
-                timestamp=datetime.fromisoformat(msg[0]),
-                sender=msg[1],
-                chat_name=msg[2],
-                content=msg[3],
-                is_from_me=msg[4],
-                chat_jid=msg[5],
-                id=msg[6],
-                media_type=msg[7]
-            ))
-        
-        # Get messages after
-        cursor.execute("""
-            SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.media_type
-            FROM messages
-            JOIN chats ON messages.chat_jid = chats.jid
-            WHERE messages.chat_jid = ? AND messages.timestamp > ?
-            ORDER BY messages.timestamp ASC
-            LIMIT ?
-        """, (msg_data[7], msg_data[0], after))
-        
-        after_messages = []
-        for msg in cursor.fetchall():
-            after_messages.append(Message(
-                timestamp=datetime.fromisoformat(msg[0]),
-                sender=msg[1],
-                chat_name=msg[2],
-                content=msg[3],
-                is_from_me=msg[4],
-                chat_jid=msg[5],
-                id=msg[6],
-                media_type=msg[7]
-            ))
-        
+        response.raise_for_status()
+        data = response.json()
+
         return MessageContext(
-            message=target_message,
-            before=before_messages,
-            after=after_messages
+            message=_to_message(data["message"]),
+            before=[_to_message(m) for m in data.get("before", [])],
+            after=[_to_message(m) for m in data.get("after", [])],
         )
-        
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
+
+    except requests.RequestException as e:
+        print(f"Bridge error: {e}")
         raise
-    finally:
-        if 'conn' in locals():
-            conn.close()
 
 
 def list_chats(
@@ -330,111 +226,27 @@ def list_chats(
 ) -> List[Chat]:
     """Get chats matching the specified criteria."""
     try:
-        conn = sqlite3.connect(MESSAGES_DB_PATH)
-        cursor = conn.cursor()
-        
-        # Build base query
-        query_parts = ["""
-            SELECT 
-                chats.jid,
-                chats.name,
-                chats.last_message_time,
-                messages.content as last_message,
-                messages.sender as last_sender,
-                messages.is_from_me as last_is_from_me
-            FROM chats
-        """]
-        
-        if include_last_message:
-            query_parts.append("""
-                LEFT JOIN messages ON chats.jid = messages.chat_jid 
-                AND chats.last_message_time = messages.timestamp
-            """)
-            
-        where_clauses = []
-        params = []
-        
-        if query:
-            where_clauses.append("(LOWER(chats.name) LIKE LOWER(?) OR chats.jid LIKE ?)")
-            params.extend([f"%{query}%", f"%{query}%"])
-            
-        if where_clauses:
-            query_parts.append("WHERE " + " AND ".join(where_clauses))
-            
-        # Add sorting
-        order_by = "chats.last_message_time DESC" if sort_by == "last_active" else "chats.name"
-        query_parts.append(f"ORDER BY {order_by}")
-        
-        # Add pagination
-        offset = (page ) * limit
-        query_parts.append("LIMIT ? OFFSET ?")
-        params.extend([limit, offset])
-        
-        cursor.execute(" ".join(query_parts), tuple(params))
-        chats = cursor.fetchall()
-        
-        result = []
-        for chat_data in chats:
-            chat = Chat(
-                jid=chat_data[0],
-                name=chat_data[1],
-                last_message_time=datetime.fromisoformat(chat_data[2]) if chat_data[2] else None,
-                last_message=chat_data[3],
-                last_sender=chat_data[4],
-                last_is_from_me=chat_data[5]
-            )
-            result.append(chat)
-            
-        return result
-        
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
+        data = _bridge_post("/chats", {
+            "query": query or "", "limit": limit, "page": page,
+            "include_last_message": include_last_message, "sort_by": sort_by,
+        })
+        return [_to_chat(c) for c in data.get("chats", [])]
+    except requests.RequestException as e:
+        print(f"Bridge error: {e}")
         return []
-    finally:
-        if 'conn' in locals():
-            conn.close()
 
 
 def search_contacts(query: str) -> List[Contact]:
     """Search contacts by name or phone number."""
     try:
-        conn = sqlite3.connect(MESSAGES_DB_PATH)
-        cursor = conn.cursor()
-        
-        # Split query into characters to support partial matching
-        search_pattern = '%' +query + '%'
-        
-        cursor.execute("""
-            SELECT DISTINCT 
-                jid,
-                name
-            FROM chats
-            WHERE 
-                (LOWER(name) LIKE LOWER(?) OR LOWER(jid) LIKE LOWER(?))
-                AND jid NOT LIKE '%@g.us'
-            ORDER BY name, jid
-            LIMIT 50
-        """, (search_pattern, search_pattern))
-        
-        contacts = cursor.fetchall()
-        
-        result = []
-        for contact_data in contacts:
-            contact = Contact(
-                phone_number=contact_data[0].split('@')[0],
-                name=contact_data[1],
-                jid=contact_data[0]
-            )
-            result.append(contact)
-            
-        return result
-        
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
+        data = _bridge_post("/contacts/search", {"query": query})
+        return [
+            Contact(phone_number=c["jid"].split("@")[0], name=c["name"], jid=c["jid"])
+            for c in data.get("contacts", [])
+        ]
+    except requests.RequestException as e:
+        print(f"Bridge error: {e}")
         return []
-    finally:
-        if 'conn' in locals():
-            conn.close()
 
 
 def get_contact_chats(jid: str, limit: int = 20, page: int = 0) -> List[Chat]:
@@ -446,186 +258,46 @@ def get_contact_chats(jid: str, limit: int = 20, page: int = 0) -> List[Chat]:
         page: Page number for pagination (default 0)
     """
     try:
-        conn = sqlite3.connect(MESSAGES_DB_PATH)
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT DISTINCT
-                c.jid,
-                c.name,
-                c.last_message_time,
-                m.content as last_message,
-                m.sender as last_sender,
-                m.is_from_me as last_is_from_me
-            FROM chats c
-            JOIN messages m ON c.jid = m.chat_jid
-            WHERE m.sender = ? OR c.jid = ?
-            ORDER BY c.last_message_time DESC
-            LIMIT ? OFFSET ?
-        """, (jid, jid, limit, page * limit))
-        
-        chats = cursor.fetchall()
-        
-        result = []
-        for chat_data in chats:
-            chat = Chat(
-                jid=chat_data[0],
-                name=chat_data[1],
-                last_message_time=datetime.fromisoformat(chat_data[2]) if chat_data[2] else None,
-                last_message=chat_data[3],
-                last_sender=chat_data[4],
-                last_is_from_me=chat_data[5]
-            )
-            result.append(chat)
-            
-        return result
-        
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
+        data = _bridge_post("/contacts/chats", {"jid": jid, "limit": limit, "page": page})
+        return [_to_chat(c) for c in data.get("chats", [])]
+    except requests.RequestException as e:
+        print(f"Bridge error: {e}")
         return []
-    finally:
-        if 'conn' in locals():
-            conn.close()
 
 
 def get_last_interaction(jid: str) -> str:
     """Get most recent message involving the contact."""
     try:
-        conn = sqlite3.connect(MESSAGES_DB_PATH)
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT 
-                m.timestamp,
-                m.sender,
-                c.name,
-                m.content,
-                m.is_from_me,
-                c.jid,
-                m.id,
-                m.media_type
-            FROM messages m
-            JOIN chats c ON m.chat_jid = c.jid
-            WHERE m.sender = ? OR c.jid = ?
-            ORDER BY m.timestamp DESC
-            LIMIT 1
-        """, (jid, jid))
-        
-        msg_data = cursor.fetchone()
-        
-        if not msg_data:
+        data = _bridge_post("/messages/last-interaction", {"jid": jid})
+        msg = data.get("message")
+        if not msg:
             return None
-            
-        message = Message(
-            timestamp=datetime.fromisoformat(msg_data[0]),
-            sender=msg_data[1],
-            chat_name=msg_data[2],
-            content=msg_data[3],
-            is_from_me=msg_data[4],
-            chat_jid=msg_data[5],
-            id=msg_data[6],
-            media_type=msg_data[7]
-        )
-        
-        return format_message(message)
-        
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
+        return format_message(_to_message(msg))
+    except requests.RequestException as e:
+        print(f"Bridge error: {e}")
         return None
-    finally:
-        if 'conn' in locals():
-            conn.close()
 
 
 def get_chat(chat_jid: str, include_last_message: bool = True) -> Optional[Chat]:
     """Get chat metadata by JID."""
     try:
-        conn = sqlite3.connect(MESSAGES_DB_PATH)
-        cursor = conn.cursor()
-        
-        query = """
-            SELECT 
-                c.jid,
-                c.name,
-                c.last_message_time,
-                m.content as last_message,
-                m.sender as last_sender,
-                m.is_from_me as last_is_from_me
-            FROM chats c
-        """
-        
-        if include_last_message:
-            query += """
-                LEFT JOIN messages m ON c.jid = m.chat_jid 
-                AND c.last_message_time = m.timestamp
-            """
-            
-        query += " WHERE c.jid = ?"
-        
-        cursor.execute(query, (chat_jid,))
-        chat_data = cursor.fetchone()
-        
-        if not chat_data:
-            return None
-            
-        return Chat(
-            jid=chat_data[0],
-            name=chat_data[1],
-            last_message_time=datetime.fromisoformat(chat_data[2]) if chat_data[2] else None,
-            last_message=chat_data[3],
-            last_sender=chat_data[4],
-            last_is_from_me=chat_data[5]
-        )
-        
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
+        data = _bridge_post("/chats/get", {"chat_jid": chat_jid, "include_last_message": include_last_message})
+        chat = data.get("chat")
+        return _to_chat(chat) if chat else None
+    except requests.RequestException as e:
+        print(f"Bridge error: {e}")
         return None
-    finally:
-        if 'conn' in locals():
-            conn.close()
 
 
 def get_direct_chat_by_contact(sender_phone_number: str) -> Optional[Chat]:
     """Get chat metadata by sender phone number."""
     try:
-        conn = sqlite3.connect(MESSAGES_DB_PATH)
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT 
-                c.jid,
-                c.name,
-                c.last_message_time,
-                m.content as last_message,
-                m.sender as last_sender,
-                m.is_from_me as last_is_from_me
-            FROM chats c
-            LEFT JOIN messages m ON c.jid = m.chat_jid 
-                AND c.last_message_time = m.timestamp
-            WHERE c.jid LIKE ? AND c.jid NOT LIKE '%@g.us'
-            LIMIT 1
-        """, (f"%{sender_phone_number}%",))
-        
-        chat_data = cursor.fetchone()
-        
-        if not chat_data:
-            return None
-            
-        return Chat(
-            jid=chat_data[0],
-            name=chat_data[1],
-            last_message_time=datetime.fromisoformat(chat_data[2]) if chat_data[2] else None,
-            last_message=chat_data[3],
-            last_sender=chat_data[4],
-            last_is_from_me=chat_data[5]
-        )
-        
-    except sqlite3.Error as e:
-        print(f"Database error: {e}")
+        data = _bridge_post("/chats/by-contact", {"sender_phone_number": sender_phone_number})
+        chat = data.get("chat")
+        return _to_chat(chat) if chat else None
+    except requests.RequestException as e:
+        print(f"Bridge error: {e}")
         return None
-    finally:
-        if 'conn' in locals():
-            conn.close()
 
 def send_message(recipient: str, message: str) -> Tuple[bool, str]:
     try:
@@ -638,8 +310,16 @@ def send_message(recipient: str, message: str) -> Tuple[bool, str]:
             "recipient": recipient,
             "message": message,
         }
-        
-        response = requests.post(url, json=payload)
+
+        # Vendor addition (not upstream): explicit timeout, matching
+        # _bridge_post's own pattern above — this call (unlike that one) had
+        # none at all, so a stalled bridge/WhatsApp-server round-trip left
+        # this request hanging indefinitely on the Python side too, with
+        # nothing here to ever raise a clear, actionable error. 45s is a few
+        # seconds above the Go bridge's own server-side WriteTimeout (see
+        # services/whatsapp-bridge/main.go), so a legitimately-completing
+        # send is never cut off here first.
+        response = requests.post(url, json=payload, headers=_BRIDGE_HEADERS, timeout=45)
         
         # Check if the request was successful
         if response.status_code == 200:
@@ -672,16 +352,17 @@ def send_file(recipient: str, media_path: str) -> Tuple[bool, str]:
             "recipient": recipient,
             "media_path": media_path
         }
-        
-        response = requests.post(url, json=payload)
-        
+
+        # See send_message's own timeout comment above — same gap, same fix.
+        response = requests.post(url, json=payload, headers=_BRIDGE_HEADERS, timeout=45)
+
         # Check if the request was successful
         if response.status_code == 200:
             result = response.json()
             return result.get("success", False), result.get("message", "Unknown response")
         else:
             return False, f"Error: HTTP {response.status_code} - {response.text}"
-            
+
     except requests.RequestException as e:
         return False, f"Request error: {str(e)}"
     except json.JSONDecodeError:
@@ -712,16 +393,17 @@ def send_audio_message(recipient: str, media_path: str) -> Tuple[bool, str]:
             "recipient": recipient,
             "media_path": media_path
         }
-        
-        response = requests.post(url, json=payload)
-        
+
+        # See send_message's own timeout comment above — same gap, same fix.
+        response = requests.post(url, json=payload, headers=_BRIDGE_HEADERS, timeout=45)
+
         # Check if the request was successful
         if response.status_code == 200:
             result = response.json()
             return result.get("success", False), result.get("message", "Unknown response")
         else:
             return False, f"Error: HTTP {response.status_code} - {response.text}"
-            
+
     except requests.RequestException as e:
         return False, f"Request error: {str(e)}"
     except json.JSONDecodeError:
@@ -745,8 +427,9 @@ def download_media(message_id: str, chat_jid: str) -> Optional[str]:
             "message_id": message_id,
             "chat_jid": chat_jid
         }
-        
-        response = requests.post(url, json=payload)
+
+        # See send_message's own timeout comment above — same gap, same fix.
+        response = requests.post(url, json=payload, headers=_BRIDGE_HEADERS, timeout=45)
         
         if response.status_code == 200:
             result = response.json()

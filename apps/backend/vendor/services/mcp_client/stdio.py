@@ -5,6 +5,7 @@ import logging
 import os
 import shlex
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -400,7 +401,9 @@ async def _prepare_local_repo_stdio(
 
 def _sanitize_stdio_env(env: dict[str, str]) -> dict[str, str]:
     """Drop backend-virtualenv state that must not leak into spawned servers."""
-    stray_keys = {"VIRTUAL_ENV", "PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP", "PYTHONUSERBASE"}
+    stray_keys = {"VIRTUAL_ENV", "PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP", "PYTHONUSERBASE",
+                  # lets its holder start/stop any user's WhatsApp bridge container
+                  "WHATSAPP_ORCHESTRATOR_API_KEY"}
     cleaned = {k: v for k, v in env.items() if k not in stray_keys}
     path = cleaned.get("PATH")
     if path:
@@ -565,6 +568,16 @@ def _isolate_home(env: dict[str, str], home_dir: Path) -> None:
     env["USERPROFILE"] = str(home_dir)
 
 
+def _stderr_tail(errlog, max_lines: int = 15, max_chars: int = 1500) -> str:
+    try:
+        errlog.flush()
+        errlog.seek(0)
+        lines = [ln.rstrip() for ln in errlog.read().splitlines() if ln.strip()]
+    except Exception:  # noqa: BLE001
+        return ""
+    return " | ".join(lines[-max_lines:])[-max_chars:]
+
+
 async def _connect_stdio(
     command: str,
     credentials: dict[str, str] | None,
@@ -582,8 +595,17 @@ async def _connect_stdio(
     from vendor.services import mcp_client
     stdio_fn = getattr(mcp_client, "stdio_client", stdio_client)
     session_details_fn = getattr(mcp_client, "_session_details", _session_details)
-    async with stdio_fn(params) as (read_stream, write_stream):
-        details = await session_details_fn(read_stream, write_stream)
+    # Keep the server's stderr: when it exits during startup (missing env
+    # var, bad token, ...) its own message is the only useful error.
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as errlog:
+        try:
+            async with stdio_fn(params, errlog=errlog) as (read_stream, write_stream):
+                details = await session_details_fn(read_stream, write_stream)
+        except Exception as exc:
+            tail = _stderr_tail(errlog)
+            if tail:
+                raise RuntimeError(f"MCP server failed to start: {tail}") from exc
+            raise
     logger.info("stdio connected to %s — discovered %d tool(s)", command, len(details["tools"]))
     return {
         "transport": "stdio",

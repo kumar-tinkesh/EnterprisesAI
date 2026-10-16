@@ -733,9 +733,9 @@ function ConnectCredentialModal({
   const isStdio = server.transport === "stdio";
   const needsNoCreds = credentialFields.length === 0 && isStdio;
   // device_pairing (e.g. WhatsApp): there is no vendor-wide account to
-  // verify here — clicking "connect" below only proves the MCP protocol
-  // scaffolding runs (it spawns the raw, unauthenticated server), never
-  // that the server is actually usable. Read from auth_config directly
+  // verify here — the test below runs our vendored MCP server with no
+  // bridge, which discovers its tools; each user then pairs their own phone
+  // by QR before those tools can run. Read from auth_config directly
   // (not the top-level auth_type) so this can't silently go stale again
   // the way it did before (see the c8e2a6f13d90 backfill migration).
   const isDevicePairing = (server.auth_config as any)?.auth_type === "device_pairing";
@@ -834,14 +834,12 @@ function ConnectCredentialModal({
           {isDevicePairing ? (
             <div className="rounded-lg bg-amber-50 border border-amber-200 p-3">
               <p className="text-xs font-medium text-amber-900">
-                Nothing to verify centrally for this server.
+                No credentials needed — each user pairs their own phone.
               </p>
               <p className="mt-1 text-xs text-amber-700">
-                This server authenticates per end-user via device pairing (e.g. scanning a
-                QR code) — there is no single vendor-wide account to connect. Running the
-                check below only confirms the server process starts and speaks MCP; it does
-                not mean any user is actually paired yet. Each user connects independently
-                from their own dashboard.
+                Testing discovers this server&apos;s tools and makes it available to users.
+                Each user then connects from their own dashboard by scanning a QR code with
+                their phone; until they do, the tools can&apos;t run for them.
               </p>
             </div>
           ) : needsNoCreds ? (

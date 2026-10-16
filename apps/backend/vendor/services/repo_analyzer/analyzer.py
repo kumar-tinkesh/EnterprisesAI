@@ -15,6 +15,7 @@ from vendor.api.v1.schemas import AnalyzeRepoResponse
 from vendor.services.repo_analyzer.inference import (
     _best_transport,
     _build_auth_fields,
+    _classify_env_vars,
     _collect_transport_evidence,
     _detect_auth_type,
     _extract_env_vars,
@@ -143,9 +144,11 @@ async def _analyze_github_repo_normalized(url: str, root: Path) -> NormalizedMCP
 
             target_dir = clone_dir
             if gh.subpath:
-                candidate = clone_dir / gh.subpath
-                if candidate.is_dir():
-                    target_dir = candidate
+                # A subpath that isn't in the repo (e.g. a server since moved
+                # elsewhere) must not fall back to describing the repo root.
+                target_dir = clone_dir / gh.subpath
+                if not target_dir.is_dir():
+                    raise FileNotFoundError(f"{gh.subpath} not found in {gh.owner}/{gh.repo}")
 
             scan_dir_fn = getattr(repo_analyzer, "_scan_local_dir", _scan_local_dir)
             scan_src_fn = getattr(repo_analyzer, "_scan_source_files", _scan_source_files)
@@ -365,10 +368,18 @@ def _build_normalized_config(
 
     auth_type = detect_auth_fn(scanned, remote_endpoint)
     env_vars = extract_env_fn(scanned)
-    if auth_type == "oauth2" or any(v.endswith("_OAUTH_CREDENTIALS") or v.endswith("_CREDENTIALS_JSON") for v in env_vars):
+    oauth_file_vars = any(v.endswith("_OAUTH_CREDENTIALS") or v.endswith("_CREDENTIALS_JSON") for v in env_vars)
+    oauth_client_pair = any(v.endswith("CLIENT_ID") for v in env_vars) and any(v.endswith("CLIENT_SECRET") for v in env_vars)
+    if oauth_file_vars:
         auth_type = "oauth2"
+    elif final_transport == "stdio" and env_vars and not oauth_client_pair:
+        # A stdio server takes its credentials as env vars, whatever its
+        # README calls them ("Bot User OAuth Token", "Bearer token") — an
+        # OAuth/bearer guess here would render the wrong connect form.
+        auth_type = "env"
 
-    auth_fields = build_fields_fn(env_vars)
+    required_env, optional_env = _classify_env_vars(scanned, env_vars)
+    auth_fields = build_fields_fn(env_vars, optional_env)
     if not auth_fields and auth_type not in ("none", "unknown"):
         auth_fields = build_fields_type_fn(
             auth_type, is_github=(source_type == "github"), source_url=source_url
@@ -393,6 +404,7 @@ def _build_normalized_config(
         endpoint=remote_endpoint,
         auth_type=auth_type,
         auth_fields=auth_fields,
+        required_env=required_env,
         required_env_vars=env_vars,
         hints=[],
     )

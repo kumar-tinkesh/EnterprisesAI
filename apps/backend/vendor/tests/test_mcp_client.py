@@ -298,7 +298,7 @@ async def test_connect_stdio_without_credentials(monkeypatch):
         return "python", ["main.py"], "/tmp"
 
     @asynccontextmanager
-    async def _mock_stdio_client(params):
+    async def _mock_stdio_client(params, errlog=None):
         yield ("read", "write")
 
     async def _mock_session_details(read_stream, write_stream):
@@ -322,3 +322,25 @@ async def test_connect_stdio_without_credentials(monkeypatch):
     client = mc.MCPClient()
     result = await client.connect(config)
     assert result["transport"] == "stdio"
+
+@pytest.mark.asyncio
+async def test_stdio_startup_failure_surfaces_server_stderr(monkeypatch):
+    """A server that exits during startup reports its own stderr, not just 'connection closed'."""
+    from contextlib import asynccontextmanager
+    import vendor.services.mcp_client as mc
+    from vendor.services.mcp_client.stdio import _connect_stdio
+
+    async def _mock_prepare(command, repo_url):
+        return "npx", ["-y", "@modelcontextprotocol/server-slack"], None
+
+    @asynccontextmanager
+    async def _mock_stdio_client(params, errlog=None):
+        errlog.write("Please set SLACK_BOT_TOKEN and SLACK_TEAM_ID environment variables\n")
+        raise RuntimeError("Connection closed")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(mc, "_prepare_local_repo_stdio", _mock_prepare)
+    monkeypatch.setattr(mc, "stdio_client", _mock_stdio_client)
+
+    with pytest.raises(RuntimeError, match="Please set SLACK_BOT_TOKEN"):
+        await _connect_stdio("npx -y @modelcontextprotocol/server-slack", None)

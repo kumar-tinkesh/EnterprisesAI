@@ -221,17 +221,22 @@ def _var_field_type(name: str) -> str:
     upper = name.upper()
     if any(upper.endswith(suffix) for suffix in ("_URL", "_URI", "_ENDPOINT", "_HOST")):
         return "url"
+    # Identifiers (team/workspace/project ids, usernames) aren't secrets —
+    # except key ids, which are half of a credential pair.
+    if any(upper.endswith(suffix) for suffix in ("_ID", "_IDS", "_USERNAME", "_REGION", "_INSTANCE")) and not upper.endswith("KEY_ID"):
+        return "text"
     return "secret"
 
 
-def _build_auth_fields(env_vars: list[str]) -> list[AuthField]:
+def _build_auth_fields(env_vars: list[str], optional: list[str] | None = None) -> list[AuthField]:
     """Convert a list of env var names to structured AuthField objects."""
+    optional_set = set(optional or [])
     return [
         AuthField(
             name=v,
             label=_var_name_to_label(v),
             type=_var_field_type(v),
-            required=True,
+            required=v not in optional_set,
             location="env",
         )
         for v in env_vars
@@ -487,6 +492,20 @@ def _extract_env_vars(scanned: dict[str, Any]) -> list[str]:
                 if m_upper not in IGNORED_SYSTEM_ENV_VARS:
                     env_vars.add(m_upper)
 
+    # README MCP-client config blocks: "env": {"SLACK_BOT_TOKEN": "xoxb-..."}
+    readme = get_content("README.md")
+    if readme:
+        for m in _README_ENV_JSON_RE.findall(readme):
+            if _CREDENTIAL_NAME_RE.fullmatch(m):
+                env_vars.add(m)
+
+    # What the server itself reads: process.env.X, os.getenv("X"), ...
+    for text in _source_texts(scanned):
+        for pattern in _SOURCE_ENV_READ_RES:
+            for m in pattern.findall(text):
+                if _CREDENTIAL_NAME_RE.fullmatch(m):
+                    env_vars.add(m)
+
     cleaned = []
     for v in env_vars:
         if v in IGNORED_SYSTEM_ENV_VARS:
@@ -496,6 +515,73 @@ def _extract_env_vars(scanned: dict[str, Any]) -> list[str]:
         cleaned.append(v)
 
     return sorted(cleaned)
+
+
+_CREDENTIAL_NAME_RE = re.compile(r"[A-Z0-9_]{2,}_(?:" + _CREDENTIAL_SUFFIXES + r")")
+_README_ENV_JSON_RE = re.compile(r"\"([A-Z][A-Z0-9_]+)\"\s*:\s*\"")
+
+_ENV_NAME = r"([A-Z][A-Z0-9_]+)"
+_SOURCE_ENV_READ_RES: tuple[re.Pattern[str], ...] = (
+    re.compile(r"process\.env\." + _ENV_NAME + r"\b"),
+    re.compile(r"process\.env\[\s*['\"]" + _ENV_NAME + r"['\"]\s*\]"),
+    re.compile(r"os\.environ\[\s*['\"]" + _ENV_NAME + r"['\"]\s*\]"),
+    re.compile(r"os\.(?:environ\.get|getenv)\(\s*['\"]" + _ENV_NAME + r"['\"]"),
+    re.compile(r"os\.(?:Getenv|LookupEnv)\(\s*\"" + _ENV_NAME + r"\""),
+    re.compile(r"env::var\(\s*\"" + _ENV_NAME + r"\""),
+)
+
+# A read that would crash/raise when unset — the var is required.
+#   process.env.X!   (TS non-null assertion)      os.environ["X"]  (KeyError)
+_HARD_ENV_READ_RES: tuple[re.Pattern[str], ...] = (
+    re.compile(r"process\.env\." + _ENV_NAME + r"!(?!=)"),
+    re.compile(r"process\.env\[\s*['\"]" + _ENV_NAME + r"['\"]\s*\]!(?!=)"),
+    re.compile(r"os\.environ\[\s*['\"]" + _ENV_NAME + r"['\"]\s*\]"),
+)
+# A read with a fallback value — the var is optional.
+#   process.env.X || "..."   process.env.X ?? "..."   os.getenv("X", "...")
+_DEFAULTED_ENV_READ_RES: tuple[re.Pattern[str], ...] = (
+    re.compile(r"process\.env\." + _ENV_NAME + r"\s*(?:\|\||\?\?)"),
+    re.compile(r"process\.env\[\s*['\"]" + _ENV_NAME + r"['\"]\s*\]\s*(?:\|\||\?\?)"),
+    re.compile(r"os\.(?:environ\.get|getenv)\(\s*['\"]" + _ENV_NAME + r"['\"]\s*,"),
+)
+# A startup error naming the var ("Please set SLACK_BOT_TOKEN ...") — required.
+_ENV_ERROR_LINE_RE = re.compile(
+    r"process\.exit|throw\b|raise\b|sys\.exit|log\.Fatal|panic\("
+    r"|is required|are required|must be set|please set|not set|missing",
+    re.IGNORECASE,
+)
+
+
+def _source_texts(scanned: dict[str, Any]) -> list[str]:
+    source_files = scanned.get("_source_files")
+    if not isinstance(source_files, dict):
+        return []
+    return [v for v in source_files.values() if isinstance(v, str)]
+
+
+def _classify_env_vars(scanned: dict[str, Any], env_vars: list[str]) -> tuple[list[str], list[str]]:
+    """Split ``env_vars`` into (required, optional) from how the source reads them.
+
+    Evidence-based only — mirrors a curated ``required_env`` list: a var is
+    *required* when the server can't start without it (a crashing read, or a
+    startup error message naming it) and *optional* when it's read with a
+    fallback. Vars with no evidence either way are in neither list.
+    """
+    wanted = set(env_vars)
+    required: set[str] = set()
+    optional: set[str] = set()
+    for text in _source_texts(scanned):
+        for pattern in _HARD_ENV_READ_RES:
+            required.update(m for m in pattern.findall(text) if m in wanted)
+        for pattern in _DEFAULTED_ENV_READ_RES:
+            optional.update(m for m in pattern.findall(text) if m in wanted)
+        for line in text.splitlines():
+            if not _ENV_ERROR_LINE_RE.search(line):
+                continue
+            for name in wanted:
+                if re.search(r"\b" + re.escape(name) + r"\b", line):
+                    required.add(name)
+    return sorted(required), sorted(optional - required)
 
 
 def _detect_auth_type(scanned: dict[str, Any], remote_endpoint: str | None = None) -> str:

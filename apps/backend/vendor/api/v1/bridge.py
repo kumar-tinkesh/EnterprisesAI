@@ -56,7 +56,7 @@ async def start_bridge_as_user(
             db, server=server, user_id=user.id, tenant_id=user.tenant_id
         )
     except bridge_manager.BridgeError as exc:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     return BridgeStatusResponse(**result)
 
 
@@ -96,4 +96,7 @@ async def forget_bridge_as_user(
     connect always requires a fresh QR scan, matching unlinking the device
     from the WhatsApp app on the phone."""
     await _get_visible_device_pairing_server(db, server_id=server_id, user=user)
-    await bridge_manager.stop_bridge(db, server_id=server_id, user_id=user.id, wipe=True)
+    try:
+        await bridge_manager.stop_bridge(db, server_id=server_id, user_id=user.id, wipe=True)
+    except bridge_manager.BridgeError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc

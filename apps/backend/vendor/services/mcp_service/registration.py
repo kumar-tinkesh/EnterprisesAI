@@ -58,6 +58,7 @@ async def add_mcp_server(
         "auth_type": normalized.auth_type,
         "transport": normalized.transport_type,
         "credential_fields": [f.to_dict() for f in normalized.auth_fields],
+        "required_env": list(normalized.required_env),
         "confidence": str(normalized.transport_confidence),
         "hints": normalized.hints,
         "oauth": {},

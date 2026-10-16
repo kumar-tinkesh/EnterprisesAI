@@ -87,10 +87,6 @@ async def lifespan(app: FastAPI):
 
     reembed_task = asyncio.create_task(_reembed())
 
-    from vendor.services.whatsapp_bridge import manager as bridge_manager
-
-    reaper_task = asyncio.create_task(bridge_manager.reaper_loop())
-
     # Builder runs: with BUILDER_QUEUE_BACKEND=inline this process is also the
     # worker (local dev); with redis, separate `python -m builder.worker`
     # processes run them and this one only enqueues and streams events.
@@ -112,13 +108,9 @@ async def lifespan(app: FastAPI):
             await run_worker.stop()
         await get_run_queue().close()
         await get_event_bus().close()
-        reaper_task.cancel()
         reembed_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await reaper_task
         # Stop every pooled MCP tool session (and its stdio process).
         await shutdown_pool()
-        await bridge_manager.shutdown_all()
 
 
 def create_app() -> FastAPI:

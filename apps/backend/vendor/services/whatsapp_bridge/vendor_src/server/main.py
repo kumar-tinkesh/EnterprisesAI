@@ -1,5 +1,18 @@
+# Vendor addition (not upstream): all 12 upstream tools are registered
+# below. The 8 read-side ones (search_contacts, list_messages, list_chats,
+# get_chat, get_direct_chat_by_contact, get_contact_chats,
+# get_last_interaction, get_message_context) were deferred in an earlier
+# phase because this process has no local access to the bridge's message
+# history file — they're wired back in now that whatsapp.py's read
+# functions call the bridge's own read endpoints over HTTP instead (see
+# services/whatsapp-bridge/main.go's "Vendor addition" REST handlers, and
+# whatsapp.py's WHATSAPP_API_BASE_URL comment) rather than opening
+# messages.db directly.
 from typing import List, Dict, Any, Optional
-from mcp.server.fastmcp import FastMCP
+try:
+    from mcp.server.fastmcp import FastMCP
+except ModuleNotFoundError:  # mcp>=2 renamed FastMCP -> MCPServer (same API used here)
+    from mcp.server.mcpserver import MCPServer as FastMCP
 from whatsapp import (
     search_contacts as whatsapp_search_contacts,
     list_messages as whatsapp_list_messages,
@@ -21,7 +34,7 @@ mcp = FastMCP("whatsapp")
 @mcp.tool()
 def search_contacts(query: str) -> List[Dict[str, Any]]:
     """Search WhatsApp contacts by name or phone number.
-    
+
     Args:
         query: Search term to match against contact names or phone numbers
     """
@@ -42,7 +55,7 @@ def list_messages(
     context_after: int = 1
 ) -> List[Dict[str, Any]]:
     """Get WhatsApp messages matching specified criteria with optional context.
-    
+
     Args:
         after: Optional ISO-8601 formatted string to only return messages after this date
         before: Optional ISO-8601 formatted string to only return messages before this date
@@ -78,7 +91,7 @@ def list_chats(
     sort_by: str = "last_active"
 ) -> List[Dict[str, Any]]:
     """Get WhatsApp chats matching specified criteria.
-    
+
     Args:
         query: Optional search term to filter chats by name or JID
         limit: Maximum number of chats to return (default 20)
@@ -98,7 +111,7 @@ def list_chats(
 @mcp.tool()
 def get_chat(chat_jid: str, include_last_message: bool = True) -> Dict[str, Any]:
     """Get WhatsApp chat metadata by JID.
-    
+
     Args:
         chat_jid: The JID of the chat to retrieve
         include_last_message: Whether to include the last message (default True)
@@ -109,7 +122,7 @@ def get_chat(chat_jid: str, include_last_message: bool = True) -> Dict[str, Any]
 @mcp.tool()
 def get_direct_chat_by_contact(sender_phone_number: str) -> Dict[str, Any]:
     """Get WhatsApp chat metadata by sender phone number.
-    
+
     Args:
         sender_phone_number: The phone number to search for
     """
@@ -119,7 +132,7 @@ def get_direct_chat_by_contact(sender_phone_number: str) -> Dict[str, Any]:
 @mcp.tool()
 def get_contact_chats(jid: str, limit: int = 20, page: int = 0) -> List[Dict[str, Any]]:
     """Get all WhatsApp chats involving the contact.
-    
+
     Args:
         jid: The contact's JID to search for
         limit: Maximum number of chats to return (default 20)
@@ -131,7 +144,7 @@ def get_contact_chats(jid: str, limit: int = 20, page: int = 0) -> List[Dict[str
 @mcp.tool()
 def get_last_interaction(jid: str) -> str:
     """Get most recent WhatsApp message involving the contact.
-    
+
     Args:
         jid: The JID of the contact to search for
     """
@@ -145,7 +158,7 @@ def get_message_context(
     after: int = 5
 ) -> Dict[str, Any]:
     """Get context around a specific WhatsApp message.
-    
+
     Args:
         message_id: The ID of the message to get context for
         before: Number of messages to include before the target message (default 5)
