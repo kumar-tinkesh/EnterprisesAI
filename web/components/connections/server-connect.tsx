@@ -37,6 +37,8 @@ export function UserConnectModal({
   const fields = server.credential_fields ?? [];
   const [values, setValues] = useState<Record<string, string>>({});
   const isOAuth = server.auth_type === "oauth2";
+  // LinkedIn (backend vendor/services/mcp_auth/linkedin.py): each user's own li_at cookie.
+  const isLinkedInCookie = server.auth_type === "linkedin_cookie";
   const [oauthMessage, setOauthMessage] = useState<string | null>(null);
   const isStdio = server.transport === "stdio";
   // No declared fields ever surfaced for this server (auth_type detection
@@ -143,11 +145,19 @@ export function UserConnectModal({
             Your credentials are stored separately from anyone else&apos;s.
           </p>
 
+          {isLinkedInCookie && (
+            <p className="rounded-md bg-sky-50 p-3 text-xs text-sky-800">
+              Sign in to linkedin.com in your browser, open DevTools → Application (Storage in Firefox) → Cookies →
+              https://www.linkedin.com, and copy the value of <span className="font-mono">li_at</span>. It works until
+              you sign out of LinkedIn there.
+            </p>
+          )}
+
           {fields.length > 0 ? (
             <div className="space-y-3">
               {fields.map((f) => (
                 <div key={f}>
-                  <label className="block text-xs font-medium text-zinc-600">{f}</label>
+                  <label className="block text-xs font-medium text-zinc-600">{isLinkedInCookie && f === "LI_AT" ? "LinkedIn li_at cookie" : f}</label>
                   <Input
                     type="password"
                     value={values[f] || ""}
@@ -451,6 +461,9 @@ export function ConnectServerDialog({
     void queryClient.invalidateQueries({ queryKey: ["catalog", token] });
     void queryClient.invalidateQueries({ queryKey: ["builder-server-tools", serverId] });
     void queryClient.invalidateQueries({ queryKey: ["builder-tool-search"] });
+    // Steps that need this system pick its tools up (builder/tool-needs).
+    void queryClient.invalidateQueries({ queryKey: ["builder-tool-needs"] });
+    void queryClient.invalidateQueries({ queryKey: ["builder-templates"] });
     onConnected();
   };
   const connect = useMutation({

@@ -79,6 +79,24 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 # uv/uvx for stdio MCP servers launched with `uvx`.
 COPY --from=uv /uv /uvx /bin/
 
+# LinkedIn (vendor/services/mcp_auth/linkedin.py): stickerdaniel/linkedin-mcp-server
+# drives a real headless Chromium, so it's a pinned uv tool on the image's
+# Python 3.12 with its browser installed here — a connect never waits on a
+# download. Bump the version together with linkedin.PACKAGE.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/patchright
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    UV_TOOL_DIR=/opt/uv-tools UV_TOOL_BIN_DIR=/usr/local/bin UV_PYTHON_PREFERENCE=only-system \
+    uv tool install --compile-bytecode --python 3.12 mcp-server-linkedin==4.26.0 \
+    && /opt/uv-tools/mcp-server-linkedin/bin/patchright install-deps chromium \
+    && rm -rf /root/.cache/uv
+# Separate layer + retries: the browser download is the flaky part, and a
+# failure here shouldn't throw away the layer above.
+RUN for i in 1 2 3 4 5; do \
+        /opt/uv-tools/mcp-server-linkedin/bin/patchright install chromium --no-shell && exit 0; \
+        echo "patchright install failed (attempt $i), retrying in 10s..."; sleep 10; \
+    done; exit 1
+
 # Python venv and the downloaded models
 COPY --from=deps /app/.venv /app/.venv
 COPY --from=models /app/.cache /app/.cache

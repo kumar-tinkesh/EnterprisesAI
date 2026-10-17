@@ -17,6 +17,7 @@ from vendor.api.v1.schemas import (
 from vendor.models import TenantResourceGrant, VendorMCPServer
 from vendor.services import mcp_auth
 from vendor.services.embedding import embed_server
+from vendor.services.mcp_auth import linkedin
 from vendor.services.mcp_client import connect_mcp_server
 from vendor.services.mcp_detect import detect_mcp_server
 from vendor.services.repo_analyzer import analyze_repo_normalized
@@ -102,6 +103,9 @@ async def add_mcp_server(
         env_vars={f.name: "" for f in normalized.auth_fields},
         bound_tools=[],
     )
+
+    # Known servers whose detected credentials are wrong (vendor.services.mcp_auth.linkedin).
+    linkedin.apply_profile(server)
 
     embed_fn = getattr(mcp_service, "embed_server", embed_server)
     await embed_fn(server)

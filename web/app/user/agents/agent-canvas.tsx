@@ -3,8 +3,8 @@
 import { useState } from "react";
 import { Background, BackgroundVariant, Controls, ReactFlow, ReactFlowProvider } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { useQuery } from "@tanstack/react-query";
-import { Bot, Link2, ListChecks, Network, Plus, Server, Sparkles } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Bot, LayoutTemplate, Link2, ListChecks, Network, Plus, Server, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
@@ -13,8 +13,10 @@ import { useBuilderActions } from "@/lib/builder/use-builder-actions";
 import { useAuthStore } from "@/stores/auth-store";
 import { BuildBar } from "@/components/builder/build-bar";
 import { ImportAgentButton } from "@/components/builder/import-agent";
+import { NeedsList, needsSummary } from "@/components/builder/tool-needs";
 import type { BuildMode, BuildTarget } from "@/lib/builder/use-builder-actions";
 import { useAgentWizard } from "@/stores/agent-wizard-store";
+import { cn } from "@/lib/utils";
 
 /**
  * The AI Compiler's empty canvas: describe an agent or workflow in the bar
@@ -154,6 +156,7 @@ function WorkflowStart({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
       </button>
       <p className="text-[11px] text-zinc-500">Then Add Step → Agent to use the agents you&apos;ve made, and drag lines to run them one after another or side by side.</p>
       {error && <p className="text-xs text-red-400">{error}</p>}
+      <TemplatePanel onOpen={onOpen} />
       {recent.length > 0 && (
         <ListPanel title="Open a workflow">
           {recent.map((w) => (
@@ -171,5 +174,64 @@ function WorkflowStart({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
         </ListPanel>
       )}
     </div>
+  );
+}
+
+/**
+ * Ready-made workflows (GET /builder/templates). Each lists the systems its
+ * steps use and where they stand for this person; it can be created before
+ * they're connected — its steps pick each system's tools up once it is.
+ */
+function TemplatePanel({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
+  const token = useAuthStore((s) => s.accessToken) || "";
+  const queryClient = useQueryClient();
+  const [shown, setShown] = useState<string | null>(null);
+  const templates = useQuery({ queryKey: ["builder-templates", token], queryFn: () => builderApi.listTemplates(token), enabled: !!token });
+  const create = useMutation({
+    mutationFn: (key: string) => builderApi.createFromTemplate(token, key),
+    onSuccess: (wf) => {
+      void queryClient.invalidateQueries({ queryKey: ["builder-workflows"] });
+      onOpen({ kind: "workflow", id: wf.id });
+    },
+  });
+  if (!templates.data?.length) return null;
+  return (
+    <ListPanel title="Start from a template">
+      {templates.data.map((t) => {
+        const sum = needsSummary(t.systems);
+        return (
+          <div key={t.key} className="rounded-lg px-2.5 py-2 hover:bg-white/5">
+            <div className="flex items-center gap-2">
+              <LayoutTemplate className="h-3.5 w-3.5 shrink-0 text-indigo-400" />
+              <span className="min-w-0 flex-1 truncate text-xs font-medium text-zinc-200">{t.name}</span>
+              <button
+                type="button"
+                onClick={() => setShown(shown === t.key ? null : t.key)}
+                className={cn("shrink-0 text-[10px] cursor-pointer", sum.blocked ? "text-amber-400" : "text-emerald-400")}
+                aria-expanded={shown === t.key}
+              >
+                {sum.ready}/{sum.total} systems
+              </button>
+              <button
+                type="button"
+                disabled={create.isPending}
+                onClick={() => create.mutate(t.key)}
+                className="inline-flex shrink-0 items-center gap-1 rounded-md bg-indigo-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-indigo-500 disabled:opacity-60 cursor-pointer"
+              >
+                {create.isPending && create.variables === t.key ? <Spinner className="h-3 w-3" /> : <Plus className="h-3 w-3" />} Use
+              </button>
+            </div>
+            <p className="mt-0.5 pl-5 text-[11px] text-zinc-500">{t.summary}</p>
+            {shown === t.key && (
+              <div className="mt-1.5 pl-3">
+                <p className="mb-1 px-1.5 text-[10.5px] text-zinc-400">{t.description}</p>
+                <NeedsList token={token} statuses={t.systems} />
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {create.error && <p className="px-2.5 pb-1 text-xs text-red-400">{create.error instanceof Error ? create.error.message : "Couldn't create it."}</p>}
+    </ListPanel>
   );
 }

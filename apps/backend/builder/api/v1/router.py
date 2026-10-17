@@ -27,7 +27,7 @@ from vendor.services.mcp_service.crud import get_mcp_server, is_server_visible_t
 
 from builder.api.v1 import (
     agents, assist, attachments, conversations, health, insights, memories, publishing, quality, runs, schedules,
-    transfer, usage, versions, webhooks, workflows,
+    templates, transfer, usage, versions, webhooks, workflows,
 )
 from builder.api.v1.deps import get_end_user
 from builder.api.v1.schemas import (
@@ -67,6 +67,7 @@ router.include_router(memories.router)
 router.include_router(usage.router)
 router.include_router(attachments.router)
 router.include_router(webhooks.router)
+router.include_router(templates.router)
 
 
 def _risk_out(risk: ToolRisk) -> ToolRiskOut:

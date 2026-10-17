@@ -9,6 +9,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { BoolParam, Field, OverrideParams, Pair, Param, Section, Select, Textarea, Toggle } from "@/components/builder/fields";
 import { GuardrailFields } from "@/components/builder/guardrail-fields";
 import { ToolPicker } from "@/components/builder/tool-picker";
+import { NeedsSection } from "@/components/builder/tool-needs";
 import { knowledgeApi } from "@/lib/api";
 import { builderApi } from "@/lib/builder/api";
 import { toolName } from "@/lib/builder/graph";
@@ -274,6 +275,7 @@ export function AgentFields({
           <ToolPicker token={token} exclude={toolIds} onPick={(t) => setConfig({ tool_ids: [...toolIds, t.tool_id] })} />
         )}
         </Param>
+        {(config.tool_needs ?? []).length > 0 && <NeedsSection token={token} needs={config.tool_needs ?? []} />}
       </Section>}
 
       {show("limits") && <Section title="Tool limits">

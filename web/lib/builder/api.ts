@@ -39,6 +39,8 @@ import type {
   VersionDetail,
   ServerTools,
   ToolCandidate,
+  ToolNeed,
+  ToolNeedStatus,
   Workflow,
   WorkflowConfig,
   WorkflowDraft,
@@ -46,6 +48,7 @@ import type {
   WorkflowEditResult,
   WorkflowNode,
   WorkflowSummary,
+  WorkflowTemplate,
 } from "@/lib/builder/types";
 
 const B = "/builder";
@@ -120,6 +123,9 @@ export const builderApi = {
   validateWorkflow: (t: string, body: { nodes: WorkflowNode[]; edges: WorkflowEdge[]; config: WorkflowConfig; workflow_id?: string }) =>
     call<CheckResult>(t, "/workflows/validate", "POST", body),
   workflowPreflight: (t: string, id: string) => call<CheckResult>(t, `/workflows/${id}/preflight`, "POST"),
+  listTemplates: (t: string) => call<WorkflowTemplate[]>(t, "/templates"),
+  createFromTemplate: (t: string, key: string) => call<Workflow>(t, `/templates/${encodeURIComponent(key)}`, "POST"),
+  toolNeedsStatus: (t: string, needs: ToolNeed[]) => call<ToolNeedStatus[]>(t, "/tool-needs/status", "POST", { needs }),
 
   // Runs
   startAgentRun: (t: string, id: string, input: string, depth: AnswerDepth = "auto", chat: ChatRef = {}, attachmentIds: string[] = []) =>

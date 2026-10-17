@@ -118,10 +118,39 @@ class MemorySettings(_Strict):
     max_items: int = Field(default=50, ge=5, le=200)
 
 
+class ToolNeed(_Strict):
+    """A system the agent uses, named by WHERE its MCP server comes from
+    rather than by a server id — so it is picked up by itself once an admin
+    adds that server and the person connects it (``builder.agents.needs``).
+
+    ``match`` holds repo slugs or URLs ("stickerdaniel/linkedin-mcp-server",
+    "mcp.newsmcp.com"); a server matches when one appears in its repo or
+    endpoint, whatever the admin named it. ``tools`` are the tool names to
+    give the agent; empty, or none of them on the server, means all its tools.
+    ``required``: the step can't run without it. Otherwise a step with needs
+    runs once at least one of them is connected.
+    """
+
+    system: str = Field(min_length=1, max_length=80)
+    match: list[str] = Field(min_length=1, max_length=5)
+    tools: list[str] = Field(default_factory=list, max_length=20)
+    required: bool = False
+
+    @field_validator("match")
+    @classmethod
+    def _match(cls, value: list[str]) -> list[str]:
+        cleaned = [m.strip() for m in value if m and m.strip()]
+        if not cleaned or any(len(m) < 3 or len(m) > 300 for m in cleaned):
+            raise ValueError("each match must be a repo or URL of 3-300 characters")
+        return list(dict.fromkeys(cleaned))
+
+
 class AgentConfig(_Strict):
     llm: LLMSettings = Field(default_factory=LLMSettings)
     # mcp:<server_id>:<tool_name>
     tool_ids: list[str] = Field(default_factory=list, max_length=50)
+    # Systems whose tools are added at run time, once connected (ToolNeed).
+    tool_needs: list[ToolNeed] = Field(default_factory=list, max_length=10)
     knowledge_base_ids: list[str] = Field(default_factory=list, max_length=10)
     response: ResponseSettings = Field(default_factory=ResponseSettings)
     tools: ToolSettings = Field(default_factory=ToolSettings)
@@ -213,6 +242,7 @@ __all__ = [
     "LLMSettings",
     "ResponseSettings",
     "ToolSettings",
+    "ToolNeed",
     "ReliabilitySettings",
     "GuardrailSettings",
     "ChatSettings",

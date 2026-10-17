@@ -9,7 +9,8 @@ Two levels:
   owned by this workflow), each tool exists and its server is visible to the
   saving user, each knowledge base is in the tenant.
 * **Preflight** (``check_connection=True``): everything above, plus the user
-  who is about to run it has their own connection for every server involved.
+  who is about to run it has their own connection for every server involved,
+  and an agent's tool needs are met (``builder.agents.needs.need_problems``).
   A workflow is shared in the tenant but always runs with the runner's own
   connections, so this is per user.
 
@@ -30,6 +31,7 @@ from vendor.services import mcp_auth
 from vendor.services.mcp_service.crud import is_server_visible_to_user
 
 from builder.agents.config import AgentConfig, merge_config, split_step_overrides
+from builder.agents.needs import need_problems, resolve_needs
 from builder.graph.schema import WorkflowConfig, WorkflowNode, parse_tool_id
 from builder.graph.schema import WorkflowEdge
 from builder.graph.validation import GraphProblem, validate_graph
@@ -167,6 +169,9 @@ async def agent_config_problems(
     self_id: str | None = None,
 ) -> list[GraphProblem]:
     problems = await tool_problems(db, user, config.tool_ids, node_id=node_id, check_connection=check_connection)
+    if check_connection:
+        # Saving never waits for a system to be connected; running does.
+        problems += need_problems(await resolve_needs(db, user, config.tool_needs), node_id=node_id)
     problems += await knowledge_problems(db, user.tenant_id, config.knowledge_base_ids, node_id=node_id)
     problems += await sub_agent_problems(
         db, user, config.sub_agent_ids, node_id=node_id, check_connection=check_connection, self_id=self_id,

@@ -17,6 +17,7 @@ from apps.backend.config import get_backend_settings
 from vendor.models import MCPTool, VendorMCPServer
 from vendor.services import mcp_auth
 from vendor.services.embedding import embed_tool
+from vendor.services.mcp_auth import linkedin
 from vendor.services.mcp_client import MCPClient
 from vendor.services.whatsapp_bridge import manager as bridge_manager
 
@@ -32,6 +33,9 @@ async def _resolve_and_build_config(
     user_id: str | None = None,
 ) -> dict:
     """Shared by ``test_mcp_connection`` and ``verify_user_credentials``: resolve auth and build MCPClient config."""
+    # A LinkedIn server registered before its profile existed asks for PROXY_* and can't start (see
+    # vendor.services.mcp_auth.linkedin); fixed here, so the next connect or run saves the fix.
+    linkedin.apply_profile(server)
     transport = getattr(server, "transport", None)
     if server.source_type == "github" and server.command and transport in ("streamable_http", "sse", "unknown", None):
         transport = "stdio"
@@ -113,6 +117,10 @@ async def _resolve_and_build_config(
             "source_repo_url": server.source_repo_url or server.server_url,
             "env_vars": server.env_vars,
         })
+        # linkedin_cookie: the pinned package with the person's li_at as a session dir on disk —
+        # never the detected repo clone (vendor.services.mcp_auth.linkedin).
+        if auth_config.get("auth_type") == linkedin.AUTH_TYPE:
+            config.update(linkedin.launch_config(auth["credentials"], for_user=user_id is not None))
         # device_pairing (e.g. WhatsApp): the detected command/args point at
         # a fresh, unauthenticated clone of the upstream repo, which can't
         # work. Always run our vendored MCP server instead, with the backend's
@@ -187,10 +195,10 @@ async def test_mcp_connection(
 
     server.bound_tools = result["bound_tools"]
     server.status = "VERIFIED"
-    if (server.auth_config or {}).get("auth_type") == "device_pairing":
-        # Pairing happens per user, so the test ran with no credentials and
-        # reports "none" — keep the column in step with auth_config instead.
-        server.auth_type = "device_pairing"
+    if (server.auth_config or {}).get("auth_type") in ("device_pairing", linkedin.AUTH_TYPE):
+        # Pairing / the li_at cookie is per user, so the test ran with no
+        # credentials and reports "none" — keep the column in step with auth_config instead.
+        server.auth_type = server.auth_config["auth_type"]
     else:
         server.auth_type = result.get("auth_type", server.auth_type)
     await db.flush()

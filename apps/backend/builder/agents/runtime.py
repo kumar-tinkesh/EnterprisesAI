@@ -54,6 +54,7 @@ from builder.agents.config import AgentConfig
 from builder.agents.handoff import handoff_definition, sub_agent_functions, team_section
 from builder.agents.memory import MEMORY_TOOL, load_memories, memory_tool_definition, prompt_section, save_memory
 from builder.agents.prompts import system_prompt
+from builder.agents.needs import resolve_needs
 from builder.agents.tools import KNOWLEDGE_TOOL, AgentTool, function_definitions, resolve_agent_tools, search_knowledge
 from builder.graph.schema import ToolApprovalPolicy
 from builder.guardrails.engine import MAX_EVIDENCE, Flag, check_input, check_output, check_tool_result
@@ -467,7 +468,11 @@ async def run_agent(ctx: AgentContext) -> AgentResult:
     async with session_factory() as db:
         node_run = await db.get(BuilderNodeRun, ctx.node_run_id)
         state: dict[str, Any] = dict(node_run.state or {})
-        tools = await resolve_agent_tools(db, ctx.config.tool_ids)
+        # Tool needs: whatever of those systems this person has connected by now.
+        ready = [s for s in await resolve_needs(db, ctx.user, ctx.config.tool_needs) if s.status == "ready"]
+        tools = await resolve_agent_tools(
+            db, ctx.config.tool_ids + [t for s in ready for t in s.tool_ids], labels={s.server_id: s.need.system for s in ready},
+        )
         memories = (
             [m.content for m in await load_memories(db, agent_id=ctx.agent["id"], owner_id=ctx.user.id)]
             if _memory_on(ctx) and not state.get("messages") else []

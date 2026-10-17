@@ -10,11 +10,12 @@ import {
 } from "lucide-react";
 
 import { ConnectButton } from "@/components/connections/connect-button";
+import { SystemsChip } from "@/components/builder/tool-needs";
 import { builderApi } from "@/lib/builder/api";
 import { PALETTE, canAddAfter, isTrigger, overriddenParams, serverIdOf, toolName } from "@/lib/builder/graph";
 import type { StepState } from "@/lib/builder/run-state";
 import { describeSchedule } from "@/lib/builder/schedule";
-import type { Agent, NodeType, Problem, WorkflowEdge, WorkflowNode } from "@/lib/builder/types";
+import type { Agent, NodeType, Problem, ToolNeed, WorkflowEdge, WorkflowNode } from "@/lib/builder/types";
 import { cn } from "@/lib/utils";
 
 /** What the canvas shares with its nodes (so node cards can edit in place). */
@@ -220,6 +221,7 @@ function Body({ node, ctx }: { node: WorkflowNode; ctx: CanvasCtx }) {
       // What the step really runs with: its own overrides over the agent's.
       const own = node.config_overrides ?? {};
       const toolIds = (own.tool_ids as string[] | undefined) ?? a.config?.tool_ids ?? [];
+      const needs = (own.tool_needs as ToolNeed[] | undefined) ?? a.config?.tool_needs ?? [];
       const kbs = ((own.knowledge_base_ids as string[] | undefined) ?? a.config?.knowledge_base_ids ?? []).length;
       const attempts = node.retry?.max_attempts ?? 1;
       const overrides = overriddenParams(node.config_overrides).length;
@@ -228,6 +230,7 @@ function Body({ node, ctx }: { node: WorkflowNode; ctx: CanvasCtx }) {
         <div className="flex flex-wrap gap-1.5">
           <Chip tone={model !== a.llm_model ? "amber" : "zinc"}><span className="font-mono">{model || "default model"}</span></Chip>
           <ToolsChip toolIds={toolIds} changed={"tool_ids" in own} />
+          <SystemsChip token={ctx.token} needs={needs} />
           {kbs > 0 && <Chip tone={"knowledge_base_ids" in own ? "amber" : "sky"}><BookOpen className="h-3 w-3" /> {kbs}</Chip>}
           {attempts > 1 && <Chip title={`Tried up to ${attempts} times if it fails`}><RotateCcw className="h-3 w-3" /> {attempts}</Chip>}
           {node.draft_agent && <Chip tone="amber">{node.agent_id ? "customized" : "new — saved with the workflow"}</Chip>}

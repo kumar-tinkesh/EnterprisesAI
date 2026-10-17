@@ -19,9 +19,40 @@ export interface ApprovalPolicy {
   delete: boolean;
 }
 
+/** A system an agent uses, named by where its MCP server comes from (repo / URL):
+ *  its tools are added at run time once the server is added and connected. */
+export interface ToolNeed {
+  system: string;
+  match: string[];
+  tools?: string[];
+  required?: boolean;
+}
+
+/** Where a tool need stands for the signed-in user (POST /tool-needs/status). */
+export interface ToolNeedStatus {
+  system: string;
+  required: boolean;
+  match: string[];
+  status: "ready" | "not_connected" | "not_verified" | "missing";
+  server_id: string | null;
+  server_name: string | null;
+  tools: string[];
+}
+
+export interface WorkflowTemplate {
+  key: string;
+  name: string;
+  summary: string;
+  description: string;
+  steps: number;
+  systems: ToolNeedStatus[];
+}
+
 export interface AgentConfig {
   llm?: { temperature?: number | null; max_output_tokens?: number | null; reasoning_effort?: string; stop_sequences?: string[] };
   tool_ids?: string[];
+  /** Systems picked up at run time once connected (see ToolNeed). */
+  tool_needs?: ToolNeed[];
   knowledge_base_ids?: string[];
   response?: { tone?: string; verbosity?: string; language?: string; citations?: string; formats?: string[] };
   tools?: { max_calls?: number; timeout_seconds?: number; on_failure?: string };

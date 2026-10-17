@@ -1,6 +1,8 @@
 """The system prompt an agent runs with."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from builder.agents.config import AgentConfig
 
 _TONES = {
@@ -57,6 +59,8 @@ def system_prompt(
     extra: list[str] | None = None,
 ) -> str:
     parts = [f"You are {agent['name']}, {agent['role']}.", f"Your goal: {agent['goal']}"]
+    # Without it "the last 90 days" or "this quarter" is the model's training date's.
+    parts.append(f"Today's date: {datetime.now(timezone.utc).strftime('%Y-%m-%d')} (UTC).")
     if agent.get("instructions"):
         parts.append(f"Instructions:\n{agent['instructions']}")
     if has_tools:

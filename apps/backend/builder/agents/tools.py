@@ -94,8 +94,10 @@ def function_definitions(tools: list[AgentTool], *, with_knowledge: bool) -> lis
     return defs
 
 
-async def resolve_agent_tools(db: AsyncSession, tool_ids: list[str]) -> list[AgentTool]:
-    refs = [p for p in (parse_tool_id(t) for t in tool_ids) if p]
+async def resolve_agent_tools(db: AsyncSession, tool_ids: list[str], labels: dict[str, str] | None = None) -> list[AgentTool]:
+    """``labels``: server id -> the name the agent sees for it instead of the
+    server's own (a tool need's system: "LinkedIn", whatever the admin named it)."""
+    refs = list(dict.fromkeys(p for p in (parse_tool_id(t) for t in tool_ids) if p))
     if not refs:
         return []
     server_ids = {sid for sid, _ in refs}
@@ -110,7 +112,8 @@ async def resolve_agent_tools(db: AsyncSession, tool_ids: list[str]) -> list[Age
         server, tool = servers.get(server_id), tools.get((server_id, tool_name))
         if server is None or tool is None:
             continue
-        base = f"{_slug(server.name)}__{_slug(tool_name)}"[:_MAX_NAME]
+        server_name = (labels or {}).get(server_id) or server.name
+        base = f"{_slug(server_name)}__{_slug(tool_name)}"[:_MAX_NAME]
         name, n = base, 2
         while name in taken:
             suffix = f"_{n}"
@@ -119,7 +122,7 @@ async def resolve_agent_tools(db: AsyncSession, tool_ids: list[str]) -> list[Age
         out.append(AgentTool(
             function_name=name,
             server_id=server_id,
-            server_name=server.name,
+            server_name=server_name,
             tool_name=tool_name,
             description=tool.description or "",
             input_schema=tool.input_schema or {"type": "object", "properties": {}},
