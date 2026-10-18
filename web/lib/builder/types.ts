@@ -234,7 +234,7 @@ export interface WorkflowNode {
   } | null;
   join_policy?: { mode: "all" | "any" | "count"; min_required?: number | null } | null;
   approval_message?: string | null;
-  output_config?: { format?: string; language?: string | null; header?: string; footer?: string; compose?: string } | null;
+  output_config?: OutputConfig | null;
   /** schedule_trigger: when the workflow runs by itself. */
   schedule?: TriggerSchedule | null;
 }
@@ -630,8 +630,31 @@ export interface RunNode {
   node_type: string;
   attempt: number;
   status: string;
+  /** What reached the step: its sources' outputs (capped). */
+  input_text?: string | null;
   output_text: string | null;
   error: string | null;
+  prompt_tokens?: number | null;
+  completion_tokens?: number | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+}
+
+/** An output step's shape (backend builder/graph/output_config.py). */
+export interface OutputConfig {
+  format?: "markdown" | "formatted" | "text" | "json" | string;
+  /** "formatted": preset sections, unless custom_sections are given. */
+  sections?: string[];
+  /** "formatted": your own headings, in order; ``hint`` says what goes in each. */
+  custom_sections?: { title: string; hint?: string }[];
+  /** "formatted": the report's title ({{date}} allowed); empty = from the answer. */
+  title?: string;
+  /** How to shape it, in words; used by every AI call (and gives markdown/text one). */
+  instructions?: string;
+  language?: string | null;
+  header?: string;
+  footer?: string;
+  compose?: "auto" | "off" | string;
 }
 
 export interface RunToolCall {

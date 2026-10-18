@@ -405,14 +405,14 @@ async def run_human_approval(ctx: StepContext) -> NodeOutcome:
     return NodeOutcome(ok=True, output=edited if isinstance(edited, str) and edited.strip() else ctx.input_text)
 
 
-async def run_output(ctx: StepContext) -> NodeOutcome:
-    saved = await _node_state(ctx)
-    if "final" in saved:
-        return NodeOutcome(ok=True, output=saved["final"], final=True)
-    oc = normalize_output_config(ctx.node.get("output_config"))
-    texts = [t for _, t in ctx.parts if t]
-    text = "\n\n".join(texts) if texts else ctx.original_input
-    fmt, language = oc["format"], oc["language"]
+async def shape_output(texts: list[str], request: str, output_config: dict | None, *, where: str = "") -> tuple[str, int, int]:
+    """The output step's answer from the texts that reach it (one per incoming line), shaped by its
+    ``output_config`` -> (text, prompt tokens, completion tokens). Used by the step itself and by the
+    editor's preview on an earlier run's texts. Shaping never fails: on a model error the plain answer goes out."""
+    oc = normalize_output_config(output_config)
+    texts = [t for t in texts if t]
+    text = "\n\n".join(texts) if texts else request
+    fmt, language, instructions = oc["format"], oc["language"], oc["instructions"]
     pt = ct = 0
 
     async def rewrite(prompt: str, current: str, *, json_mode: bool = False) -> str:
@@ -422,18 +422,23 @@ async def run_output(ctx: StepContext) -> NodeOutcome:
             pt, ct = pt + p, ct + c
             return out.strip() or current
         except Exception as exc:  # noqa: BLE001 — shaping never fails the run; the plain answer goes out
-            logger.warning("output shaping failed on %s: %s", ctx.node_id, exc)
+            logger.warning("output shaping failed on %s: %s", where, exc)
             return current
 
     composed = False
-    if fmt in ("markdown", "text") and oc["compose"] == "auto" and len(texts) > 1:
+    # Several answers to merge, or the owner asked for a shape: one compose call.
+    if fmt in ("markdown", "text") and oc["compose"] == "auto" and (len(texts) > 1 or (instructions and texts)):
         before = text
-        text = await rewrite(T.output_compose_prompt(texts, ctx.original_input, language), text)
+        text = await rewrite(T.output_compose_prompt(texts, request, language, instructions), text)
         composed = text != before
     if fmt == "formatted":
-        text = await rewrite(T.output_formatted_prompt(text, oc["sections"], language), text)
+        prompt = T.output_formatted_prompt(
+            text, oc["sections"], language, custom=oc["custom_sections"],
+            title=T.fill_placeholders(oc["title"]), instructions=instructions,
+        )
+        text = await rewrite(prompt, text)
     elif fmt == "json":
-        shaped = await rewrite(T.output_json_prompt(text, language), text, json_mode=True)
+        shaped = await rewrite(T.output_json_prompt(text, language, instructions), text, json_mode=True)
         try:
             text = json.dumps(json.loads(T.strip_json_fence(shaped)), ensure_ascii=False, indent=2)
         except ValueError:
@@ -444,6 +449,14 @@ async def run_output(ctx: StepContext) -> NodeOutcome:
         text = T.strip_markdown(text)
     if fmt != "json":
         text = T.with_header_footer(text, oc["header"], oc["footer"])
+    return text, pt, ct
+
+
+async def run_output(ctx: StepContext) -> NodeOutcome:
+    saved = await _node_state(ctx)
+    if "final" in saved:
+        return NodeOutcome(ok=True, output=saved["final"], final=True)
+    text, pt, ct = await shape_output([t for _, t in ctx.parts], ctx.original_input, ctx.node.get("output_config"), where=ctx.node_id)
     await _save_node_state(ctx, final=text)
     return NodeOutcome(ok=True, output=text, final=True, prompt_tokens=pt, completion_tokens=ct)
 
@@ -457,4 +470,4 @@ RUNNERS = {
     "output": run_output,
 }
 
-__all__ = ["NodeOutcome", "StepContext", "Paused", "RUNNERS", "run_trigger", "quick_llm", "KIND_MISSING_INPUT"]
+__all__ = ["NodeOutcome", "StepContext", "Paused", "RUNNERS", "run_trigger", "quick_llm", "shape_output", "KIND_MISSING_INPUT"]

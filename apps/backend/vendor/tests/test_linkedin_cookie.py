@@ -71,21 +71,27 @@ def test_the_session_is_the_layout_the_server_reads():
         linkedin.write_session("  ")
 
 
-async def test_admin_test_needs_no_cookie_and_fixes_an_old_row(admin_client, db, captured):
+async def test_admin_test_fixes_an_old_row_and_uses_the_admins_cookie(admin_client, db, captured):
     import vendor.services.mcp_service as ms
 
     server = await _legacy_server(admin_client, db)
     res = await ms.test_mcp_connection(db, server=server)
 
     (config,) = captured
+    # Without a cookie the tools still list (no session needed for that).
     assert config["args"] == ["--claim-profile-root"]
     assert config["source_repo_url"] is None and config["working_directory"] is None
     assert config["env_vars"] == linkedin.ENV and config["credentials"] == {}
     assert "mcp-server-linkedin" in config["command"]
     assert res["status"] == "VERIFIED" and server.auth_type == linkedin.AUTH_TYPE
-    # The admin is asked for nothing; each user for their li_at.
-    assert server.auth_config["credential_fields"] == [] and server.env_vars == {}
+    # Admin and users are asked for li_at only.
+    assert [f["name"] for f in server.auth_config["credential_fields"]] == ["LI_AT"] and server.env_vars == {}
     assert [f["name"] for f in server.auth_schema["fields"]] == ["LI_AT"]
+
+    await ms.test_mcp_connection(db, server=server, request_credentials={"LI_AT": "li_at=AQEadmin"})
+    admin = captured[-1]
+    assert admin["args"][:2] == ["--claim-profile-root", "--user-data-dir"] and admin["credentials"] == {}
+    assert json.load(open(os.path.join(os.path.dirname(admin["args"][2]), "cookies.json")))[0]["value"] == "AQEadmin"
 
 
 async def test_a_new_linkedin_server_gets_the_profile_at_registration(admin_client, db):
@@ -95,6 +101,14 @@ async def test_a_new_linkedin_server_gets_the_profile_at_registration(admin_clie
     assert res.status_code == 201, res.text
     row = await get_mcp_server(db, server_id=res.json()["id"])
     assert row.auth_config["auth_type"] == linkedin.AUTH_TYPE and row.auth_type == linkedin.AUTH_TYPE
+    assert [f["name"] for f in row.auth_config["credential_fields"]] == ["LI_AT"] and row.env_vars == {}
+
+
+async def test_the_add_server_preview_asks_for_li_at(admin_client):
+    from vendor.services.repo_analyzer import analyze_repo
+
+    preview = await analyze_repo(REPO)
+    assert preview.required_env_vars == ["LI_AT"]
 
 
 async def test_user_connect_and_run_use_their_own_cookie_as_a_session(admin_client, tenant_client, tenant_user, db, captured):
@@ -120,6 +134,32 @@ async def test_user_connect_and_run_use_their_own_cookie_as_a_session(admin_clie
     assert "AQEuser" not in json.dumps(connect["env_vars"]) and connect["credentials"] == {}
     assert json.load(open(os.path.join(os.path.dirname(connect["args"][2]), "cookies.json")))[0]["value"] == "AQEuser"
 
-    # A run reads the stored cookie: the same session.
+    # A run reads the user's own stored cookie: the same session.
     config = await build_runtime_config(db, server=server, user_id=tenant_user.id, tenant_id=tenant_user.tenant_id)
     assert config["args"] == connect["args"]
+
+
+async def test_the_migration_fixes_existing_rows(admin_client, db):
+    import importlib.util
+    from pathlib import Path
+
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    server = await _legacy_server(admin_client, db)
+    path = Path(__file__).resolve().parents[3] / "auth" / "alembic" / "versions" / "d7e8f9a0b1c2_linkedin_li_at_profile.py"
+    spec = importlib.util.spec_from_file_location("m_d7e8", path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    def run(sync_conn):
+        with Operations.context(MigrationContext.configure(sync_conn)):
+            migration.upgrade()
+
+    conn = await db.connection()
+    await conn.run_sync(run)
+    await db.commit()
+    await db.refresh(server)
+    assert server.auth_type == linkedin.AUTH_TYPE and server.env_vars == {}
+    assert [f["name"] for f in server.auth_config["credential_fields"]] == ["LI_AT"]
+    assert [f["name"] for f in server.auth_schema["fields"]] == ["LI_AT"]

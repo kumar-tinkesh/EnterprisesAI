@@ -7,6 +7,7 @@
     PATCH  /{workflow_id}              update (optimistic: expected_version)
     DELETE /{workflow_id}              delete it and its own agents
     POST   /{workflow_id}/preflight    can the caller run it right now?
+    POST   /{workflow_id}/output-preview   an output step's settings applied to an earlier run's texts
 
 Saving refuses a graph with any structural or reference problem (422 with
 every problem listed). Preflight adds the per-user check — is each server
@@ -15,6 +16,7 @@ connected for the person about to run it.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -267,6 +269,41 @@ async def preflight_workflow(workflow_id: str, user: CurrentUser = Depends(get_e
         check_connection=True,
     )
     return CheckResult(ok=not problems, problems=[Problem(**p.as_dict()) for p in problems])
+
+
+class OutputPreviewRequest(BaseModel):
+    run_id: str
+    node_id: str = Field(min_length=1, max_length=255)
+    output_config: dict = Field(default_factory=dict)
+
+
+@router.post("/{workflow_id}/output-preview")
+async def output_preview(
+    workflow_id: str, payload: OutputPreviewRequest, user: CurrentUser = Depends(get_end_user), db: AsyncSession = Depends(get_db),
+):
+    """What the output step would answer with these settings, from what reached it in one of the
+    caller's earlier runs of this workflow — try a format without running everything again."""
+    from builder.graph.output_config import config_problem
+    from builder.models import BuilderRun
+    from builder.workflows.nodes import shape_output
+
+    await _get_workflow(db, workflow_id, user)
+    run = (
+        await db.execute(select(BuilderRun).where(
+            BuilderRun.id == payload.run_id, BuilderRun.owner_id == user.id, BuilderRun.workflow_id == workflow_id,
+        ))
+    ).scalars().first()
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    problem = config_problem(payload.output_config)
+    if problem:
+        raise HTTPException(status_code=422, detail=f"These output settings aren't valid: {problem}.")
+    step = ((run.state or {}).get("nodes") or {}).get(payload.node_id) or {}
+    parts = [p[1] for p in step.get("parts") or [] if isinstance(p, (list, tuple)) and len(p) == 2 and p[1]]
+    if not parts:
+        raise HTTPException(status_code=409, detail="That run never reached this output step — run the workflow once first.")
+    text, _, _ = await shape_output(parts, (run.input or {}).get("text") or "", payload.output_config, where=f"preview:{payload.node_id}")
+    return {"text": text}
 
 
 # ── the workflow's own knowledge (Settings -> Knowledge) ──

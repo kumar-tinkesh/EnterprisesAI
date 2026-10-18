@@ -21,6 +21,7 @@ from builder.services.tool_runtime import validate_arguments
 
 TRANSCRIPT_CHARS = 4000
 RESULT_PREVIEW_CHARS = 1000
+INPUT_PREVIEW_CHARS = 20000
 
 
 class RunActionError(Exception):
@@ -248,6 +249,8 @@ async def run_view(db: AsyncSession, run: BuilderRun, *, detail: bool = True) ->
     view["nodes"] = [
         {
             "node_id": n.node_id, "node_type": n.node_type, "attempt": n.attempt, "status": n.status,
+            # What reached the step (its sources' outputs), for "what did it get?" next to its answer.
+            "input_text": _cap(n.input_text, INPUT_PREVIEW_CHARS),
             "output_text": n.output_text, "error": n.error, "prompt_tokens": n.prompt_tokens,
             "completion_tokens": n.completion_tokens, "started_at": n.started_at, "finished_at": n.finished_at,
             "transcript": [

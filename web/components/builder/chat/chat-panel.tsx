@@ -165,6 +165,12 @@ export function ChatPanel({
   const remembers = !!agentConfig?.memory?.enabled;
   const nodes = useMemo(() => (detail.data && "nodes" in detail.data ? detail.data.nodes : []), [detail.data]);
   const fields = useMemo(() => inputFields(nodes), [nodes]);
+  // A workflow's answers can be seen in other formats: its output step, re-run on what reached it.
+  const outputNodeId = nodes.find((n) => n.type === "output")?.id;
+  const reshape = useMemo(
+    () => (kind === "workflow" && outputNodeId ? { token, workflowId: id, nodeId: outputNodeId } : undefined),
+    [kind, outputNodeId, token, id],
+  );
   const stepName = useCallback(
     (nodeId: string) => {
       const byId: Record<string, Agent> = Object.fromEntries((agents.data ?? []).map((a) => [a.id, a]));
@@ -483,6 +489,7 @@ export function ChatPanel({
                       retryDisabled={busy}
                       onRetry={() => submit(run.input?.text ?? "")}
                       stepName={stepName}
+                      reshape={reshape}
                     />
                   )}
                 </div>

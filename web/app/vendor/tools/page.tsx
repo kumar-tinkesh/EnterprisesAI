@@ -859,10 +859,18 @@ function ConnectCredentialModal({
             </p>
           )}
 
+          {(server.auth_config as any)?.auth_type === "linkedin_cookie" && (
+            <p className="rounded-lg bg-sky-50 border border-sky-100 p-3 text-xs text-sky-800">
+              Paste a LinkedIn <span className="font-mono">li_at</span> cookie to test it: sign in to linkedin.com,
+              open DevTools → Application → Cookies → https://www.linkedin.com and copy the value of li_at. Each
+              user still connects their own cookie; runs always use the runner&apos;s.
+            </p>
+          )}
+
           {credentialFields.length > 0 ? (
             <div className="space-y-3">
               <label className="text-xs font-semibold text-zinc-700">
-                Required Credentials{isStdio ? " (passed as environment variables)" : ""}
+                Required Credentials{isStdio && (server.auth_config as any)?.auth_type !== "linkedin_cookie" ? " (passed as environment variables)" : ""}
               </label>
               {credentialFields.map((field) => (
                 <Field key={field} label={labelsMap[field] || field}>

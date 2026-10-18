@@ -190,7 +190,12 @@ def output_language_prompt(text: str, language: str) -> str:
     )
 
 
-def output_compose_prompt(parts: list[str], request: str, language: str | None) -> str:
+def _shape_rules(instructions: str) -> str:
+    """The workflow owner's own shaping instructions, under the fixed rules (which still win)."""
+    return f"- The workflow's owner asks for this shape (follow it within the rules above): {instructions}\n" if instructions else ""
+
+
+def output_compose_prompt(parts: list[str], request: str, language: str | None, instructions: str = "") -> str:
     lang = f"Write it in {language}." if language else "Write it in the same language as the user's request."
     blocks = "\n\n".join(f"<part {i}>\n{p}\n</part {i}>" for i, p in enumerate(parts, start=1))
     return (
@@ -207,7 +212,8 @@ def output_compose_prompt(parts: list[str], request: str, language: str | None) 
         "- Never mention steps, parts, nodes, agents or the workflow itself; drop any part that only says "
         "the request doesn't apply to it or that it had nothing to do.\n"
         "- Do not add a sources/references section.\n"
-        f"- {lang}\n"
+        + _shape_rules(instructions)
+        + f"- {lang}\n"
         "Output only the answer."
     )
 
@@ -220,32 +226,43 @@ FORMATTED_SECTIONS = {
 }
 
 
-def output_formatted_prompt(text: str, sections: list[str], language: str | None) -> str:
-    parts = [f'- "## {FORMATTED_SECTIONS[k][0]}": {FORMATTED_SECTIONS[k][1]}' for k in sections if k in FORMATTED_SECTIONS]
+def output_formatted_prompt(
+    text: str, sections: list[str], language: str | None, *,
+    custom: list[dict] | None = None, title: str = "", instructions: str = "",
+) -> str:
+    """``custom`` ([{title, hint}]) replaces the preset ``sections``; ``title`` fixes the report's title."""
+    if custom:
+        parts = [f'- "## {c["title"]}": {c.get("hint") or "what the answer has for it."}' for c in custom]
+    else:
+        parts = [f'- "## {FORMATTED_SECTIONS[k][0]}": {FORMATTED_SECTIONS[k][1]}' for k in sections if k in FORMATTED_SECTIONS]
     lang = f"Write it in {language}." if language else "Write it in the same language as the answer."
+    head = f'Start with exactly this title line: "# {title}".\n' if title else 'Start with a short title line: "# <title>".\n'
     return (
         "Rewrite the workflow answer below as a clean, consistently formatted markdown report.\n\n"
-        "Start with a short title line: \"# <title>\".\n"
-        "Then these sections, in this order, each with its own \"##\" heading:\n"
+        + head
+        + "Then these sections, in this order, each with its own \"##\" heading:\n"
         + "\n".join(parts) + "\n\n"
         "Rules:\n"
         "- Use ONLY information that is in the answer — never add facts, numbers, or links.\n"
+        "- Keep every record, table row, quote, URL and date the answer has; tabular data stays a markdown table.\n"
         "- Every `[n]` citation marker stays with the exact fact it came with.\n"
         "- Skip a section entirely (heading too) when the answer has nothing for it.\n"
         "- Do not add a sources/references section.\n"
-        f"- {lang}\n"
+        + _shape_rules(instructions)
+        + f"- {lang}\n"
         "Output only the report.\n\n"
         f"Answer:\n{text}"
     )
 
 
-def output_json_prompt(text: str, language: str | None) -> str:
+def output_json_prompt(text: str, language: str | None, instructions: str = "") -> str:
     lang = f" Write any natural-language values in {language}." if language else ""
+    shape = f" The workflow's owner asks for this shape (keys, nesting): {instructions}" if instructions else ""
     return (
         "Convert the workflow answer below into ONE JSON object that captures all of its information "
         "with clear, snake_case keys (use arrays for lists, numbers for numeric values)."
         " Use ONLY information in the answer — never invent values; use null for something the answer "
-        f"mentions but leaves unknown.{lang} Return only the JSON object.\n\n"
+        f"mentions but leaves unknown.{shape}{lang} Return only the JSON object.\n\n"
         f"Answer:\n{text}"
     )
 

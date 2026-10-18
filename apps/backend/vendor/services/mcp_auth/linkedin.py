@@ -15,9 +15,11 @@ re-check this module when bumping it.
 
 Repo analysis reads the server's README and offers PROXY_USERNAME / PROXY_PASSWORD as its credentials;
 those are an optional proxy, and a proxy password without a proxy server makes it exit at start
-("proxy_password is set without proxy_server"). ``apply_profile`` replaces that with the one field that
-matters (``LI_AT``, asked of each user, never of the vendor admin): at registration, and for a server
-registered before this existed, the next time it's connected or run.
+("proxy_password is set without proxy_server"). The one field that matters is ``LI_AT``: the vendor
+admin gives one to test the server (stored as the shared row, used for that test only), and each user
+gives their own to connect — a run always uses the runner's own. ``apply_to_analysis`` sets that at
+analysis (so the add-server preview and registration show it); ``apply_profile`` on a server row, for
+one registered before this existed (also migration d7e8f9a0b1c2).
 """
 from __future__ import annotations
 
@@ -58,22 +60,35 @@ def is_linkedin(server) -> bool:
 
 
 def apply_profile(server) -> bool:
-    """Make a LinkedIn server ask each user for ``li_at`` (and the admin for nothing). True if it changed."""
-    if not is_linkedin(server) or (server.auth_config or {}).get("auth_type") == AUTH_TYPE:
+    """Make a LinkedIn server ask for ``li_at`` only (admin and users alike). True if it changed."""
+    if not is_linkedin(server):
         return False
-    server.auth_config = {
+    auth_config = {
         **(server.auth_config or {}),
         "auth_type": AUTH_TYPE,
         "transport": "stdio",
-        # The vendor admin's test lists the tools without a session: nothing to ask for there.
-        "credential_fields": [],
+        "credential_fields": [dict(FIELD)],
         "required_env": [],
     }
-    server.auth_type = AUTH_TYPE
-    server.auth_schema = {"fields": [dict(FIELD)]}
-    server.env_vars = {}
-    server.transport = "stdio"
-    return True
+    wanted = {"auth_config": auth_config, "auth_type": AUTH_TYPE, "auth_schema": {"fields": [dict(FIELD)]},
+              "env_vars": {}, "transport": "stdio"}
+    changed = [k for k, v in wanted.items() if getattr(server, k) != v]
+    for k in changed:
+        setattr(server, k, wanted[k])
+    return bool(changed)
+
+
+def apply_to_analysis(source_url: str, result) -> None:
+    """A repo analysis (NormalizedMCPConfig) of this server asks for ``li_at`` instead of PROXY_*."""
+    if REPO not in (source_url or "").lower():
+        return
+    from vendor.services.repo_analyzer.types import AuthField
+
+    result.auth_type = AUTH_TYPE
+    result.transport_type = "stdio"
+    result.auth_fields = [AuthField(**FIELD)]
+    result.required_env = []
+    result.required_env_vars = [COOKIE_FIELD]
 
 
 def normalize_li_at(raw: str | None) -> str:
@@ -143,7 +158,7 @@ def command() -> str:
 def launch_config(credentials: dict[str, str] | None, *, for_user: bool) -> dict:
     """The stdio launch for this server: the pinned package, its session dir, and nothing from the
     detected repo (no clone, no PROXY_* env). ``for_user``: a user's connect or run, which needs their
-    cookie; the vendor admin's test runs without one (listing tools needs no session)."""
+    own cookie; the vendor admin's test uses theirs when given (listing tools needs no session)."""
     li_at = normalize_li_at((credentials or {}).get(COOKIE_FIELD) or (credentials or {}).get(COOKIE_FIELD.lower()))
     if for_user and not li_at:
         raise McpAuthError("Paste your LinkedIn li_at cookie to connect LinkedIn.")
@@ -162,6 +177,6 @@ def launch_config(credentials: dict[str, str] | None, *, for_user: bool) -> dict
 
 
 __all__ = [
-    "AUTH_TYPE", "COOKIE_FIELD", "PACKAGE", "apply_profile", "is_linkedin", "launch_config",
+    "AUTH_TYPE", "COOKIE_FIELD", "PACKAGE", "apply_profile", "apply_to_analysis", "is_linkedin", "launch_config",
     "normalize_li_at", "session_root", "write_session",
 ]

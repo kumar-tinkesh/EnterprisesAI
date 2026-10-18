@@ -52,16 +52,46 @@ export type FlowNodeData = {
 };
 export type FlowNodeType = Node<FlowNodeData, "flow">;
 
-const LOOK: Record<NodeType, { label: string; hint: string; Icon: typeof Bot; head: string }> = {
-  input: { label: "Input", hint: "Entry point for workflow run", Icon: LogIn, head: "from-sky-500 to-blue-600" },
-  manual_trigger: { label: "Manual Trigger", hint: "Starts when Run is clicked", Icon: PlayCircle, head: "from-sky-500 to-blue-600" },
-  schedule_trigger: { label: "Schedule Trigger", hint: "Starts on a schedule", Icon: CalendarClock, head: "from-sky-500 to-cyan-600" },
-  agent: { label: "Agent", hint: "AI agent performs processing", Icon: Bot, head: "from-violet-600 to-purple-600" },
-  tool: { label: "Tool Call", hint: "Calls one tool of a connector", Icon: Wrench, head: "from-zinc-600 to-zinc-700" },
-  condition: { label: "Condition", hint: "Branches logic", Icon: GitBranch, head: "from-amber-500 to-orange-600" },
-  join: { label: "Join", hint: "Waits for parallel branches", Icon: Merge, head: "from-fuchsia-600 to-violet-700" },
-  human_approval: { label: "Human Approval", hint: "Pauses for a person to approve", Icon: Hand, head: "from-rose-500 to-pink-600" },
-  output: { label: "Output", hint: "Final answer", Icon: Send, head: "from-emerald-500 to-teal-600" },
+/** Each kind of step has its own colour on the canvas — the card's tint, border, header and badge —
+ *  so an agent, a tool call or an approval can be told apart at a glance. */
+type Look = { label: string; badge: string; hint: string; Icon: typeof Bot; head: string; card: string; tag: string };
+const LOOK: Record<NodeType, Look> = {
+  input: {
+    label: "Input", badge: "Trigger", hint: "Entry point for workflow run", Icon: LogIn, head: "from-sky-500 to-blue-600",
+    card: "border-sky-500/40 bg-gradient-to-b from-sky-500/[0.10] to-[#141418]", tag: "bg-sky-500/15 text-sky-300 ring-sky-400/30",
+  },
+  manual_trigger: {
+    label: "Manual Trigger", badge: "Trigger", hint: "Starts when Run is clicked", Icon: PlayCircle, head: "from-sky-500 to-blue-600",
+    card: "border-sky-500/40 bg-gradient-to-b from-sky-500/[0.10] to-[#141418]", tag: "bg-sky-500/15 text-sky-300 ring-sky-400/30",
+  },
+  schedule_trigger: {
+    label: "Schedule Trigger", badge: "Trigger", hint: "Starts on a schedule", Icon: CalendarClock, head: "from-sky-500 to-blue-600",
+    card: "border-sky-500/40 bg-gradient-to-b from-sky-500/[0.10] to-[#141418]", tag: "bg-sky-500/15 text-sky-300 ring-sky-400/30",
+  },
+  agent: {
+    label: "Agent", badge: "Agent", hint: "AI agent performs processing", Icon: Bot, head: "from-violet-500 to-purple-600",
+    card: "border-violet-500/40 bg-gradient-to-b from-violet-500/[0.10] to-[#141418]", tag: "bg-violet-500/15 text-violet-200 ring-violet-400/30",
+  },
+  tool: {
+    label: "Tool Call", badge: "Tool", hint: "Calls one tool of a connector", Icon: Wrench, head: "from-cyan-500 to-teal-600",
+    card: "border-cyan-500/40 bg-gradient-to-b from-cyan-500/[0.10] to-[#141418]", tag: "bg-cyan-500/15 text-cyan-200 ring-cyan-400/30",
+  },
+  condition: {
+    label: "Condition", badge: "Condition", hint: "Branches logic", Icon: GitBranch, head: "from-amber-500 to-orange-600",
+    card: "border-amber-500/40 bg-gradient-to-b from-amber-500/[0.10] to-[#141418]", tag: "bg-amber-500/15 text-amber-200 ring-amber-400/30",
+  },
+  join: {
+    label: "Join", badge: "Join", hint: "Waits for parallel branches", Icon: Merge, head: "from-fuchsia-500 to-pink-600",
+    card: "border-fuchsia-500/40 bg-gradient-to-b from-fuchsia-500/[0.10] to-[#141418]", tag: "bg-fuchsia-500/15 text-fuchsia-200 ring-fuchsia-400/30",
+  },
+  human_approval: {
+    label: "Human Approval", badge: "Approval", hint: "Pauses for a person to approve", Icon: Hand, head: "from-rose-500 to-red-600",
+    card: "border-rose-500/40 bg-gradient-to-b from-rose-500/[0.10] to-[#141418]", tag: "bg-rose-500/15 text-rose-200 ring-rose-400/30",
+  },
+  output: {
+    label: "Output", badge: "Output", hint: "Final answer", Icon: Send, head: "from-emerald-500 to-green-600",
+    card: "border-emerald-500/40 bg-gradient-to-b from-emerald-500/[0.10] to-[#141418]", tag: "bg-emerald-500/15 text-emerald-200 ring-emerald-400/30",
+  },
 };
 export const NODE_LOOK = LOOK;
 
@@ -335,7 +365,7 @@ function StepToolbar({ node, ctx, hasResult }: { node: WorkflowNode; ctx: Canvas
                 }}
                 className="nodrag flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-zinc-200 hover:bg-white/10 cursor-pointer"
               >
-                <look.Icon className="h-3.5 w-3.5 text-zinc-400" /> {look.label}
+                <span className={cn("flex h-5 w-5 items-center justify-center rounded bg-gradient-to-br text-white", look.head)}><look.Icon className="h-3 w-3" /></span> {look.label}
               </button>
             );
           })}
@@ -354,22 +384,25 @@ function FlowNodeView({ data, selected }: NodeProps<FlowNodeType>) {
   return (
     <div
       className={cn(
-        "w-[270px] overflow-hidden rounded-xl border bg-[#141418] text-left shadow-lg shadow-black/30 transition-shadow",
-        selected ? "border-indigo-400" : hasProblems ? "border-red-500/60" : "border-white/10",
+        "w-[270px] overflow-hidden rounded-xl border text-left shadow-lg shadow-black/30 transition-shadow",
+        // The kind's own border stays; a problem turns it red, selection adds an outline around it.
+        hasProblems ? "border-red-500/70 bg-[#141418]" : look.card,
+        selected && "outline outline-2 outline-offset-2 outline-indigo-400",
         data.state && RING[data.state],
       )}
       title={hasProblems ? data.problems.map((p) => p.message).join("\n") : undefined}
     >
       <StepToolbar node={node} ctx={ctx} hasResult={!!data.output} />
       {!NO_INPUT.includes(node.type) && <Handle type="target" position={Position.Left} className="!h-3 !w-3 !border-2 !border-[#141418] !bg-indigo-400" />}
-      {/* The step's colour: a thin line on top and its icon, so the card stays quiet. */}
-      <div className={cn("h-0.5 bg-gradient-to-r", look.head)} />
+      {/* The step's colour: a bar on top, its icon and its kind's badge. */}
+      <div className={cn("h-1 bg-gradient-to-r", look.head)} />
       <div className="flex items-center gap-2.5 px-3 pt-2.5">
-        <span className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br text-white", look.head)}><look.Icon className="h-3.5 w-3.5" /></span>
+        <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br text-white shadow-md shadow-black/30", look.head)}><look.Icon className="h-4 w-4" /></span>
         <div className="min-w-0 flex-1">
           <p className="truncate text-[13px] font-semibold text-zinc-100">{data.title !== look.label ? data.title : look.label}</p>
-          <p className="truncate text-[10.5px] text-zinc-500">{data.title !== look.label ? look.label : look.hint}</p>
+          <p className="truncate text-[10.5px] text-zinc-400">{data.title !== look.label ? look.label : look.hint}</p>
         </div>
+        <span className={cn("shrink-0 rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider ring-1", look.tag)}>{look.badge}</span>
         {hasProblems && (
           <span className="flex items-center gap-0.5 rounded-full bg-red-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-red-300">
             <AlertTriangle className="h-3 w-3" /> {data.problems.length}

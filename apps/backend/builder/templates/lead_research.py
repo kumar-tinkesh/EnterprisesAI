@@ -81,9 +81,12 @@ ICP_BRIEF = dict(
     role="lead research planner",
     goal="Work out the ideal customer profile and the search plan every later step uses.",
     instructions=(
-        "The run's input fields say what we sell and who we look for; the workflow's knowledge base, when you can "
-        "search it, says more (services, past customers, who is never a lead) – read it first. Start your answer with "
-        "this block, exactly these lines (later steps read them):\n"
+        "The run's input fields and the request may say what we sell and who we look for; the workflow's knowledge "
+        "base, when you can search it, says more (services, ideal customer, signals, who is never a lead) – search it "
+        "first, with a few queries (\"what we sell\", \"ideal customer\", \"never a lead\"). An input field that is "
+        "given wins over the knowledge base; an empty one is taken from it. If neither the inputs, the request nor the "
+        "knowledge base says what we sell, answer only: \"Tell me what you sell – fill in What we sell or add it to the "
+        "workflow's knowledge base.\" Start your answer with this block, exactly these lines (later steps read them):\n"
         "ICP\n"
         "Offer: <our services, comma-separated>\n"
         "Countries: <countries asked for, comma-separated – names or 2-letter codes; a region such as LATAM or Europe is "
@@ -296,8 +299,9 @@ def build() -> dict:
         {
             "id": "in", "type": "input", "label": "What to look for", "position": {"x": x(0), "y": 300},
             "variables": [
-                {"name": "offer", "label": "What we sell", "required": True,
-                 "description": "Your services, e.g. accounts payable outsourcing, payroll, cloud DevOps support"},
+                # Optional: the workflow's knowledge base can say it instead (ICP Brief reads both).
+                {"name": "offer", "label": "What we sell",
+                 "description": "Your services, e.g. cloud migration, managed IT support – empty = from the knowledge base"},
                 {"name": "countries", "label": "Countries or regions", "description": "e.g. Mexico, Colombia – or LATAM; empty = anywhere"},
                 {"name": "industries", "label": "Industries", "description": "e.g. manufacturing, retail; empty = any"},
                 {"name": "company_size", "label": "Company size (employees)", "description": "e.g. 200-5000"},
@@ -338,7 +342,8 @@ def build() -> dict:
     return {
         "name": "Lead research",
         "description": (
-            "Searches job posts, news, the web and LinkedIn live for companies that need what you sell, profiles them "
+            "Searches job posts, news, the web and LinkedIn live for companies that need what you sell (from the run's "
+        "fields or the workflow's knowledge base), profiles them "
             "(LinkedIn, GLEIF, Wikidata), keeps the ones that fit your ideal customer, finds their own contact details, "
             "writes one sourced report and – after you approve it – saves it to Notion under a page called \"Lead "
             "Research\"."

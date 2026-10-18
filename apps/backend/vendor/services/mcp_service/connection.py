@@ -17,6 +17,7 @@ from apps.backend.config import get_backend_settings
 from vendor.models import MCPTool, VendorMCPServer
 from vendor.services import mcp_auth
 from vendor.services.embedding import embed_tool
+from vendor.services import known_servers
 from vendor.services.mcp_auth import linkedin
 from vendor.services.mcp_client import MCPClient
 from vendor.services.whatsapp_bridge import manager as bridge_manager
@@ -36,6 +37,8 @@ async def _resolve_and_build_config(
     # A LinkedIn server registered before its profile existed asks for PROXY_* and can't start (see
     # vendor.services.mcp_auth.linkedin); fixed here, so the next connect or run saves the fix.
     linkedin.apply_profile(server)
+    # Same for a repo that only runs from its published package (vendor.services.known_servers).
+    known_servers.apply_profile(server)
     transport = getattr(server, "transport", None)
     if server.source_type == "github" and server.command and transport in ("streamable_http", "sse", "unknown", None):
         transport = "stdio"
@@ -65,6 +68,9 @@ async def _resolve_and_build_config(
             "credentials": request_credentials or {},
             "auth_type": auth_config.get("auth_type") or "none",
         }
+
+    # A credential saved under a name the server doesn't read (Notion's AUTH_TOKEN) goes on under the one it does.
+    auth["credentials"] = known_servers.alias_credentials(server, auth["credentials"])
 
     # Self-healing for Go commands with invalid module path or missing stdio subcommand
     if server.command == "go" or getattr(server, "runtime_type", None) == "go":

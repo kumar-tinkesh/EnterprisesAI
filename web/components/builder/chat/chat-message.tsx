@@ -1,9 +1,13 @@
 "use client";
 
 import { memo, useState, type ReactNode } from "react";
-import { AlertTriangle, Check, CheckCircle2, ChevronDown, Copy, FileText, Image as ImageIcon, Loader2, Pencil, RotateCw, ShieldAlert, Wrench, XCircle } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { AlertTriangle, Check, CheckCircle2, ChevronDown, Copy, FileText, Image as ImageIcon, Loader2, Pencil, RotateCw, ShieldAlert, Wand2, Wrench, XCircle } from "lucide-react";
 
 import { MarkdownView } from "@/components/builder/chat/markdown-view";
+import { AnswerView } from "@/components/builder/run-output";
+import { builderApi } from "@/lib/builder/api";
+import type { OutputConfig } from "@/lib/builder/types";
 import { formatCost, formatDuration, formatTokens, hueOf, initials, runDurationMs, trailSummary } from "@/lib/builder/chat";
 import { displayTool } from "@/lib/builder/run-state";
 import type { Attachment, GuardrailFlag, Run, RunToolCall } from "@/lib/builder/types";
@@ -167,6 +171,39 @@ export function GuardrailNotes({ flags }: { flags: GuardrailFlag[] }) {
   );
 }
 
+/** Ways to see a workflow's answer again, one click each: its output step re-run on what reached it
+ *  (POST /workflows/{id}/output-preview) — nothing else runs, and each is fetched once. */
+const RESHAPES: { key: string; label: string; config: OutputConfig }[] = [
+  { key: "report", label: "Report", config: { format: "formatted" } },
+  {
+    key: "brief", label: "Brief", config: {
+      format: "formatted",
+      custom_sections: [
+        { title: "Bottom line", hint: "The answer in 2 sentences." },
+        { title: "What we found", hint: "3-6 bullets with the most important facts." },
+        { title: "Recommended actions", hint: "Numbered and concrete, only if the answer implies something to do." },
+      ],
+    },
+  },
+  { key: "tables", label: "Tables", config: { format: "markdown", instructions: "Put every list of records into markdown tables (one row each, every field kept, URLs and dates exact); keep short headings between them." } },
+  { key: "text", label: "Plain text", config: { format: "text" } },
+  { key: "json", label: "JSON", config: { format: "json" } },
+  { key: "hindi", label: "हिंदी", config: { format: "markdown", language: "Hindi" } },
+];
+
+/** Which run's output step to reshape. */
+export type Reshape = { token: string; workflowId: string; nodeId: string };
+
+function useReshaped(run: Run, reshape: Reshape | undefined, key: string) {
+  const choice = RESHAPES.find((r) => r.key === key);
+  return useQuery({
+    queryKey: ["builder-reshape", run.id, key],
+    queryFn: () => builderApi.outputPreview(reshape!.token, reshape!.workflowId, { run_id: run.id, node_id: reshape!.nodeId, output_config: choice!.config }),
+    enabled: !!reshape && !!choice,
+    staleTime: Infinity,
+  });
+}
+
 /** A finished turn: the answer (or why there isn't one), how it ran, and a quiet footer. */
 export const AnswerMessage = memo(function AnswerMessage({
   run,
@@ -175,6 +212,7 @@ export const AnswerMessage = memo(function AnswerMessage({
   onRetry,
   retryDisabled,
   stepName,
+  reshape,
 }: {
   run: Run;
   name: string;
@@ -182,9 +220,15 @@ export const AnswerMessage = memo(function AnswerMessage({
   onRetry: () => void;
   retryDisabled: boolean;
   stepName?: (nodeId: string) => string;
+  /** A workflow's answer: offer its other formats. */
+  reshape?: Reshape;
 }) {
-  const text = run.output_text ?? run.output?.text ?? "";
+  const original = run.output_text ?? run.output?.text ?? "";
+  const [shape, setShape] = useState("original");
+  const reshaped = useReshaped(run, shape === "original" ? undefined : reshape, shape);
+  const text = shape === "original" ? original : reshaped.data?.text ?? "";
   const ms = runDurationMs(run);
+  const canReshape = !!reshape && run.status === "succeeded" && !!original;
   return (
     <div className="group/answer flex gap-3">
       <Avatar name={name} />
@@ -200,10 +244,33 @@ export const AnswerMessage = memo(function AnswerMessage({
             <p className="text-sm italic text-zinc-400">Stopped before it finished.</p>
             {text && <MarkdownView text={text} />}
           </div>
+        ) : shape !== "original" && reshaped.isPending ? (
+          <p className="flex items-center gap-1.5 text-sm text-zinc-400"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Reshaping the answer…</p>
+        ) : shape !== "original" && reshaped.error ? (
+          <p className="text-xs text-red-600">{reshaped.error instanceof Error ? reshaped.error.message : "Couldn't reshape it."}</p>
         ) : text ? (
-          <MarkdownView text={text} />
+          <AnswerView text={text} />
         ) : (
           <p className="text-sm text-zinc-400">(no answer)</p>
+        )}
+        {canReshape && (
+          <div className="mt-2 flex flex-wrap items-center gap-1" role="group" aria-label="See the answer as">
+            <Wand2 className="mr-0.5 h-3.5 w-3.5 text-zinc-400" />
+            {[{ key: "original", label: "Original" }, ...RESHAPES].map((r) => (
+              <button
+                key={r.key}
+                type="button"
+                aria-pressed={shape === r.key}
+                onClick={() => setShape(r.key)}
+                className={cn(
+                  "rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors cursor-pointer",
+                  shape === r.key ? "border-indigo-500 bg-indigo-50 text-indigo-700" : "border-zinc-200 text-zinc-500 hover:border-zinc-300 hover:text-zinc-800",
+                )}
+              >
+                {r.label}
+              </button>
+            ))}
+          </div>
         )}
         {(run.output?.sources?.length ?? 0) > 0 && (
           <p className="mt-2 text-[11px] text-zinc-500">Sources: {run.output!.sources!.join(", ")}</p>

@@ -7,6 +7,7 @@ import { AlertTriangle, ChevronDown, ChevronRight, Plus, Trash2, X } from "lucid
 import { Input } from "@/components/ui/input";
 import { AgentStepConfig } from "@/components/builder/agent-step-config";
 import { NODE_LOOK } from "@/components/builder/flow-node";
+import { OutputSettings } from "@/components/builder/output-settings";
 import { Field, JsonField, RiskBadge, Section, Select, Textarea, Toggle } from "@/components/builder/fields";
 import { WorkflowScheduleFields } from "@/components/builder/schedule-fields";
 import { ToolPicker } from "@/components/builder/tool-picker";
@@ -102,12 +103,15 @@ export function StepInspector({
   problems,
   token,
   workflowId,
+  lastRunId,
   onChange,
   onEdgeChange,
   onDelete,
   onClose,
 }: {
   workflowId: string;
+  /** The run the output step's preview reshapes (the one on screen, else the latest). */
+  lastRunId?: string | null;
   node: WorkflowNode;
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
@@ -217,25 +221,15 @@ export function StepInspector({
           </Section>
         )}
         {node.type === "output" && (
-          <Section title="Answer">
-            <Field label="Format">
-              <Select value={node.output_config?.format ?? "markdown"} onChange={(e) => onChange({ output_config: { ...node.output_config, format: e.target.value } })}>
-                <option value="markdown">As written (markdown)</option>
-                <option value="formatted">Report (summary, key points…)</option>
-                <option value="text">Plain text (SMS / WhatsApp)</option>
-                <option value="json">JSON (for apps)</option>
-              </Select>
-            </Field>
-            <Field label="Language" hint="Empty = same language as the answer.">
-              <Input className="h-9" value={node.output_config?.language ?? ""} onChange={(e) => onChange({ output_config: { ...node.output_config, language: e.target.value || null } })} />
-            </Field>
-            <Field label="Header">
-              <Input className="h-9" value={node.output_config?.header ?? ""} onChange={(e) => onChange({ output_config: { ...node.output_config, header: e.target.value } })} />
-            </Field>
-            <Field label="Footer">
-              <Input className="h-9" value={node.output_config?.footer ?? ""} onChange={(e) => onChange({ output_config: { ...node.output_config, footer: e.target.value } })} />
-            </Field>
-          </Section>
+          <OutputSettings
+            config={node.output_config}
+            incoming={edges.filter((e) => e.target === node.id).length}
+            token={token}
+            workflowId={workflowId}
+            nodeId={node.id}
+            lastRunId={lastRunId}
+            onChange={(output_config) => onChange({ output_config })}
+          />
         )}
       </div>
     </div>

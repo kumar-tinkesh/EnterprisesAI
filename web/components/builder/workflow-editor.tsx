@@ -32,7 +32,8 @@ import { EdgeInspector, StepInspector } from "@/components/builder/inspector";
 import { Playground } from "@/components/builder/playground";
 import { PublishPanel } from "@/components/builder/publish-panel";
 import { SplitPane } from "@/components/builder/split-pane";
-import { StepResult, StepTest, canTestStep } from "@/components/builder/step-test";
+import { StepTest, canTestStep } from "@/components/builder/step-test";
+import { AnswerActions, AnswerView, StepRunPanel } from "@/components/builder/run-output";
 import { useNodeSizes } from "@/components/builder/step-node";
 import { TestsPanel } from "@/components/builder/tests-panel";
 import { VersionHistory, timeAgo } from "@/components/builder/version-history";
@@ -42,7 +43,7 @@ import { builderApi } from "@/lib/builder/api";
 import { arrange } from "@/lib/builder/arrange";
 import { connect, draftKey, duplicateStep, forSave, inputFields, insertAfter, newNode, problemsByStep, removeSteps, stepTitle, unsavedKey, updateStep } from "@/lib/builder/graph";
 import { emptyRunView, isFinished, type RunView } from "@/lib/builder/run-state";
-import type { Agent, AnswerDepth, NodeType, Problem, WorkflowConfig, WorkflowEdge, WorkflowNode } from "@/lib/builder/types";
+import type { Agent, AnswerDepth, NodeType, Problem, RunNode, WorkflowConfig, WorkflowEdge, WorkflowNode } from "@/lib/builder/types";
 import type { BuildTarget } from "@/lib/builder/use-builder-actions";
 import { useRunStream } from "@/lib/builder/use-run-stream";
 import { useAuthStore } from "@/stores/auth-store";
@@ -405,18 +406,33 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
 
   // ── running from the canvas ──
   const canvasRun = useRunStream(canvasRunId, token);
-  const canvasDone = !!canvasRunId && isFinished(canvasRun.view.status);
-  const canvasSnapshot = useQuery({
-    queryKey: ["builder-run", canvasRunId, canvasRun.view.status],
-    queryFn: () => builderApi.getRun(token, canvasRunId!),
-    enabled: !!token && canvasDone,
+  const liveView = playOpen ? runView : canvasRunId ? canvasRun.view : emptyRunView;
+  // Each step's answer, input and tool calls: from the run on screen (canvas or playground), else this
+  // workflow's latest run — so they're there after a reload too. Refetched as steps finish, not only at the end.
+  const latestRun = useQuery({
+    queryKey: ["builder-runs", "latest", id],
+    queryFn: () => builderApi.listRuns(token, { workflow_id: id, limit: 1 }),
+    enabled: !!token && !canvasRunId && !runView.runId,
   });
+  const resultRunId = (playOpen ? runView.runId : null) ?? canvasRunId ?? runView.runId ?? latestRun.data?.[0]?.id ?? null;
+  const settled = Object.values(liveView.steps).filter((st) => st === "succeeded" || st === "failed" || st === "waiting").length;
+  const runSnapshot = useQuery({
+    queryKey: ["builder-run", resultRunId, settled, liveView.status],
+    queryFn: () => builderApi.getRun(token, resultRunId!),
+    enabled: !!token && !!resultRunId,
+    placeholderData: (prev) => (prev?.id === resultRunId ? prev : undefined),
+  });
+  const runNodes = useMemo(() => {
+    // The latest attempt of each step.
+    const map: Record<string, RunNode> = {};
+    for (const n of runSnapshot.data?.nodes ?? []) if (!map[n.node_id] || n.attempt >= map[n.node_id].attempt) map[n.node_id] = n;
+    return map;
+  }, [runSnapshot.data]);
   const outputs = useMemo(() => {
     const map: Record<string, string> = {};
-    for (const n of canvasSnapshot.data?.nodes ?? []) if (n.output_text) map[n.node_id] = n.output_text;
+    for (const n of Object.values(runNodes)) if (n.output_text) map[n.node_id] = n.output_text;
     return map;
-  }, [canvasSnapshot.data]);
-  const liveView = playOpen ? runView : canvasRunId ? canvasRun.view : emptyRunView;
+  }, [runNodes]);
   const trigger = doc?.nodes.find((n) => n.type === "input" || n.type === "manual_trigger" || n.type === "schedule_trigger");
 
   const startRun = useMutation({
@@ -426,10 +442,12 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
         setPlayOpen(true); // it needs input fields filled in: the playground asks for them
         return null;
       }
-      return builderApi.startWorkflowRun(token, id, text, {}, depth);
+      // A chat of its own, so the run shows in Executions → Chat history too.
+      return builderApi.startWorkflowRun(token, id, text, {}, depth, { new_conversation: true });
     },
     onSuccess: (run) => {
       if (!run) return;
+      void queryClient.invalidateQueries({ queryKey: ["builder-chats", "workflow", id] });
       setCanvasRunId(run.id);
       setRunCardOpen(true);
       setSelection(null);
@@ -464,10 +482,10 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
           state: previewing ? undefined : liveView.steps[n.id],
           detail: !previewing && liveView.activeTool[n.id] ? `Calling ${liveView.activeTool[n.id]}…` : null,
           // A trigger's "output" is just the request it was given.
-          output: previewing || playOpen || n.type === "input" || n.type === "manual_trigger" || n.type === "schedule_trigger" ? null : outputs[n.id] ?? null,
+          output: previewing || n.type === "input" || n.type === "manual_trigger" || n.type === "schedule_trigger" ? null : outputs[n.id] ?? null,
         },
       })),
-    [shown?.nodes, selection, shownAgents, byStep, liveView, sizes, previewing, outputs, playOpen],
+    [shown?.nodes, selection, shownAgents, byStep, liveView, sizes, previewing, outputs],
   );
 
   const canEditLines = !previewing && !!wfQuery.data?.can_manage;
@@ -651,7 +669,8 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
   const selectedNode = selection?.kind === "node" && selection.open ? doc.nodes.find((n) => n.id === selection.id) : undefined;
   const selectedEdge = selection?.kind === "edge" ? doc.edges.find((e) => e.id === selection.id) : undefined;
   const testNode = testId && !previewing ? doc.nodes.find((n) => n.id === testId) : undefined;
-  const resultNode = resultId && outputs[resultId] && !testNode ? doc.nodes.find((n) => n.id === resultId) : undefined;
+  const resultNode = resultId && runNodes[resultId] && !testNode ? doc.nodes.find((n) => n.id === resultId) : undefined;
+  const outputNodeId = doc.nodes.find((n) => n.type === "output")?.id;
   // The popup docked right; the canvas run's card steps aside while it shows.
   const panelOpen = !previewing && !!(selectedNode || selectedEdge || testNode || resultNode || selection?.kind === "settings");
   const standalone = (agentsQuery.data ?? []).filter((a) => !a.workflow_id);
@@ -858,7 +877,7 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
                             onKeyDown={(e) => e.key === "Enter" && addStep(type)}
                             className="flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-100 p-2 hover:bg-zinc-50"
                           >
-                            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-indigo-50 text-indigo-600"><look.Icon className="h-3.5 w-3.5" /></span>
+                            <span className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-gradient-to-br text-white", look.head)}><look.Icon className="h-3.5 w-3.5" /></span>
                             <span className="min-w-0">
                               <span className="block text-xs font-semibold text-zinc-900">{look.label}</span>
                               <span className="block truncate text-[11px] text-zinc-500">{look.hint}</span>
@@ -883,7 +902,14 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
                     )}
                   >
                     {resultNode && (
-                      <StepResult title={stepTitle(resultNode, agentsById)} text={outputs[resultNode.id]} onClose={() => setResultId(null)} />
+                      <StepRunPanel
+                        key={resultNode.id}
+                        title={stepTitle(resultNode, agentsById)}
+                        kind={NODE_LOOK[resultNode.type].label}
+                        node={runNodes[resultNode.id]}
+                        calls={(runSnapshot.data?.tool_calls ?? []).filter((c) => c.node_id === resultNode.id)}
+                        onClose={() => setResultId(null)}
+                      />
                     )}
                     {testNode && (
                       <StepTest
@@ -907,6 +933,7 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
                         problems={byStep[selectedNode.id] ?? []}
                         token={token}
                         workflowId={id}
+                        lastRunId={resultRunId}
                         onChange={(patch) => change((d) => ({ ...d, nodes: updateStep(d.nodes, selectedNode.id, patch) }), `patch:${selectedNode.id}`)}
                         onEdgeChange={(edgeId, patch) => change((d) => ({ ...d, edges: d.edges.map((e) => (e.id === edgeId ? { ...e, ...patch } : e)) }))}
                         onDelete={() => {
@@ -966,7 +993,18 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
                     </div>
                     <div className="max-h-72 space-y-2 overflow-y-auto">
                       {canvasRun.view.approvals.map((a) => <ApprovalCard key={a.id} approval={a} token={token} onDone={() => undefined} />)}
-                      {canvasRun.view.output !== null && <p className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-900">{canvasRun.view.output}</p>}
+                      {canvasRun.view.output !== null && (
+                        <>
+                          <div className="flex items-center justify-end border-b border-zinc-100 pb-1">
+                            <AnswerActions
+                              text={canvasRun.view.output}
+                              name={doc.name}
+                              onExpand={outputNodeId && runNodes[outputNodeId] ? () => ctx.showResult(outputNodeId) : undefined}
+                            />
+                          </div>
+                          <div className="text-sm text-zinc-900"><AnswerView text={canvasRun.view.output} /></div>
+                        </>
+                      )}
                       {canvasRun.view.status === "failed" && canvasRun.view.error && <p className="text-xs text-red-600">{canvasRun.view.error}</p>}
                       {canvasRun.view.guardrails.map((g, i) => <p key={i} className="text-[11px] text-amber-700">Guardrail: {g.message}</p>)}
                       {canvasRun.view.sources.length > 0 && <p className="text-[11px] text-zinc-500">Sources: {canvasRun.view.sources.join(", ")}</p>}

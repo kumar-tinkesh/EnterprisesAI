@@ -91,18 +91,20 @@ export function Playground({
     mutationFn: async (text: string): Promise<Run | null> => {
       setProblems([]);
       if (beforeRun && !(await beforeRun())) return null;
-      if (kind === "agent") return builderApi.startAgentRun(token, targetId, text);
+      // Each run is a chat of its own, so it shows in Executions → Chat history too.
+      if (kind === "agent") return builderApi.startAgentRun(token, targetId, text, "auto", { new_conversation: true });
       const variables: Record<string, unknown> = {};
       for (const f of fields) {
         const v = coerce(f, values[f.name] ?? "");
         if (v !== undefined) variables[f.name] = v;
       }
-      return builderApi.startWorkflowRun(token, targetId, text, variables);
+      return builderApi.startWorkflowRun(token, targetId, text, variables, "auto", { new_conversation: true });
     },
     onSuccess: (run) => {
       if (!run) return;
       setRunId(run.id);
       void queryClient.invalidateQueries({ queryKey: ["builder-runs", kind, targetId] });
+      void queryClient.invalidateQueries({ queryKey: ["builder-chats", kind, targetId] });
     },
     onError: (err) => {
       const list = err instanceof ApiError ? ((err.body as { problems?: Problem[] })?.problems ?? []) : [];

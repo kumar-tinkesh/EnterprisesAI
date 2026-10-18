@@ -24,6 +24,7 @@ import type {
   Approval,
   ChatRef,
   CheckResult,
+  OutputConfig,
   Conversation,
   GuardrailSettings,
   Run,
@@ -123,6 +124,9 @@ export const builderApi = {
   validateWorkflow: (t: string, body: { nodes: WorkflowNode[]; edges: WorkflowEdge[]; config: WorkflowConfig; workflow_id?: string }) =>
     call<CheckResult>(t, "/workflows/validate", "POST", body),
   workflowPreflight: (t: string, id: string) => call<CheckResult>(t, `/workflows/${id}/preflight`, "POST"),
+  /** An output step's settings applied to what reached it in an earlier run (nothing runs again). */
+  outputPreview: (t: string, id: string, body: { run_id: string; node_id: string; output_config: OutputConfig }) =>
+    call<{ text: string }>(t, `/workflows/${id}/output-preview`, "POST", body),
   listTemplates: (t: string) => call<WorkflowTemplate[]>(t, "/templates"),
   createFromTemplate: (t: string, key: string) => call<Workflow>(t, `/templates/${encodeURIComponent(key)}`, "POST"),
   toolNeedsStatus: (t: string, needs: ToolNeed[]) => call<ToolNeedStatus[]>(t, "/tool-needs/status", "POST", { needs }),

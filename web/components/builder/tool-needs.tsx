@@ -6,6 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { CheckCircle2, CircleDashed, Clock, Plug } from "lucide-react";
 
 import { ConnectButton } from "@/components/connections/connect-button";
+import { ConnectServerDialog } from "@/components/connections/server-connect";
 import { builderApi } from "@/lib/builder/api";
 import type { ToolNeed, ToolNeedStatus } from "@/lib/builder/types";
 import { cn } from "@/lib/utils";
@@ -32,8 +33,20 @@ const STATUS: Record<ToolNeedStatus["status"], { label: string; tone: string; Ic
   missing: { label: "ask your admin to add it", tone: "text-zinc-500", Icon: CircleDashed },
 };
 
-/** One line per system: its state, its tools once ready, and Connect in place when it's the person's turn. */
-export function NeedsList({ token, statuses, light = false }: { token: string; statuses: ToolNeedStatus[]; light?: boolean }) {
+/** One line per system: its state, its tools once ready, and Connect in place when it's the person's turn.
+ *  ``onConnect``: inside a popover, let its owner open the dialog (after closing the popover, which
+ *  would otherwise sit above it). */
+export function NeedsList({
+  token,
+  statuses,
+  light = false,
+  onConnect,
+}: {
+  token: string;
+  statuses: ToolNeedStatus[];
+  light?: boolean;
+  onConnect?: (s: ToolNeedStatus) => void;
+}) {
   return (
     <ul className="space-y-1">
       {statuses.map((s) => {
@@ -46,9 +59,20 @@ export function NeedsList({ token, statuses, light = false }: { token: string; s
                 {s.system}
                 {s.required && <span className="ml-1 text-[10px] font-normal text-amber-500">required</span>}
               </span>
-              {s.status === "not_connected" && s.server_id && (
+              {s.status === "not_connected" && s.server_id && (onConnect ? (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onConnect(s);
+                  }}
+                  className="nodrag nopan inline-flex shrink-0 items-center gap-1 rounded-full bg-sky-600 px-2 py-0.5 text-[10.5px] font-medium text-white hover:bg-sky-500 cursor-pointer"
+                >
+                  <Plug className="h-3 w-3" /> Connect
+                </button>
+              ) : (
                 <ConnectButton serverId={s.server_id} serverName={s.server_name ?? undefined} token={token} className="rounded-full px-2 py-0.5 text-[10.5px]" />
-              )}
+              ))}
             </div>
             <p className="pl-5 text-[10.5px] text-zinc-500" title={s.match.join(", ")}>
               {s.status === "ready" ? `${s.server_name} · ${s.tools.join(", ")}` : s.status === "missing" ? `${st.label} — ${s.match[0]}` : `${s.server_name} · ${st.label}`}
@@ -71,6 +95,7 @@ export function needsSummary(statuses: ToolNeedStatus[]): { ready: number; total
 export function SystemsChip({ token, needs }: { token: string; needs: ToolNeed[] }) {
   const status = useToolNeedStatus(token, needs);
   const [at, setAt] = useState<{ top: number; left: number } | null>(null);
+  const [connecting, setConnecting] = useState<string | null>(null);
   const ref = useRef<HTMLButtonElement>(null);
   if (needs.length === 0) return null;
   const statuses = status.data ?? [];
@@ -104,7 +129,18 @@ export function SystemsChip({ token, needs }: { token: string; needs: ToolNeed[]
             <div className="fixed inset-0 z-[999]" onClick={() => setAt(null)} />
             <div style={at} className="fixed z-[1000] max-h-72 w-72 overflow-y-auto rounded-lg border border-white/10 bg-zinc-900 p-1.5 shadow-2xl">
               <p className="px-1.5 pb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Systems this step uses</p>
-              {status.data ? <NeedsList token={token} statuses={statuses} /> : <p className="px-1.5 py-1 text-[11px] text-zinc-500">Checking…</p>}
+              {status.data ? (
+                <NeedsList
+                  token={token}
+                  statuses={statuses}
+                  onConnect={(s) => {
+                    setAt(null);
+                    setConnecting(s.server_id);
+                  }}
+                />
+              ) : (
+                <p className="px-1.5 py-1 text-[11px] text-zinc-500">Checking…</p>
+              )}
               <p className="px-1.5 pt-1 text-[10px] text-zinc-500">
                 {statuses.some((s) => s.required) ? "Runs once every required system is connected." : "Runs once at least one is connected; the others join as they're connected."}
               </p>
@@ -112,6 +148,12 @@ export function SystemsChip({ token, needs }: { token: string; needs: ToolNeed[]
           </>,
           document.body,
         )}
+      {connecting && (
+        // Portalled to <body>, but React still bubbles its events through the node — stop them here.
+        <div className="contents" onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+          <ConnectServerDialog serverId={connecting} token={token} onClose={() => setConnecting(null)} onConnected={() => setConnecting(null)} />
+        </div>
+      )}
     </>
   );
 }
