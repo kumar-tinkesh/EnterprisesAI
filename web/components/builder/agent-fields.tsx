@@ -99,6 +99,7 @@ export function AgentFields({
   // Tools of systems this user hasn't connected (connections are each person's own).
   const missing = useMissingServers(token, toolIds);
   const offline = new Set(missing.flatMap((m) => m.tools));
+  const removed = new Set(missing.filter((m) => m.removed).flatMap((m) => m.tools));
 
   const kbs = useQuery({ queryKey: ["knowledge-bases", token], queryFn: () => knowledgeApi.list(token), enabled: !!token });
 
@@ -268,10 +269,10 @@ export function AgentFields({
           {toolIds.map((id) => (
             <li
               key={id}
-              title={offline.has(id) ? "Not connected for you yet — this tool won't run until you connect" : "Connected"}
+              title={removed.has(id) ? "Its system was removed — this tool can't run" : offline.has(id) ? "Not connected for you yet — this tool won't run until you connect" : "Connected"}
               className={cn(
                 "flex items-center gap-1 rounded-full px-2 py-0.5 text-xs",
-                offline.has(id) ? "bg-amber-50 text-amber-800 ring-1 ring-amber-300" : "bg-emerald-50 text-emerald-800",
+                removed.has(id) ? "bg-red-50 text-red-800 line-through ring-1 ring-red-300" : offline.has(id) ? "bg-amber-50 text-amber-800 ring-1 ring-amber-300" : "bg-emerald-50 text-emerald-800",
               )}
             >
               {offline.has(id) ? <Unplug className="h-3 w-3" /> : <CheckCircle2 className="h-3 w-3" />}
@@ -285,12 +286,25 @@ export function AgentFields({
           ))}
         </ul>
         {missing.map((m) => (
-          <div key={m.serverId} className="mt-2 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5">
-            <p className="min-w-0 flex-1 text-[11px] text-amber-800">
-              <span className="font-semibold">{m.name}</span> isn&apos;t connected for you — {m.tools.length === 1 ? "its tool" : `its ${m.tools.length} tools`} won&apos;t run.
-            </p>
-            <ConnectButton serverId={m.serverId} token={token} className="px-2 py-0.5 text-[11px]" />
-          </div>
+          m.removed ? (
+            <div key={m.serverId} className="mt-2 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1.5">
+              <p className="min-w-0 flex-1 text-[11px] text-red-800">
+                {m.tools.length === 1 ? "A tool" : `${m.tools.length} tools`} belong to a system that was removed or isn&apos;t available to you — remove {m.tools.length === 1 ? "it" : "them"} and add the new system&apos;s tools.
+              </p>
+              {!readOnly && editable("tool_ids") && (
+                <button type="button" onClick={() => setConfig({ tool_ids: toolIds.filter((t) => !m.tools.includes(t)) })} className="shrink-0 rounded-md border border-red-300 px-2 py-0.5 text-[11px] font-medium text-red-700 hover:bg-red-100 cursor-pointer">
+                  Remove
+                </button>
+              )}
+            </div>
+          ) : (
+            <div key={m.serverId} className="mt-2 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5">
+              <p className="min-w-0 flex-1 text-[11px] text-amber-800">
+                <span className="font-semibold">{m.name}</span> isn&apos;t connected for you — {m.tools.length === 1 ? "its tool" : `its ${m.tools.length} tools`} won&apos;t run.
+              </p>
+              <ConnectButton serverId={m.serverId} token={token} className="px-2 py-0.5 text-[11px]" />
+            </div>
+          )
         ))}
         {adding && (
           <ToolPicker token={token} exclude={toolIds} onPick={(t) => setConfig({ tool_ids: [...toolIds, t.tool_id] })} />

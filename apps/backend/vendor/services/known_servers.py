@@ -12,6 +12,13 @@ package-runner command is never cloned, see ``mcp_client.stdio._prepare_local_re
 * makenotion/notion-mcp-server — reads its token from NOTION_TOKEN only; analysis also offered
   AUTH_TOKEN, and a token saved under that name reaches the server as nothing ("the authorization header
   is missing"). One field now, and an AUTH_TOKEN already saved is passed on as NOTION_TOKEN (``aliases``).
+* jimsimoy/gmail-mcp — needs GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET and GMAIL_REFRESH_TOKEN, and the refresh
+  token only comes from a browser consent. Analysis also turned tool arguments (DRAFT_ID, THREAD_ID) into
+  fields. So it is an OAuth server with Google's fixed endpoints: the admin gives the OAuth client's ID and
+  secret, every person signs in with Google ("Connect via OAuth"), and the tokens that sign-in stores
+  (refresh_token, client_id, client_secret) are passed on under the GMAIL_* names it reads. It runs at
+  GMAIL_ACCESS_LEVEL=FULL (read, drafts, send, organize); the agents' "ask before tools run" still asks
+  before a sending or deleting tool.
 
 Applied at analysis (the add-server preview and registration), when a server is connected or run (an older
 row fixes itself) and by migrations e8f9a0b1c2d3 / f0a1b2c3d4e5 for rows already there. LinkedIn has its
@@ -37,6 +44,28 @@ PROFILES: list[dict] = [
         }],
         "aliases": {"AUTH_TOKEN": "NOTION_TOKEN"},
     },
+    {
+        "repo": "jimsimoy/gmail-mcp",
+        "env_vars": {"GMAIL_ACCESS_LEVEL": "FULL"},
+        "auth_type": "oauth2",
+        "oauth": {
+            "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
+            "token_endpoint": "https://oauth2.googleapis.com/token",
+            # The server's own consent set (gmail_mcp.access.CONSENT_SCOPES) — never https://mail.google.com/.
+            "scopes_supported": [
+                "https://www.googleapis.com/auth/gmail.readonly",
+                "https://www.googleapis.com/auth/gmail.compose",
+                "https://www.googleapis.com/auth/gmail.modify",
+            ],
+            # Google returns a refresh token only for offline access, and again only on a fresh consent.
+            "extra_authorize_params": {"access_type": "offline", "prompt": "consent"},
+        },
+        "fields": [
+            {"name": "GMAIL_CLIENT_ID", "label": "Google OAuth Client ID", "type": "string", "required": True, "location": "env"},
+            {"name": "GMAIL_CLIENT_SECRET", "label": "Google OAuth Client Secret", "type": "secret", "required": True, "location": "env"},
+        ],
+        "aliases": {"refresh_token": "GMAIL_REFRESH_TOKEN", "client_id": "GMAIL_CLIENT_ID", "client_secret": "GMAIL_CLIENT_SECRET"},
+    },
 ]
 
 
@@ -48,7 +77,7 @@ def profile_for(*places: str | None) -> dict | None:
 
 
 def _auth_type(p: dict) -> str:
-    return "env" if p["fields"] else "none"
+    return p.get("auth_type") or ("env" if p["fields"] else "none")
 
 
 def apply_profile(server) -> bool:
@@ -61,7 +90,7 @@ def apply_profile(server) -> bool:
         "env_vars": dict(p["env_vars"]), "transport": "stdio", "auth_type": _auth_type(p),
         "auth_schema": {"fields": fields},
         "auth_config": {**(server.auth_config or {}), "auth_type": _auth_type(p), "transport": "stdio",
-                        "credential_fields": fields, "required_env": []},
+                        "credential_fields": fields, "required_env": [], **({"oauth": dict(p["oauth"])} if "oauth" in p else {})},
     }
     if "command" in p:
         wanted.update(command=p["command"], args=list(p["args"]), runtime_type=p["runtime_type"], working_directory=None)

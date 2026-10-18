@@ -133,13 +133,18 @@ function ToolsChip({ toolIds, changed, token }: { toolIds: string[]; changed: bo
   const ref = useRef<HTMLButtonElement>(null);
   const missing = useMissingServers(token, toolIds);
   const offline = new Set(missing.flatMap((m) => m.tools));
+  const removed = new Set(missing.filter((m) => m.removed).flatMap((m) => m.tools));
+  const connectable = missing.filter((m) => !m.removed);
   if (toolIds.length === 0) return null;
   return (
     <>
       <button
         ref={ref}
         type="button"
-        title={offline.size ? `${offline.size} of these tools won't run until you connect ${missing.map((m) => m.name).join(", ")}` : "Tools this step can call"}
+        title={
+          removed.size ? `${removed.size} of these tools belong to a removed system — open the step and pick its tools again`
+            : offline.size ? `${offline.size} of these tools won't run until you connect ${connectable.map((m) => m.name).join(", ")}` : "Tools this step can call"
+        }
         aria-expanded={!!at}
         onClick={(e) => {
           e.stopPropagation();
@@ -154,7 +159,8 @@ function ToolsChip({ toolIds, changed, token }: { toolIds: string[]; changed: bo
         )}
       >
         <Wrench className="h-3 w-3" /> {toolIds.length} tool{toolIds.length === 1 ? "" : "s"}
-        {offline.size > 0 && <span className="inline-flex items-center gap-0.5"><Unplug className="h-3 w-3" /> {offline.size} not connected</span>}
+        {removed.size > 0 && <span className="inline-flex items-center gap-0.5"><XCircle className="h-3 w-3" /> {removed.size} removed</span>}
+        {offline.size - removed.size > 0 && <span className="inline-flex items-center gap-0.5"><Unplug className="h-3 w-3" /> {offline.size - removed.size} not connected</span>}
       </button>
       {at &&
         createPortal(
@@ -166,12 +172,12 @@ function ToolsChip({ toolIds, changed, token }: { toolIds: string[]; changed: bo
                 <p key={id} title={id} className="flex items-center gap-1.5 truncate rounded px-1.5 py-1 text-[11px] text-zinc-200 hover:bg-white/5">
                   {offline.has(id) ? <Unplug className="h-3 w-3 shrink-0 text-red-400" /> : <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-400" />}
                   <span className="truncate">{toolName(id)}</span>
-                  {offline.has(id) && <span className="ml-auto shrink-0 text-[10px] text-red-300">not connected</span>}
+                  {offline.has(id) && <span className="ml-auto shrink-0 text-[10px] text-red-300">{removed.has(id) ? "system removed" : "not connected"}</span>}
                 </p>
               ))}
-              {missing.length > 0 && (
+              {connectable.length > 0 && (
                 <div className="mt-1 space-y-1 border-t border-white/10 px-1.5 pt-1.5">
-                  {missing.map((m) => (
+                  {connectable.map((m) => (
                     <ConnectButton key={m.serverId} serverId={m.serverId} serverName={m.name} token={token} className="w-full justify-center px-2 py-1 text-[11px]" />
                   ))}
                 </div>
@@ -181,7 +187,7 @@ function ToolsChip({ toolIds, changed, token }: { toolIds: string[]; changed: bo
           document.body,
         )}
       {/* Right on the card too, so it's clear before pressing Run. */}
-      {missing.map((m) => (
+      {connectable.map((m) => (
         <ConnectButton key={m.serverId} serverId={m.serverId} serverName={m.name} token={token} className="rounded-md px-1.5 py-0.5 text-[11px]" />
       ))}
     </>

@@ -243,6 +243,11 @@ async def complete_authorization(
     }
     if token_response.get("refresh_token"):
         merged["refresh_token"] = token_response["refresh_token"]
+    if pending.user_id is None:
+        # The admin's own sign-in replaces the shared row: keep the OAuth app on it, so people's
+        # authorize-as-user (resolve_app_credentials) works without a separate oauth-config call.
+        merged["oauth_client_id"] = pending.client_id
+        merged["oauth_client_secret"] = pending.client_secret
 
     declared_field_names = [
         f.get("name", "") for f in ((server.auth_schema or {}).get("fields") or [])

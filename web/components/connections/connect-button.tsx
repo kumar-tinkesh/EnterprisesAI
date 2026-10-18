@@ -30,22 +30,25 @@ export function useServerStatus(token: string) {
   return {
     loaded: !!catalog.data,
     isConnected: (serverId: string, fallback = false) => (catalog.data ? !!servers.get(serverId)?.connected : fallback),
-    name: (serverId: string) => servers.get(serverId)?.name ?? "this system",
+    /** Not in this user's catalog: deleted by the admin, or no longer granted — connecting can't help. */
+    isGone: (serverId: string) => !!catalog.data && !servers.has(serverId),
+    name: (serverId: string) => servers.get(serverId)?.name ?? "A removed system",
   };
 }
 
 /**
- * The servers among ``toolIds`` this user hasn't connected yet, each with its tools —
- * empty until the catalog loads, and for tools that aren't MCP tools.
+ * The servers among ``toolIds`` this user can't use yet, each with its tools: not connected
+ * (``removed`` false — a Connect fixes it) or gone from their catalog (``removed`` — the tools
+ * have to be picked again). Empty until the catalog loads, and for tools that aren't MCP tools.
  */
 export function useMissingServers(token: string, toolIds: string[]) {
   const status = useServerStatus(token);
-  const missing = new Map<string, { serverId: string; name: string; tools: string[] }>();
+  const missing = new Map<string, { serverId: string; name: string; removed: boolean; tools: string[] }>();
   if (status.loaded) {
     for (const id of toolIds) {
       const parts = id.split(":");
       if (parts.length < 3 || parts[0] !== "mcp" || status.isConnected(parts[1])) continue;
-      const entry = missing.get(parts[1]) ?? { serverId: parts[1], name: status.name(parts[1]), tools: [] };
+      const entry = missing.get(parts[1]) ?? { serverId: parts[1], name: status.name(parts[1]), removed: status.isGone(parts[1]), tools: [] };
       entry.tools.push(id);
       missing.set(parts[1], entry);
     }

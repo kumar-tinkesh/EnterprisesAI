@@ -201,9 +201,10 @@ async def test_mcp_connection(
 
     server.bound_tools = result["bound_tools"]
     server.status = "VERIFIED"
-    if (server.auth_config or {}).get("auth_type") in ("device_pairing", linkedin.AUTH_TYPE):
+    if (server.auth_config or {}).get("auth_type") in ("device_pairing", linkedin.AUTH_TYPE, "oauth2"):
         # Pairing / the li_at cookie is per user, so the test ran with no
         # credentials and reports "none" — keep the column in step with auth_config instead.
+        # An OAuth stdio server reports "env"; it stays oauth2 so people sign in.
         server.auth_type = server.auth_config["auth_type"]
     else:
         server.auth_type = result.get("auth_type", server.auth_type)
@@ -224,8 +225,14 @@ async def test_mcp_connection(
     await db.flush()
 
     if request_credentials:
+        to_store = request_credentials
+        if (server.auth_config or {}).get("auth_type") == "oauth2":
+            # Keep what "Connect via OAuth" saved (refresh token, the OAuth app's ID/secret that
+            # people's own sign-ins use) — the form only re-sends the fields it shows.
+            stored = await mcp_auth.load_server_credentials(db, server_id=str(server.id), tenant_id=tenant_id)
+            to_store = {**stored, **request_credentials}
         await mcp_auth.store_server_credentials(
-            db, server_id=str(server.id), credentials=request_credentials, tenant_id=tenant_id
+            db, server_id=str(server.id), credentials=to_store, tenant_id=tenant_id
         )
 
     await log_audit_event(
