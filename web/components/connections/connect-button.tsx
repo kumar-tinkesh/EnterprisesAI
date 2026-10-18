@@ -15,14 +15,42 @@ import { cn } from "@/lib/utils";
  * catalog has loaded (e.g. the ``connected`` flag a tool search returned).
  */
 export function useConnectedServers(token: string) {
+  return useServerStatus(token).isConnected;
+}
+
+/** The same catalog, by server: whether this user (not the admin) has connected it, and its name. */
+export function useServerStatus(token: string) {
   const catalog = useQuery({
     queryKey: ["catalog", token, ""],
     queryFn: () => vendorApi.getCatalog(token),
     enabled: !!token,
     staleTime: 30_000,
   });
-  const ids = new Set((catalog.data?.servers ?? []).filter((s) => s.connected).map((s) => s.id));
-  return (serverId: string, fallback = false) => (catalog.data ? ids.has(serverId) : fallback);
+  const servers = new Map((catalog.data?.servers ?? []).map((s) => [s.id, s]));
+  return {
+    loaded: !!catalog.data,
+    isConnected: (serverId: string, fallback = false) => (catalog.data ? !!servers.get(serverId)?.connected : fallback),
+    name: (serverId: string) => servers.get(serverId)?.name ?? "this system",
+  };
+}
+
+/**
+ * The servers among ``toolIds`` this user hasn't connected yet, each with its tools —
+ * empty until the catalog loads, and for tools that aren't MCP tools.
+ */
+export function useMissingServers(token: string, toolIds: string[]) {
+  const status = useServerStatus(token);
+  const missing = new Map<string, { serverId: string; name: string; tools: string[] }>();
+  if (status.loaded) {
+    for (const id of toolIds) {
+      const parts = id.split(":");
+      if (parts.length < 3 || parts[0] !== "mcp" || status.isConnected(parts[1])) continue;
+      const entry = missing.get(parts[1]) ?? { serverId: parts[1], name: status.name(parts[1]), tools: [] };
+      entry.tools.push(id);
+      missing.set(parts[1], entry);
+    }
+  }
+  return [...missing.values()];
 }
 
 /**

@@ -6,10 +6,10 @@ import { useQuery } from "@tanstack/react-query";
 import { Handle, NodeToolbar, Position, type Node, type NodeProps } from "@xyflow/react";
 import {
   AlertTriangle, BookOpen, Bot, CalendarClock, CheckCircle2, CircleDot, Copy, FileText, GitBranch, Hand, Loader2, LogIn, Merge,
-  Play, PlayCircle, Plus, RotateCcw, Send, Settings2, Trash2, Wrench, XCircle,
+  Play, PlayCircle, Plus, RotateCcw, Send, Settings2, Trash2, Unplug, Wrench, XCircle,
 } from "lucide-react";
 
-import { ConnectButton } from "@/components/connections/connect-button";
+import { ConnectButton, useMissingServers } from "@/components/connections/connect-button";
 import { SystemsChip } from "@/components/builder/tool-needs";
 import { builderApi } from "@/lib/builder/api";
 import { PALETTE, canAddAfter, isTrigger, overriddenParams, serverIdOf, toolName } from "@/lib/builder/graph";
@@ -55,42 +55,44 @@ export type FlowNodeType = Node<FlowNodeData, "flow">;
 /** Each kind of step has its own colour on the canvas — the card's tint, border, header and badge —
  *  so an agent, a tool call or an approval can be told apart at a glance. */
 type Look = { label: string; badge: string; hint: string; Icon: typeof Bot; head: string; card: string; tag: string };
+// One hue per kind, far enough apart to tell at a glance: triggers in blues/teal, agent violet,
+// tool orange, condition yellow, join neutral slate, approval rose, output green.
 const LOOK: Record<NodeType, Look> = {
   input: {
-    label: "Input", badge: "Trigger", hint: "Entry point for workflow run", Icon: LogIn, head: "from-sky-500 to-blue-600",
-    card: "border-sky-500/40 bg-gradient-to-b from-sky-500/[0.10] to-[#141418]", tag: "bg-sky-500/15 text-sky-300 ring-sky-400/30",
+    label: "Input", badge: "Trigger", hint: "Entry point for workflow run", Icon: LogIn, head: "from-sky-400 to-sky-600",
+    card: "border-sky-500/45 bg-gradient-to-b from-sky-500/[0.14] to-[#141418]", tag: "bg-sky-500/15 text-sky-200 ring-sky-400/30",
   },
   manual_trigger: {
-    label: "Manual Trigger", badge: "Trigger", hint: "Starts when Run is clicked", Icon: PlayCircle, head: "from-sky-500 to-blue-600",
-    card: "border-sky-500/40 bg-gradient-to-b from-sky-500/[0.10] to-[#141418]", tag: "bg-sky-500/15 text-sky-300 ring-sky-400/30",
+    label: "Manual Trigger", badge: "Trigger", hint: "Starts when Run is clicked", Icon: PlayCircle, head: "from-blue-500 to-indigo-600",
+    card: "border-blue-500/45 bg-gradient-to-b from-blue-500/[0.14] to-[#141418]", tag: "bg-blue-500/15 text-blue-200 ring-blue-400/30",
   },
   schedule_trigger: {
-    label: "Schedule Trigger", badge: "Trigger", hint: "Starts on a schedule", Icon: CalendarClock, head: "from-sky-500 to-blue-600",
-    card: "border-sky-500/40 bg-gradient-to-b from-sky-500/[0.10] to-[#141418]", tag: "bg-sky-500/15 text-sky-300 ring-sky-400/30",
+    label: "Schedule Trigger", badge: "Trigger", hint: "Starts on a schedule", Icon: CalendarClock, head: "from-teal-400 to-teal-600",
+    card: "border-teal-500/45 bg-gradient-to-b from-teal-500/[0.14] to-[#141418]", tag: "bg-teal-500/15 text-teal-200 ring-teal-400/30",
   },
   agent: {
     label: "Agent", badge: "Agent", hint: "AI agent performs processing", Icon: Bot, head: "from-violet-500 to-purple-600",
-    card: "border-violet-500/40 bg-gradient-to-b from-violet-500/[0.10] to-[#141418]", tag: "bg-violet-500/15 text-violet-200 ring-violet-400/30",
+    card: "border-violet-500/45 bg-gradient-to-b from-violet-500/[0.14] to-[#141418]", tag: "bg-violet-500/15 text-violet-200 ring-violet-400/30",
   },
   tool: {
-    label: "Tool Call", badge: "Tool", hint: "Calls one tool of a connector", Icon: Wrench, head: "from-cyan-500 to-teal-600",
-    card: "border-cyan-500/40 bg-gradient-to-b from-cyan-500/[0.10] to-[#141418]", tag: "bg-cyan-500/15 text-cyan-200 ring-cyan-400/30",
+    label: "Tool Call", badge: "Tool", hint: "Calls one tool of a connector", Icon: Wrench, head: "from-orange-400 to-orange-600",
+    card: "border-orange-500/45 bg-gradient-to-b from-orange-500/[0.14] to-[#141418]", tag: "bg-orange-500/15 text-orange-200 ring-orange-400/30",
   },
   condition: {
-    label: "Condition", badge: "Condition", hint: "Branches logic", Icon: GitBranch, head: "from-amber-500 to-orange-600",
-    card: "border-amber-500/40 bg-gradient-to-b from-amber-500/[0.10] to-[#141418]", tag: "bg-amber-500/15 text-amber-200 ring-amber-400/30",
+    label: "Condition", badge: "Condition", hint: "Branches logic", Icon: GitBranch, head: "from-yellow-400 to-amber-500",
+    card: "border-yellow-500/45 bg-gradient-to-b from-yellow-500/[0.14] to-[#141418]", tag: "bg-yellow-500/15 text-yellow-200 ring-yellow-400/30",
   },
   join: {
-    label: "Join", badge: "Join", hint: "Waits for parallel branches", Icon: Merge, head: "from-fuchsia-500 to-pink-600",
-    card: "border-fuchsia-500/40 bg-gradient-to-b from-fuchsia-500/[0.10] to-[#141418]", tag: "bg-fuchsia-500/15 text-fuchsia-200 ring-fuchsia-400/30",
+    label: "Join", badge: "Join", hint: "Waits for parallel branches", Icon: Merge, head: "from-slate-400 to-slate-600",
+    card: "border-slate-500/45 bg-gradient-to-b from-slate-500/[0.14] to-[#141418]", tag: "bg-slate-500/15 text-slate-200 ring-slate-400/30",
   },
   human_approval: {
     label: "Human Approval", badge: "Approval", hint: "Pauses for a person to approve", Icon: Hand, head: "from-rose-500 to-red-600",
-    card: "border-rose-500/40 bg-gradient-to-b from-rose-500/[0.10] to-[#141418]", tag: "bg-rose-500/15 text-rose-200 ring-rose-400/30",
+    card: "border-rose-500/45 bg-gradient-to-b from-rose-500/[0.14] to-[#141418]", tag: "bg-rose-500/15 text-rose-200 ring-rose-400/30",
   },
   output: {
-    label: "Output", badge: "Output", hint: "Final answer", Icon: Send, head: "from-emerald-500 to-green-600",
-    card: "border-emerald-500/40 bg-gradient-to-b from-emerald-500/[0.10] to-[#141418]", tag: "bg-emerald-500/15 text-emerald-200 ring-emerald-400/30",
+    label: "Output", badge: "Output", hint: "Final answer", Icon: Send, head: "from-emerald-400 to-green-600",
+    card: "border-emerald-500/45 bg-gradient-to-b from-emerald-500/[0.14] to-[#141418]", tag: "bg-emerald-500/15 text-emerald-200 ring-emerald-400/30",
   },
 };
 export const NODE_LOOK = LOOK;
@@ -124,17 +126,20 @@ function Chip({ children, tone = "zinc", title }: { children: React.ReactNode; t
 }
 
 /** "N tools" on an agent step; click it for the list (in a layer of its own,
- *  so the node card doesn't clip it). Amber when the step changed them. */
-function ToolsChip({ toolIds, changed }: { toolIds: string[]; changed: boolean }) {
+ *  so the node card doesn't clip it). Amber when the step changed them; red, with a Connect
+ *  per system, when some belong to a system this user hasn't connected. */
+function ToolsChip({ toolIds, changed, token }: { toolIds: string[]; changed: boolean; token: string }) {
   const [at, setAt] = useState<{ top: number; left: number } | null>(null);
   const ref = useRef<HTMLButtonElement>(null);
+  const missing = useMissingServers(token, toolIds);
+  const offline = new Set(missing.flatMap((m) => m.tools));
   if (toolIds.length === 0) return null;
   return (
     <>
       <button
         ref={ref}
         type="button"
-        title="Tools this step can call"
+        title={offline.size ? `${offline.size} of these tools won't run until you connect ${missing.map((m) => m.name).join(", ")}` : "Tools this step can call"}
         aria-expanded={!!at}
         onClick={(e) => {
           e.stopPropagation();
@@ -143,26 +148,42 @@ function ToolsChip({ toolIds, changed }: { toolIds: string[]; changed: boolean }
         }}
         className={cn(
           "nodrag inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] cursor-pointer",
-          changed ? "border-amber-400/30 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20" : "border-violet-400/30 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20",
+          offline.size
+            ? "border-red-400/40 bg-red-500/10 text-red-300 hover:bg-red-500/20"
+            : changed ? "border-amber-400/30 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20" : "border-violet-400/30 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20",
         )}
       >
         <Wrench className="h-3 w-3" /> {toolIds.length} tool{toolIds.length === 1 ? "" : "s"}
+        {offline.size > 0 && <span className="inline-flex items-center gap-0.5"><Unplug className="h-3 w-3" /> {offline.size} not connected</span>}
       </button>
       {at &&
         createPortal(
           <>
             <div className="fixed inset-0 z-[999]" onClick={() => setAt(null)} />
-            <div style={at} className="fixed z-[1000] max-h-60 w-60 overflow-y-auto rounded-lg border border-white/10 bg-zinc-900 p-1.5 shadow-2xl">
+            <div style={at} className="fixed z-[1000] max-h-72 w-64 overflow-y-auto rounded-lg border border-white/10 bg-zinc-900 p-1.5 shadow-2xl">
               <p className="px-1.5 pb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Tools this step can call</p>
               {toolIds.map((id) => (
                 <p key={id} title={id} className="flex items-center gap-1.5 truncate rounded px-1.5 py-1 text-[11px] text-zinc-200 hover:bg-white/5">
-                  <Wrench className="h-3 w-3 shrink-0 text-zinc-500" /> {toolName(id)}
+                  {offline.has(id) ? <Unplug className="h-3 w-3 shrink-0 text-red-400" /> : <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-400" />}
+                  <span className="truncate">{toolName(id)}</span>
+                  {offline.has(id) && <span className="ml-auto shrink-0 text-[10px] text-red-300">not connected</span>}
                 </p>
               ))}
+              {missing.length > 0 && (
+                <div className="mt-1 space-y-1 border-t border-white/10 px-1.5 pt-1.5">
+                  {missing.map((m) => (
+                    <ConnectButton key={m.serverId} serverId={m.serverId} serverName={m.name} token={token} className="w-full justify-center px-2 py-1 text-[11px]" />
+                  ))}
+                </div>
+              )}
             </div>
           </>,
           document.body,
         )}
+      {/* Right on the card too, so it's clear before pressing Run. */}
+      {missing.map((m) => (
+        <ConnectButton key={m.serverId} serverId={m.serverId} serverName={m.name} token={token} className="rounded-md px-1.5 py-0.5 text-[11px]" />
+      ))}
     </>
   );
 }
@@ -259,7 +280,7 @@ function Body({ node, ctx }: { node: WorkflowNode; ctx: CanvasCtx }) {
       return (
         <div className="flex flex-wrap gap-1.5">
           <Chip tone={model !== a.llm_model ? "amber" : "zinc"}><span className="font-mono">{model || "default model"}</span></Chip>
-          <ToolsChip toolIds={toolIds} changed={"tool_ids" in own} />
+          <ToolsChip toolIds={toolIds} changed={"tool_ids" in own} token={ctx.token} />
           <SystemsChip token={ctx.token} needs={needs} />
           {kbs > 0 && <Chip tone={"knowledge_base_ids" in own ? "amber" : "sky"}><BookOpen className="h-3 w-3" /> {kbs}</Chip>}
           {attempts > 1 && <Chip title={`Tried up to ${attempts} times if it fails`}><RotateCcw className="h-3 w-3" /> {attempts}</Chip>}

@@ -2,8 +2,9 @@
 
 import { useContext, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Plus, Sparkles, X } from "lucide-react";
+import { CheckCircle2, Plus, Sparkles, Unplug, X } from "lucide-react";
 
+import { ConnectButton, useMissingServers } from "@/components/connections/connect-button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { BoolParam, Field, OverrideParams, Pair, Param, Section, Select, Textarea, Toggle } from "@/components/builder/fields";
@@ -94,6 +95,10 @@ export function AgentFields({
 
   const set = (patch: Partial<DraftAgent>) => onChange({ ...value, ...patch });
   const setConfig = (patch: Partial<AgentConfig>) => set({ config: { ...config, ...patch } });
+
+  // Tools of systems this user hasn't connected (connections are each person's own).
+  const missing = useMissingServers(token, toolIds);
+  const offline = new Set(missing.flatMap((m) => m.tools));
 
   const kbs = useQuery({ queryKey: ["knowledge-bases", token], queryFn: () => knowledgeApi.list(token), enabled: !!token });
 
@@ -261,7 +266,15 @@ export function AgentFields({
         {toolIds.length === 0 && <p className="text-xs text-zinc-400">No tools: it answers from what it&apos;s told and its knowledge.</p>}
         <ul className="flex flex-wrap gap-1.5">
           {toolIds.map((id) => (
-            <li key={id} className="flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs text-emerald-800">
+            <li
+              key={id}
+              title={offline.has(id) ? "Not connected for you yet — this tool won't run until you connect" : "Connected"}
+              className={cn(
+                "flex items-center gap-1 rounded-full px-2 py-0.5 text-xs",
+                offline.has(id) ? "bg-amber-50 text-amber-800 ring-1 ring-amber-300" : "bg-emerald-50 text-emerald-800",
+              )}
+            >
+              {offline.has(id) ? <Unplug className="h-3 w-3" /> : <CheckCircle2 className="h-3 w-3" />}
               {toolName(id)}
               {!readOnly && (
                 <button type="button" aria-label={`Remove ${toolName(id)}`} onClick={() => setConfig({ tool_ids: toolIds.filter((t) => t !== id) })} className="cursor-pointer">
@@ -271,6 +284,14 @@ export function AgentFields({
             </li>
           ))}
         </ul>
+        {missing.map((m) => (
+          <div key={m.serverId} className="mt-2 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5">
+            <p className="min-w-0 flex-1 text-[11px] text-amber-800">
+              <span className="font-semibold">{m.name}</span> isn&apos;t connected for you — {m.tools.length === 1 ? "its tool" : `its ${m.tools.length} tools`} won&apos;t run.
+            </p>
+            <ConnectButton serverId={m.serverId} token={token} className="px-2 py-0.5 text-[11px]" />
+          </div>
+        ))}
         {adding && (
           <ToolPicker token={token} exclude={toolIds} onPick={(t) => setConfig({ tool_ids: [...toolIds, t.tool_id] })} />
         )}

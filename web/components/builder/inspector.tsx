@@ -13,6 +13,7 @@ import { WorkflowScheduleFields } from "@/components/builder/schedule-fields";
 import { ToolPicker } from "@/components/builder/tool-picker";
 import { builderApi, browserTimezone } from "@/lib/builder/api";
 import { DEFAULT_CRON } from "@/lib/builder/schedule";
+import { cn } from "@/lib/utils";
 import { NODE_META, isTrigger, serverIdOf, toolName } from "@/lib/builder/graph";
 import type {
   Agent,
@@ -43,6 +44,7 @@ function PanelHeader({
   title,
   subtitle,
   Icon,
+  tone,
   onDelete,
   deleteLabel = "Delete step",
   onClose,
@@ -50,6 +52,8 @@ function PanelHeader({
   title: string;
   subtitle?: string;
   Icon?: typeof X;
+  /** The step kind's gradient (NODE_LOOK.head), so the panel carries its colour. */
+  tone?: string;
   onDelete?: () => void;
   deleteLabel?: string;
   onClose: () => void;
@@ -57,7 +61,7 @@ function PanelHeader({
   return (
     <div className="flex items-center gap-2.5 border-b border-zinc-200 px-3.5 py-2.5">
       {Icon && (
-        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600"><Icon className="h-3.5 w-3.5" /></span>
+        <span className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-lg", tone ? `bg-gradient-to-br text-white ${tone}` : "bg-indigo-50 text-indigo-600")}><Icon className="h-3.5 w-3.5" /></span>
       )}
       <div className="min-w-0 flex-1">
         <h2 className="truncate text-sm font-semibold text-zinc-900">{title}</h2>
@@ -141,6 +145,7 @@ export function StepInspector({
         title={node.label || meta.title}
         subtitle={node.label ? meta.title : meta.hint}
         Icon={NODE_LOOK[node.type].Icon}
+        tone={NODE_LOOK[node.type].head}
         onDelete={isTrigger(node.type) ? undefined : onDelete}
         onClose={onClose}
       />
