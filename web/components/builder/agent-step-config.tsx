@@ -74,16 +74,6 @@ function valueAt(obj: unknown, path: string): unknown {
 /** The goal agent steps added before the step picker existed started with. */
 const NEW_AGENT_GOAL = "Describe what this step does";
 
-const WIZARD: { id: "describe" | AgentSection; title: string }[] = [
-  { id: "describe", title: "Describe" },
-  { id: "identity", title: "Identity" },
-  { id: "tools", title: "Tools" },
-  { id: "knowledge", title: "Knowledge" },
-  { id: "answers", title: "Answers" },
-  { id: "model", title: "Model" },
-  { id: "guardrails", title: "Safety" },
-];
-
 function summary(section: OverrideId, agent: { llm_model?: string; config?: AgentConfig }): string {
   const c = agent.config ?? {};
   switch (section) {
@@ -122,8 +112,8 @@ function mergeConfig(base: AgentConfig | undefined, overrides: Record<string, un
 }
 
 /**
- * An agent step's popup. A new agent (a draft on the step) is built right here,
- * step by step; a saved agent shows Marketplace's "node override": each part
+ * An agent step's popup. A new or customized agent (a draft on the step) is edited right here;
+ * a saved agent shows Marketplace's "node override": each part
  * inherits the agent's setting until switched on for this step only.
  */
 export function AgentStepConfig({
@@ -140,7 +130,7 @@ export function AgentStepConfig({
   onChange: (p: Partial<WorkflowNode>) => void;
 }) {
   const saved = node.agent_id ? agents[node.agent_id] : undefined;
-  if (node.draft_agent) return <AgentWizard draft={node.draft_agent} customizing={!!node.agent_id} token={token} onChange={(draft_agent) => onChange({ draft_agent })} />;
+  if (node.draft_agent) return <DraftConfig node={node} draft={node.draft_agent} original={saved} token={token} onChange={onChange} />;
   if (!saved) {
     return (
       <div className="space-y-3 px-4 py-4">
@@ -175,7 +165,7 @@ function StepOverrides({
   token: string;
   onChange: (p: Partial<WorkflowNode>) => void;
 }) {
-  const [open, setOpen] = useState<string | null>("overview");
+  const [open, setOpen] = useState<string | null>(null);
   const overrides = (node.config_overrides ?? {}) as Record<string, unknown>;
   const { llm_model: stepModel, llm_provider: stepProvider, ...configOverrides } = overrides;
   const merged = mergeConfig(agent.config, configOverrides);
@@ -339,68 +329,119 @@ function Accordion({
   );
 }
 
-/** A new (or customized) agent for this step, built in the popup: describe it, then each part in turn. */
-function AgentWizard({ draft, customizing, token, onChange }: { draft: DraftAgent; customizing: boolean; token: string; onChange: (d: DraftAgent) => void }) {
-  // A fresh step (placeholder goal) starts at "Describe"; a filled-in or customized one at its identity.
-  const [step, setStep] = useState(customizing || (draft.goal && draft.goal !== NEW_AGENT_GOAL) ? 1 : 0);
+/**
+ * A new or customized agent (a draft on the step), laid out like a saved agent's step: an overview
+ * with the step's name, attempts and the agent's identity, then one fold per part — edited directly,
+ * since a draft is this workflow's own copy. A fresh step opens on "Describe with AI".
+ */
+function DraftConfig({
+  node,
+  draft,
+  original,
+  token,
+  onChange,
+}: {
+  node: WorkflowNode;
+  draft: DraftAgent;
+  /** The agent this draft was customized from, when it still exists. */
+  original?: Agent;
+  token: string;
+  onChange: (p: Partial<WorkflowNode>) => void;
+}) {
+  const fresh = !original && (!draft.goal || draft.goal === NEW_AGENT_GOAL);
+  const [open, setOpen] = useState<string | null>(fresh ? "describe" : null);
   const [description, setDescription] = useState("");
   const [note, setNote] = useState<string | null>(null);
+  const attempts = node.retry?.max_attempts ?? 1;
+  const setDraft = (draft_agent: DraftAgent) => onChange({ draft_agent });
   const fill = useMutation({
     mutationFn: () => builderApi.draftAgent(token, description),
     onSuccess: (d) => {
-      onChange({ name: d.name, role: d.role, goal: d.goal, instructions: d.instructions, config: d.config });
+      setDraft({ ...draft, name: d.name, role: d.role, goal: d.goal, instructions: d.instructions, config: d.config });
       const connect = d.needs_connection.map((s) => s.server_name);
       setNote(connect.length ? `Filled in. Connect before running: ${connect.join(", ")}.` : "Filled in — check each part.");
-      setStep(1);
+      setOpen("overview");
     },
   });
-  const current = WIZARD[step];
 
   return (
-    <div>
-      <div className="mx-4 mt-3 rounded-lg bg-indigo-50 px-3 py-2 text-[11px] text-indigo-800">
-        {customizing ? "A copy of the agent for this workflow — the original stays as it is." : "A new agent for this workflow — it's created when you save."}
-      </div>
-      <ol className="flex flex-wrap gap-1 px-4 pt-3" aria-label="Agent setup steps">
-        {WIZARD.map((s, i) => (
-          <li key={s.id}>
-            <button
-              type="button"
-              onClick={() => setStep(i)}
-              className={cn("rounded-full px-2.5 py-1 text-[11px] font-medium cursor-pointer", i === step ? "bg-indigo-600 text-white" : i < step ? "bg-indigo-50 text-indigo-700" : "bg-zinc-100 text-zinc-500")}
-            >
-              {i + 1}. {s.title}
-            </button>
-          </li>
-        ))}
-      </ol>
-      {note && <p className="mx-4 mt-2 text-[11px] text-emerald-700">{note}</p>}
-
-      {current.id === "describe" ? (
-        <div className="space-y-2 px-4 py-3">
-          <Field label="What should this agent do?" hint="The AI fills in everything — name, instructions, tools from your connected systems — for you to check.">
-            <Textarea rows={4} value={description} placeholder="Reads new support emails, finds the order in Shopify and drafts a reply" onChange={(e) => setDescription(e.target.value)} />
-          </Field>
-          {fill.isError && <p className="text-xs text-red-600">{fill.error instanceof Error ? fill.error.message : "Couldn't fill it in."}</p>}
-          <div className="flex gap-2">
-            <Button size="sm" disabled={fill.isPending || description.trim().length < 3} onClick={() => fill.mutate()}>
-              {fill.isPending ? <Spinner className="h-4 w-4" /> : <Sparkles />} Fill with AI
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => setStep(1)}>Set it up myself</Button>
-          </div>
-        </div>
-      ) : (
-        <AgentFields value={draft} token={token} only={[current.id as AgentSection, ...(current.id === "guardrails" ? (["approvals"] as AgentSection[]) : current.id === "tools" ? (["limits"] as AgentSection[]) : [])]} onChange={onChange} />
-      )}
-
-      <div className="flex justify-between border-t border-zinc-200 px-4 py-2.5">
-        <Button size="sm" variant="outline" className="h-8" disabled={step === 0} onClick={() => setStep(step - 1)}>Back</Button>
-        {step < WIZARD.length - 1 ? (
-          <Button size="sm" className="h-8" onClick={() => setStep(step + 1)}>Next: {WIZARD[step + 1].title}</Button>
-        ) : (
-          <span className="self-center text-[11px] text-zinc-500">Done — Save the workflow to create it.</span>
+    <div className="space-y-2 px-3.5 py-3">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-semibold", original ? "bg-amber-50 text-amber-700" : "bg-indigo-50 text-indigo-700")}>
+          {original ? "Customized for this workflow" : "New agent for this workflow"}
+        </span>
+        {original && (
+          <button type="button" className="ml-auto text-[11px] font-medium text-indigo-600 hover:text-indigo-500 cursor-pointer" onClick={() => onChange({ draft_agent: null })}>
+            Undo customize
+          </button>
         )}
       </div>
+      <p className="text-[11px] text-zinc-500">
+        {original ? `A copy of “${original.name}” — the original stays as it is.` : "It's created when you save the workflow."}
+      </p>
+      {note && <p className="text-[11px] text-emerald-700">{note}</p>}
+
+      {!original && (
+        <Accordion title="Describe with AI" sub="The AI fills in every part for you to check" Icon={Sparkles} open={open === "describe"} onToggle={() => setOpen(open === "describe" ? null : "describe")}>
+          <div className="space-y-2 text-xs">
+            <Field label="What should this agent do?" hint="Name, instructions, tools from your connected systems — all filled in.">
+              <Textarea rows={4} value={description} placeholder="Reads new support emails, finds the order in Shopify and drafts a reply" onChange={(e) => setDescription(e.target.value)} />
+            </Field>
+            {fill.isError && <p className="text-xs text-red-600">{fill.error instanceof Error ? fill.error.message : "Couldn't fill it in."}</p>}
+            <Button size="sm" className="h-8 text-xs" disabled={fill.isPending || description.trim().length < 3} onClick={() => fill.mutate()}>
+              {fill.isPending ? <Spinner className="h-4 w-4" /> : <Sparkles />} Fill with AI
+            </Button>
+          </div>
+        </Accordion>
+      )}
+
+      <Accordion
+        title="Agent overview"
+        sub={`${node.label || draft.name}${attempts > 1 ? ` · ${attempts} attempts` : ""}`}
+        Icon={Bot}
+        open={open === "overview"}
+        onToggle={() => setOpen(open === "overview" ? null : "overview")}
+      >
+        <div className="space-y-3 text-xs">
+          <div className="grid grid-cols-[1fr_5.5rem] gap-2">
+            <Field label="Step name">
+              <Input className="h-8 text-xs" value={node.label ?? ""} placeholder={draft.name} onChange={(e) => onChange({ label: e.target.value || null })} />
+            </Field>
+            <Field label="Attempts">
+              <Input
+                className="h-8 text-xs"
+                type="number"
+                min={1}
+                max={5}
+                title="How many times the step is tried if it fails"
+                value={attempts}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  onChange({ retry: n > 1 ? { max_attempts: Math.min(5, n) } : null });
+                }}
+              />
+            </Field>
+          </div>
+          <div className="-mx-4 -mb-3">
+            <AgentFields value={draft} token={token} only={["identity"]} onChange={setDraft} />
+          </div>
+        </div>
+      </Accordion>
+
+      {OVERRIDES.map(({ id, title, Icon }) => (
+        <Accordion
+          key={id}
+          title={title}
+          sub={summary(id, draft)}
+          Icon={Icon}
+          open={open === id}
+          onToggle={() => setOpen(open === id ? null : id)}
+        >
+          <div className="-mx-4 -my-3">
+            <AgentFields value={draft} token={token} only={SECTION_FIELDS[id]} onChange={setDraft} />
+          </div>
+        </Accordion>
+      ))}
     </div>
   );
 }

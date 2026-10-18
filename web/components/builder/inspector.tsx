@@ -133,8 +133,8 @@ export function StepInspector({
 
   const retries = !isTrigger(node.type) && node.type !== "output" && node.type !== "join";
   const attempts = node.retry?.max_attempts ?? 1;
-  // A saved agent's step keeps its name and attempts in its Agent overview.
-  const inOverview = node.type === "agent" && !node.draft_agent && !!node.agent_id && !!agents[node.agent_id];
+  // An agent step keeps its name and attempts in its Agent overview.
+  const inOverview = node.type === "agent" && (!!node.draft_agent || (!!node.agent_id && !!agents[node.agent_id]));
   return (
     <div className="flex max-h-full min-h-0 flex-col">
       <PanelHeader
