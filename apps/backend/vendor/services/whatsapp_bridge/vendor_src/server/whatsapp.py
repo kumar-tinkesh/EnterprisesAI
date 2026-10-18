@@ -299,11 +299,41 @@ def get_direct_chat_by_contact(sender_phone_number: str) -> Optional[Chat]:
         print(f"Bridge error: {e}")
         return None
 
+# EnterpriseAI addition: WhatsApp needs a phone number with its country code, digits only. A number as
+# people write it ("+91 87899-77380", "08789977380", "8789977380") is put in that shape; a bare 10-digit
+# number gets this country code (unset = refused, with a message saying what to add).
+DEFAULT_COUNTRY_CODE = "".join(c for c in os.environ.get("WHATSAPP_DEFAULT_COUNTRY_CODE", "") if c.isdigit())
+
+
+def normalize_recipient(recipient: str) -> Tuple[Optional[str], Optional[str]]:
+    """(recipient to send to, None) or (None, why it can't be sent to). A JID passes as it is."""
+    value = (recipient or "").strip()
+    if not value:
+        return None, "Recipient must be provided"
+    if "@" in value:
+        return value, None
+    digits = "".join(c for c in value if c.isdigit())
+    if not digits or any(c not in "0123456789+-() ." for c in value):
+        return None, f"'{recipient}' isn't a phone number or a WhatsApp JID"
+    if value.startswith("00"):
+        digits = digits[2:]
+    elif not value.startswith("+") and len(digits) == 11 and digits.startswith("0"):
+        digits = digits[1:]  # a national trunk 0 ("08789977380")
+    if len(digits) == 10 and not value.startswith("+"):
+        if not DEFAULT_COUNTRY_CODE:
+            return None, f"'{recipient}' has no country code — write it with one, e.g. 91{digits} for India"
+        digits = DEFAULT_COUNTRY_CODE + digits
+    if not 11 <= len(digits) <= 15:
+        return None, f"'{recipient}' doesn't look like a full phone number with country code (e.g. 918789977380)"
+    return digits, None
+
+
 def send_message(recipient: str, message: str) -> Tuple[bool, str]:
     try:
         # Validate input
-        if not recipient:
-            return False, "Recipient must be provided"
+        recipient, problem = normalize_recipient(recipient)
+        if problem:
+            return False, problem
         
         url = f"{WHATSAPP_API_BASE_URL}/send"
         payload = {
@@ -338,8 +368,9 @@ def send_message(recipient: str, message: str) -> Tuple[bool, str]:
 def send_file(recipient: str, media_path: str) -> Tuple[bool, str]:
     try:
         # Validate input
-        if not recipient:
-            return False, "Recipient must be provided"
+        recipient, problem = normalize_recipient(recipient)
+        if problem:
+            return False, problem
         
         if not media_path:
             return False, "Media path must be provided"
@@ -373,8 +404,9 @@ def send_file(recipient: str, media_path: str) -> Tuple[bool, str]:
 def send_audio_message(recipient: str, media_path: str) -> Tuple[bool, str]:
     try:
         # Validate input
-        if not recipient:
-            return False, "Recipient must be provided"
+        recipient, problem = normalize_recipient(recipient)
+        if problem:
+            return False, problem
         
         if not media_path:
             return False, "Media path must be provided"

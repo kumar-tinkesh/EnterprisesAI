@@ -233,6 +233,9 @@ async def get_user_connected_server_ids(
     "Connected" per server without one query each."""
     if not server_ids:
         return set()
+    from vendor.services.whatsapp_bridge.manager import drop_dead_bridges
+
+    await drop_dead_bridges(db, user_id=user_id, server_ids=server_ids)
     rows = (
         await db.execute(
             select(VendorMCPCredential.server_id).where(

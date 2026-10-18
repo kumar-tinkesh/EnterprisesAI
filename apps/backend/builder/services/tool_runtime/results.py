@@ -4,6 +4,11 @@
 short placeholder for each non-text block. ``content`` keeps the blocks' kinds
 and metadata; binary payloads (images, audio, blob resources) are summarised,
 never passed through, so one screenshot can't blow up a run's state.
+
+A tool that failed but said so only in its answer — ``{"success": false,
+"message": "…"}``, as the WhatsApp server's send tools do, without MCP's
+``isError`` — counts as failed too (``reported_failure``): otherwise a message
+that never left showed as a step that succeeded.
 """
 from __future__ import annotations
 
@@ -52,6 +57,21 @@ def _block(block: Any) -> tuple[dict[str, Any], str]:
     return {"type": str(kind)}, f"[{kind} content]"
 
 
+def reported_failure(text: str, structured: Any = None) -> bool:
+    """The answer is one object saying it didn't work: ``success`` or ``ok`` is false."""
+    candidates = [structured] if isinstance(structured, dict) else []
+    stripped = (text or "").strip()
+    if stripped.startswith("{"):
+        try:
+            candidates.append(json.loads(stripped))
+        except ValueError:
+            pass
+    for obj in candidates:
+        if isinstance(obj, dict) and any(obj.get(k) is False for k in ("success", "ok")):
+            return True
+    return False
+
+
 def normalize_result(result: types.CallToolResult, *, max_chars: int) -> ToolOutput:
     content: list[dict[str, Any]] = []
     parts: list[str] = []
@@ -72,7 +92,7 @@ def normalize_result(result: types.CallToolResult, *, max_chars: int) -> ToolOut
         if len(encoded) > max_chars:
             structured, truncated = None, True
     return ToolOutput(
-        is_error=bool(result.is_error),
+        is_error=bool(result.is_error) or reported_failure(text, structured),
         text=text,
         structured=structured,
         content=content,
@@ -80,4 +100,4 @@ def normalize_result(result: types.CallToolResult, *, max_chars: int) -> ToolOut
     )
 
 
-__all__ = ["ToolOutput", "normalize_result"]
+__all__ = ["ToolOutput", "normalize_result", "reported_failure"]

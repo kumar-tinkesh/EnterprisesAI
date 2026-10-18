@@ -108,6 +108,10 @@ async def load_server_credentials(
 
 async def has_user_credential(db: AsyncSession, *, server_id: str, user_id: str) -> bool:
     """Whether this specific user has connected their own credential for a server."""
+    # A WhatsApp bridge whose container is gone isn't connected, whatever its row last said.
+    from vendor.services.whatsapp_bridge.manager import drop_dead_bridges
+
+    await drop_dead_bridges(db, user_id=user_id, server_ids=[server_id])
     row = (
         await db.execute(
             select(VendorMCPCredential.id).where(

@@ -38,6 +38,10 @@ BRIDGE_PORT = 8080
 
 _QR_TIMEOUT_ERROR = "Timed out waiting for the QR code to be scanned. Click connect to try again."
 
+# A bridge marked connected is re-checked against its container at most this often (see drop_dead_bridges).
+LIVE_CHECK_SECONDS = 20.0
+_live_checked: dict[str, float] = {}  # instance id -> when its container was last seen connected
+
 
 class BridgeError(Exception):
     """Raised for a bridge lifecycle failure the caller should surface."""
@@ -180,6 +184,10 @@ async def get_status(db, *, server_id: str, user_id: str) -> dict:
         return {"status": "error", "error": str(exc)}
 
     status, qr, error = _map_status(bridge)
+    if status == "connected":
+        _live_checked[row.id] = time.monotonic()
+    else:
+        _live_checked.pop(row.id, None)
     was_connected = row.status == "connected"
     if status != row.status or error != row.last_error:
         row.status = status
@@ -198,9 +206,53 @@ async def get_status(db, *, server_id: str, user_id: str) -> dict:
     return out
 
 
+async def drop_dead_bridges(db, *, user_id: str, server_ids: list[str] | None = None) -> set[str]:
+    """Of this user's bridges marked connected, the ones whose container is gone, stopped or logged out —
+    marked so (and their "connected" marker dropped), flushed for the caller to commit.
+
+    The row says "connected" from the last time someone looked; the container can disappear after that
+    (removed by hand, a ``docker compose down -v``, a host reboot without its volume), and then every send
+    failed with "Failed to resolve eai-wa-bridge-…" while the UI still said connected. Asked wherever
+    "is this user connected" is answered (``mcp_auth.has_user_credential``, the catalog, a run's launch),
+    at most every LIVE_CHECK_SECONDS per bridge. An orchestrator that can't be reached changes nothing:
+    "unknown" isn't "gone". Returns the server ids found dead.
+    """
+    query = select(VendorMCPBridgeInstance).where(
+        VendorMCPBridgeInstance.user_id == user_id, VendorMCPBridgeInstance.status == "connected",
+    )
+    if server_ids is not None:
+        if not server_ids:
+            return set()
+        query = query.where(VendorMCPBridgeInstance.server_id.in_(server_ids))
+    dead: set[str] = set()
+    now = time.monotonic()
+    for row in (await db.execute(query)).scalars().all():
+        if now - _live_checked.get(row.id, -LIVE_CHECK_SECONDS) < LIVE_CHECK_SECONDS:
+            continue
+        try:
+            bridge = await _orchestrator("GET", f"/instances/{row.id}/status")
+        except BridgeError:
+            continue
+        status, _qr, error = _map_status(bridge)
+        if status == "connected" or status == "starting":
+            # Starting: the container is up and still booting — not proof it's gone.
+            _live_checked[row.id] = now
+            continue
+        logger.info("WhatsApp bridge %s is %s, not connected — marking it so", row.id, status)
+        row.status = "not_connected" if status in ("not_connected", "awaiting_qr") else status
+        row.last_error = error or "Your WhatsApp bridge stopped. Connect again (scan the QR if asked)."
+        _live_checked.pop(row.id, None)
+        await _mirror_connected(db, row, False)
+        dead.add(row.server_id)
+    if dead:
+        await db.flush()
+    return dead
+
+
 async def get_mcp_env(db, *, server_id: str, user_id: str) -> dict[str, str] | None:
     """Env for the stdio MCP server that talks to this user's connected
-    bridge container, or None if they haven't paired one."""
+    bridge container, or None if they haven't paired one (or it's gone)."""
+    await drop_dead_bridges(db, user_id=user_id, server_ids=[server_id])
     row = await _get_instance(db, server_id=server_id, user_id=user_id)
     if row is None or row.status != "connected":
         return None
@@ -210,6 +262,7 @@ async def get_mcp_env(db, *, server_id: str, user_id: str) -> dict[str, str] | N
     return {
         "WHATSAPP_API_BASE_URL": f"http://{container_name(row.id)}:{row.port or BRIDGE_PORT}/api",
         "WHATSAPP_BRIDGE_TOKEN": token,
+        "WHATSAPP_DEFAULT_COUNTRY_CODE": get_backend_settings().WHATSAPP_DEFAULT_COUNTRY_CODE,
     }
 
 

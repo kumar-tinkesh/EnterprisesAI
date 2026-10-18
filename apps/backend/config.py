@@ -50,6 +50,9 @@ class BackendSettings(BaseSettings):
     WHATSAPP_MCP_SERVER_SCRIPT: str = (
         "/app/apps/backend/vendor/services/whatsapp_bridge/vendor_src/server/main.py"
     )
+    # Added to a bare 10-digit number someone sends to ("8789977380" -> "918789977380"); WhatsApp needs
+    # the country code. Empty = such a number is refused with a clear error instead.
+    WHATSAPP_DEFAULT_COUNTRY_CODE: str = "91"
 
 
 @lru_cache

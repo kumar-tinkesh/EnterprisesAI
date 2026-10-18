@@ -130,6 +130,7 @@ async def test_status_goes_qr_then_connected_and_mirrors_credential(admin_client
     assert env == {
         "WHATSAPP_API_BASE_URL": f"http://eai-wa-bridge-{row.id}:8080/api",
         "WHATSAPP_BRIDGE_TOKEN": orch.started_tokens()[0],
+        "WHATSAPP_DEFAULT_COUNTRY_CODE": "91",
     }
 
 
@@ -301,3 +302,92 @@ async def test_user_runtime_without_live_bridge_is_refused(admin_client, db):
     server = await get_mcp_server(db, server_id=server_id)
     with pytest.raises(mcp_auth.McpAuthError, match="isn't connected yet"):
         await build_runtime_config(db, server=server, user_id="tu_nobridge", tenant_id=None)
+
+
+# ── A bridge whose container is gone isn't "connected" (drop_dead_bridges) ──
+
+
+async def _connected(admin_client, db, orch, user_id):
+    server_id, server = await _server(admin_client, db, name=f"wa-{user_id}")
+    await bridge_manager.start_bridge(db, server=server, user_id=user_id, tenant_id="tenant_test_01")
+    orch.bridge_status = {"status": "connected", "qr": ""}
+    await bridge_manager.get_status(db, server_id=server_id, user_id=user_id)
+    row = await _row(db, server_id, user_id)
+    bridge_manager._live_checked.pop(row.id, None)  # as if the last look was long ago
+    return server_id
+
+
+@pytest.mark.asyncio
+async def test_a_removed_container_stops_counting_as_connected(admin_client, db, orch):
+    server_id = await _connected(admin_client, db, orch, "tu_gone")
+    orch.bridge_status = {"status": "not_started", "qr": ""}  # the orchestrator found no container
+
+    assert await mcp_auth.has_user_credential(db, server_id=server_id, user_id="tu_gone") is False
+    await db.commit()
+    row = await _row(db, server_id, "tu_gone")
+    assert row.status == "not_connected" and "Connect again" in row.last_error
+    assert await bridge_manager.get_mcp_env(db, server_id=server_id, user_id="tu_gone") is None
+
+
+@pytest.mark.asyncio
+async def test_a_live_booting_or_unreachable_bridge_is_left_connected(admin_client, db, orch):
+    server_id = await _connected(admin_client, db, orch, "tu_live")
+
+    assert await mcp_auth.has_user_credential(db, server_id=server_id, user_id="tu_live") is True
+    gets = [c for c in orch.calls if c[0] == "GET"]
+    # Seen connected just now: the next question doesn't ask the orchestrator again.
+    assert await mcp_auth.has_user_credential(db, server_id=server_id, user_id="tu_live") is True
+    assert [c for c in orch.calls if c[0] == "GET"] == gets
+
+    row = await _row(db, server_id, "tu_live")
+    for status in ("starting", None):  # still booting; orchestrator down
+        bridge_manager._live_checked.pop(row.id, None)
+        orch.fail = status is None
+        orch.bridge_status = {"status": status or "x", "qr": ""}
+        assert await mcp_auth.has_user_credential(db, server_id=server_id, user_id="tu_live") is True
+    assert (await _row(db, server_id, "tu_live")).status == "connected"
+
+
+@pytest.mark.asyncio
+async def test_the_catalog_shows_a_gone_bridge_as_not_connected(admin_client, tenant_client, tenant_user, db, orch):
+    server_id = await _connected(admin_client, db, orch, tenant_user.id)
+    orch.bridge_status = {"status": "exited", "qr": ""}
+
+    r = await tenant_client.get(f"{BASE}/catalog")
+    assert next(s for s in r.json()["servers"] if s["id"] == server_id)["connected"] is False
+    row = await _row(db, server_id, tenant_user.id)
+    assert row.status == "error" and "exited" in row.last_error
+
+
+def _vendored_whatsapp(monkeypatch, country_code):
+    import importlib.util
+    import sys
+    import types
+    from pathlib import Path
+
+    monkeypatch.setenv("WHATSAPP_DEFAULT_COUNTRY_CODE", country_code)
+    monkeypatch.setitem(sys.modules, "audio", types.ModuleType("audio"))
+    path = Path(bridge_manager.__file__).parent / "vendor_src" / "server" / "whatsapp.py"
+    spec = importlib.util.spec_from_file_location("vendored_whatsapp", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_numbers_are_sent_with_their_country_code(monkeypatch):
+    wa = _vendored_whatsapp(monkeypatch, "91")
+    for written in ("8789977380", "+91 87899-77380", "08789977380", "918789977380", "0091 8789977380"):
+        assert wa.normalize_recipient(written) == ("918789977380", None), written
+    assert wa.normalize_recipient("+1 (415) 555-0100") == ("14155550100", None)
+    assert wa.normalize_recipient("120363@g.us") == ("120363@g.us", None)
+    for bad in ("", "123", "call me", "4155550100x"):
+        assert wa.normalize_recipient(bad)[0] is None, bad
+
+    # A bad number never reaches the bridge.
+    assert wa.send_message("123", "hi")[0] is False
+
+
+def test_without_a_default_a_bare_number_is_refused_clearly(monkeypatch):
+    wa = _vendored_whatsapp(monkeypatch, "")
+    to, problem = wa.normalize_recipient("8789977380")
+    assert to is None and "country code" in problem and "918789977380" in problem

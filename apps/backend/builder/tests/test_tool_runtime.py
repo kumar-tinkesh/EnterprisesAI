@@ -368,3 +368,19 @@ def test_only_the_sdks_own_connection_closed_counts_as_a_broken_transport():
     # A server's own generic error reply shares the code but is a real answer.
     assert not _connection_closed(MCPError(code=-32000, message="Rate limited, try later"))
     assert not _connection_closed(MCPError(code=-32602, message="Connection closed"))
+
+
+
+def test_a_tool_that_says_it_failed_counts_as_failed():
+    from mcp import types
+
+    from builder.services.tool_runtime.results import normalize_result
+
+    said_no = types.CallToolResult(content=[types.TextContent(type="text", text='{"success": false, "message": "Request error: bridge unreachable"}')])
+    out = normalize_result(said_no, max_chars=1000)
+    assert out.is_error and "bridge unreachable" in out.text
+    structured = types.CallToolResult(content=[], structuredContent={"ok": False, "error": "quota"})
+    assert normalize_result(structured, max_chars=1000).is_error
+
+    for fine in ('{"success": true, "message": "sent"}', '{"items": [], "success_rate": 0}', "success: false is just words here"):
+        assert not normalize_result(types.CallToolResult(content=[types.TextContent(type="text", text=fine)]), max_chars=1000).is_error

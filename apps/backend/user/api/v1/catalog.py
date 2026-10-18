@@ -44,6 +44,8 @@ async def get_catalog(
     connected_ids = await get_user_connected_server_ids(
         db, server_ids=[s.id for s in servers], user_id=user.id
     )
+    # Keeps a WhatsApp bridge found gone (get_user_connected_server_ids) marked so.
+    await db.commit()
     entries = [
         CatalogEntry(
             id=s.id,
