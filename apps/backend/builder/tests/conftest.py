@@ -1,12 +1,21 @@
 """Fixtures shared by the builder tests (on top of apps/backend/conftest.py)."""
 from __future__ import annotations
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from src.api.deps import CurrentUser, get_current_user
 from src.db.session import get_db
+
+
+@pytest.fixture(autouse=True)
+def _fresh_ip_limits():
+    """The per-IP run count lives in this process: every test starts from zero."""
+    from builder.publishing.ip_limit import reset_local_counts
+
+    reset_local_counts()
 
 
 @pytest_asyncio.fixture

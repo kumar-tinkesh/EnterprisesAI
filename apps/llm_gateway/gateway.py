@@ -17,7 +17,7 @@ import hashlib
 import json
 import logging
 import time
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator, Awaitable, Callable, Optional
 
 from apps.llm_gateway.config import GatewaySettings
 from apps.llm_gateway.exceptions import (
@@ -30,6 +30,8 @@ from apps.llm_gateway.types import (
     EmbeddingResponse,
     StreamChunk,
     ReasoningStreamParser,
+    TokenUsage,
+    ToolCall,
     extract_think_block,
 )
 from apps.llm_gateway.providers.base import BaseLLMClient
@@ -152,6 +154,9 @@ class LLMGateway:
                 async for chunk in client.stream(request):
                     processed = parser.process(chunk)
                     yield processed
+                tail = parser.flush()
+                if tail is not None:
+                    yield tail
                 return
             except LLMGatewayError as exc:
                 last_error = exc
@@ -166,6 +171,48 @@ class LLMGateway:
 
         raise last_error or ProviderNotConfiguredError(
             f"No configured provider available. Tried: {providers_to_try}"
+        )
+
+    async def complete_streamed(
+        self,
+        request: CompletionRequest,
+        *,
+        provider: Optional[str] = None,
+        on_text: Callable[[str], Awaitable[None]],
+    ) -> CompletionResponse:
+        """``complete``, but streamed: ``on_text`` gets the answer's text as it
+        arrives, and the same CompletionResponse comes back at the end (the
+        text, the tool calls put together from their pieces, the usage)."""
+        content: list[str] = []
+        reasoning: list[str] = []
+        calls: dict[int, dict] = {}
+        usage = TokenUsage()
+        finish: Optional[str] = None
+        async for chunk in self.stream(request, provider=provider):
+            if chunk.content:
+                content.append(chunk.content)
+                await on_text(chunk.content)
+            if chunk.reasoning:
+                reasoning.append(chunk.reasoning)
+            for tc in chunk.tool_calls:
+                call = calls.setdefault(tc.index, {"id": "", "name": "", "arguments": []})
+                call["id"] = call["id"] or tc.id
+                call["name"] = call["name"] or tc.name
+                call["arguments"].append(tc.arguments)
+            if chunk.usage is not None:
+                usage = chunk.usage
+            if chunk.finish_reason:
+                finish = chunk.finish_reason
+        return CompletionResponse(
+            content="".join(content) or None,
+            reasoning="".join(reasoning) or None,
+            tool_calls=[
+                ToolCall(id=c["id"] or f"call_{i}", name=c["name"], arguments="".join(c["arguments"]) or "{}")
+                for i, c in sorted(calls.items())
+            ],
+            usage=usage,
+            model=request.model or "",
+            finish_reason=finish,
         )
 
     @property

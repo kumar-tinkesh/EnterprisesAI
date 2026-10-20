@@ -461,10 +461,15 @@ class BuilderPublicKey(Base, TimestampMixin):
     # slug stays once made, so turning sharing off and on keeps the same link.
     share_slug: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, unique=True, index=True)
     share_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-    # Whose connected tools a share-link run uses: "publisher" (for now the only one).
+    # Whose connected tools a share-link run uses: "publisher" | "visitor" | "mixed"
+    # (the visitor's, except the servers in ``publisher_server_ids``, which use the publisher's).
     tool_mode: Mapped[str] = mapped_column(String(20), default="publisher")
+    publisher_server_ids: Mapped[list] = mapped_column(JSON, default=list)
     # Runs a day one signed-in person may start through the share link (NULL = no own limit).
     per_user_daily_limit: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # People the publisher turned away from the share link (user ids): they keep
+    # seeing their earlier runs there but can't start new ones.
+    blocked_user_ids: Mapped[list] = mapped_column(JSON, default=list)
 
 
 class BuilderAgentMemory(Base, TimestampMixin):

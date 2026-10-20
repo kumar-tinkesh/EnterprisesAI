@@ -11,6 +11,7 @@ import { ChatHistory } from "@/components/builder/chat/chat-history";
 import { MarkdownView } from "@/components/builder/chat/markdown-view";
 import { coerce } from "@/components/builder/playground";
 import { ConnectButton } from "@/components/connections/connect-button";
+import { StreamToggle } from "@/components/builder/stream-toggle";
 import { ApiError } from "@/lib/api";
 import { builderApi } from "@/lib/builder/api";
 import { dayLabel, startersFor } from "@/lib/builder/chat";
@@ -18,6 +19,7 @@ import { inputFields, stepTitle } from "@/lib/builder/graph";
 import { isFinished, type RunView } from "@/lib/builder/run-state";
 import type { Agent, AnswerDepth, Attachment, ChatRef, Problem, Run, Workflow } from "@/lib/builder/types";
 import { useRunStream } from "@/lib/builder/use-run-stream";
+import { useStreamPref } from "@/lib/builder/stream-pref";
 import { cn } from "@/lib/utils";
 
 export type ChatTarget = { kind: "agent" | "workflow"; id: string };
@@ -63,7 +65,9 @@ function LiveAnswer({
   const doing =
     view.status === "waiting"
       ? "Waiting for your decision"
-      : last
+      : view.live?.text
+        ? "Writing…"
+        : last
         ? `${last.nodeId ? `${stepName(last.nodeId)} ` : ""}${last.text}`
         : view.status === "queued" || view.status === null
           ? "Starting…"
@@ -87,6 +91,9 @@ function LiveAnswer({
         )}
         {view.output ? (
           <div className="mt-2"><MarkdownView text={view.output} /></div>
+        ) : view.live?.text ? (
+          // The answer as it's being written; the finished one replaces it.
+          <div className="mt-2"><MarkdownView text={view.live.text + " ▍"} /></div>
         ) : (
           <div className="mt-2.5 space-y-2" aria-hidden>
             <div className="h-2 w-[80%] animate-pulse rounded-full bg-indigo-100" />
@@ -227,6 +234,7 @@ export function ChatPanel({
   // ── Sending ──
   const [input, setInput] = useState("");
   const [depth, setDepth] = useState<AnswerDepth>("auto");
+  const [streamOn] = useStreamPref();
   const [values, setValues] = useState<Record<string, string>>({});
   const [showInputs, setShowInputs] = useState(false);
   const [problems, setProblems] = useState<Problem[]>([]);
@@ -258,13 +266,13 @@ export function ChatPanel({
     mutationFn: async (text: string): Promise<Run> => {
       setProblems([]);
       const ref: ChatRef = chatId ? { conversation_id: chatId } : { new_conversation: true };
-      if (kind === "agent") return builderApi.startAgentRun(token, id, text, depth, ref, files.map((f) => f.id));
+      if (kind === "agent") return builderApi.startAgentRun(token, id, text, depth, ref, files.map((f) => f.id), streamOn);
       const variables: Record<string, unknown> = {};
       for (const f of fields) {
         const v = coerce(f, values[f.name] ?? "");
         if (v !== undefined) variables[f.name] = v;
       }
-      return builderApi.startWorkflowRun(token, id, text, variables, depth, ref);
+      return builderApi.startWorkflowRun(token, id, text, variables, depth, ref, streamOn);
     },
     onMutate: (text) => setPendingText(text),
     onSuccess: async (run) => {
@@ -328,7 +336,7 @@ export function ChatPanel({
   const [atBottom, setAtBottom] = useState(true);
   useEffect(() => {
     if (atBottom) end.current?.scrollIntoView({ block: "end" });
-  }, [thread.length, pendingText, view.timeline.length, view.output, view.approvals.length, atBottom]);
+  }, [thread.length, pendingText, view.timeline.length, view.output, view.live?.text, view.approvals.length, atBottom]);
   useEffect(() => {
     setAtBottom(true);
   }, [chatId]);
@@ -650,6 +658,7 @@ export function ChatPanel({
             >
               {DEPTHS.map((d) => <option key={d.id} value={d.id}>{d.label}</option>)}
             </select>
+            <StreamToggle className="mb-1.5" />
             {busy && liveRunId ? (
               <button
                 type="button"

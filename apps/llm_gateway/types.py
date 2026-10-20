@@ -81,6 +81,8 @@ class ToolCall:
     id: str
     name: str
     arguments: str  # JSON string
+    # In a stream: which call a delta belongs to (several can be built at once).
+    index: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {"id": self.id, "type": "function", "function": {"name": self.name, "arguments": self.arguments}}
@@ -120,7 +122,8 @@ class StreamChunk:
     content: str = ""
     reasoning: Optional[str] = None  # Thinking/reasoning delta (if inside <think>)
     finish_reason: Optional[str] = None
-    tool_calls: list[ToolCall] = field(default_factory=list)
+    tool_calls: list[ToolCall] = field(default_factory=list)  # deltas: id/name once, arguments in pieces
+    usage: Optional[TokenUsage] = None  # the whole call's, on the last chunk (when the provider reports it)
 
 
 # ── Thinking / Reasoning Parsing Helpers ────────────────────────────────────
@@ -184,6 +187,8 @@ class ReasoningStreamParser:
                     if not partial:
                         new_content += self.buffer
                         self.buffer = ""
+                    else:
+                        break  # what's left may be the start of a tag: wait for the next chunk
             else:
                 if "</think>" in self.buffer:
                     idx = self.buffer.find("</think>")
@@ -202,13 +207,23 @@ class ReasoningStreamParser:
                     if not partial:
                         new_reasoning += self.buffer
                         self.buffer = ""
+                    else:
+                        break  # what's left may be the start of "</think>": wait for the next chunk
 
         return StreamChunk(
             content=new_content,
             reasoning=new_reasoning if new_reasoning else None,
             finish_reason=chunk.finish_reason,
             tool_calls=chunk.tool_calls,
+            usage=chunk.usage,
         )
+
+    def flush(self) -> StreamChunk | None:
+        """What's still held back at the end (a "<" that never became a tag)."""
+        held, self.buffer = self.buffer, ""
+        if not held:
+            return None
+        return StreamChunk(reasoning=held) if self.in_think else StreamChunk(content=held)
 
 
 # ── Embedding response ──────────────────────────────────────────────────────

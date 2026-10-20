@@ -325,3 +325,37 @@ async def test_llm_gateway_cache_hits(mock_env_settings):
     assert first.content == "cached answer"
     assert second.content == "cached answer"
 
+
+
+@pytest.mark.asyncio
+async def test_complete_streamed_hands_out_text_and_puts_tool_calls_together(mock_env_settings):
+    from apps.llm_gateway.types import StreamChunk, ToolCall
+
+    async def stream(_request):
+        for chunk in (
+            StreamChunk(content="<think>plan</think>Hel"),
+            StreamChunk(content="lo <"),
+            StreamChunk(tool_calls=[ToolCall(id="c1", name="search", arguments='{"q": ', index=0)]),
+            StreamChunk(tool_calls=[ToolCall(id="c2", name="mail", arguments="{}", index=1)]),
+            StreamChunk(tool_calls=[ToolCall(id="", name="", arguments='"x"}', index=0)], finish_reason="tool_calls"),
+            StreamChunk(usage=TokenUsage(prompt_tokens=7, completion_tokens=3, total_tokens=10)),
+        ):
+            yield chunk
+
+    mock_openai = AsyncMock()
+    mock_openai.stream = stream
+    with patch("apps.llm_gateway.gateway.OpenAIClient", return_value=mock_openai), \
+         patch("apps.llm_gateway.gateway.GroqClient"), \
+         patch("apps.llm_gateway.gateway.GeminiClient"):
+        gw = LLMGateway(mock_env_settings)
+        seen: list[str] = []
+
+        async def on_text(t: str) -> None:
+            seen.append(t)
+
+        resp = await gw.complete_streamed(CompletionRequest(messages=[Message(role=Role.USER, content="Hi")]), on_text=on_text)
+
+    # The thinking stays out of the answer; a "<" held back for a possible tag comes out at the end.
+    assert "".join(seen) == "Hello <" == resp.content and resp.reasoning == "plan"
+    assert [(c.id, c.name, c.arguments) for c in resp.tool_calls] == [("c1", "search", '{"q": "x"}'), ("c2", "mail", "{}")]
+    assert (resp.usage.prompt_tokens, resp.usage.completion_tokens, resp.finish_reason) == (7, 3, "tool_calls")

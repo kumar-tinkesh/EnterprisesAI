@@ -205,7 +205,7 @@ async def test_only_managers_publish(tenant_client, make_user_client, demo, tena
 
 async def test_published_overview_counts_every_key(tenant_client, anon_client, demo, gateway, runtime):
     empty = (await tenant_client.get(f"{B}/published")).json()
-    assert empty["stats"] == {"live_keys": 0, "total_requests": 0, "success_rate": 0.0, "avg_latency_ms": 0}
+    assert empty["stats"] == {"live_keys": 0, "total_requests": 0, "success_rate": 0.0, "avg_latency_ms": 0, "people": 0}
     assert empty["keys"] == [] and len(empty["series"]) == 14 and empty["series"][-1]["success"] == 0
 
     agent = await make_agent(tenant_client, demo, ["echo"])

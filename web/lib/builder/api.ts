@@ -32,8 +32,11 @@ import type {
   PublicKeyCreated,
   PublishCheck,
   Schedule,
+  ShareCaller,
   SharedInfo,
+  SharedNeeds,
   SharedRun,
+  ToolMode,
   SchedulePreview,
   TestCase,
   TestCategory,
@@ -134,10 +137,11 @@ export const builderApi = {
   toolNeedsStatus: (t: string, needs: ToolNeed[]) => call<ToolNeedStatus[]>(t, "/tool-needs/status", "POST", { needs }),
 
   // Runs
-  startAgentRun: (t: string, id: string, input: string, depth: AnswerDepth = "auto", chat: ChatRef = {}, attachmentIds: string[] = []) =>
-    call<Run>(t, `/agents/${id}/runs`, "POST", { input, depth, ...chat, ...(attachmentIds.length ? { attachment_ids: attachmentIds } : {}) }),
-  startWorkflowRun: (t: string, id: string, input: string, variables: Record<string, unknown>, depth: AnswerDepth = "auto", chat: ChatRef = {}) =>
-    call<Run>(t, `/workflows/${id}/runs`, "POST", { input, variables, depth, ...chat }),
+  /** ``stream``: send the answer as it's written (the default; off = only when it's done). */
+  startAgentRun: (t: string, id: string, input: string, depth: AnswerDepth = "auto", chat: ChatRef = {}, attachmentIds: string[] = [], stream = true) =>
+    call<Run>(t, `/agents/${id}/runs`, "POST", { input, depth, ...chat, ...(attachmentIds.length ? { attachment_ids: attachmentIds } : {}), stream }),
+  startWorkflowRun: (t: string, id: string, input: string, variables: Record<string, unknown>, depth: AnswerDepth = "auto", chat: ChatRef = {}, stream = true) =>
+    call<Run>(t, `/workflows/${id}/runs`, "POST", { input, variables, depth, ...chat, stream }),
   /** Run one step by itself, as it is on the canvas (unsaved edits too). */
   testStep: (t: string, workflowId: string, node: WorkflowNode, input: string, variables: Record<string, unknown> = {}) =>
     call<Run>(t, `/workflows/${workflowId}/steps/test`, "POST", { node, input, variables }),
@@ -190,15 +194,20 @@ export const builderApi = {
     t: string, kind: "agent" | "workflow", id: string,
     body: {
       name: string; version: number | null; allowed_origins: string[]; requests_per_minute: number; daily_quota: number | null;
-      acknowledge_write_tools: boolean; share: boolean; per_user_daily_limit: number | null;
+      acknowledge_write_tools: boolean; share: boolean; per_user_daily_limit: number | null; tool_mode: ToolMode;
+      publisher_server_ids: string[];
     },
   ) => call<PublicKeyCreated>(t, `/${kind}s/${id}/public-keys`, "POST", body),
   updatePublicKey: (
     t: string, keyId: string,
-    body: { status?: "active" | "paused"; version?: number; latest?: boolean; name?: string; share?: boolean; per_user_daily_limit?: number; no_per_user_limit?: boolean },
+    body: { status?: "active" | "paused"; version?: number; latest?: boolean; name?: string; share?: boolean; per_user_daily_limit?: number; no_per_user_limit?: boolean; tool_mode?: ToolMode; publisher_server_ids?: string[] },
   ) =>
     call<PublicKey>(t, `/public-keys/${keyId}`, "PATCH", body),
   revokePublicKey: (t: string, keyId: string) => call<void>(t, `/public-keys/${keyId}`, "DELETE"),
+  listCallers: (t: string, keyId: string) => call<ShareCaller[]>(t, `/public-keys/${keyId}/callers`),
+  callerRuns: (t: string, keyId: string, userId: string) => call<Run[]>(t, `/public-keys/${keyId}/callers/${encodeURIComponent(userId)}/runs`),
+  setCallerBlocked: (t: string, keyId: string, userId: string, blocked: boolean) =>
+    call<void>(t, `/public-keys/${keyId}/callers/${encodeURIComponent(userId)}/block`, blocked ? "PUT" : "DELETE"),
   overview: (t: string, days = 7) => call<Overview>(t, `/overview?days=${days}`),
   health: (t: string, kind: "agent" | "workflow", id: string) => call<Health>(t, `/${kind}s/${id}/health`),
   insights: (t: string, days = 7) => call<Insights>(t, `/insights?days=${days}`),
@@ -236,11 +245,18 @@ export const builderApi = {
 /** Share links (/api/v1/shared/{slug}): the info needs no login; running needs one. */
 export const sharedApi = {
   info: (slug: string) => request<SharedInfo>(`/shared/${encodeURIComponent(slug)}`, {}, undefined, BACKEND_API_URL),
-  run: (t: string, slug: string, body: { input: string; variables: Record<string, unknown>; wait_seconds: number }) =>
+  needs: (t: string, slug: string) => request<SharedNeeds>(`/shared/${encodeURIComponent(slug)}/needs`, {}, t, BACKEND_API_URL),
+  run: (t: string, slug: string, body: { input: string; variables: Record<string, unknown>; wait_seconds: number; stream: boolean }) =>
     request<SharedRun>(`/shared/${encodeURIComponent(slug)}/runs`, { method: "POST", body: JSON.stringify(body) }, t, BACKEND_API_URL),
   runs: (t: string, slug: string) => request<SharedRun[]>(`/shared/${encodeURIComponent(slug)}/runs`, {}, t, BACKEND_API_URL),
   get: (t: string, slug: string, runId: string) =>
     request<SharedRun>(`/shared/${encodeURIComponent(slug)}/runs/${encodeURIComponent(runId)}`, {}, t, BACKEND_API_URL),
+  /** The run live (SSE): fetch, not EventSource, so the sign-in can go in a header. */
+  events: (t: string, slug: string, runId: string, signal: AbortSignal) =>
+    fetch(`${BACKEND_API_URL}/shared/${encodeURIComponent(slug)}/runs/${encodeURIComponent(runId)}/events`, {
+      headers: { Authorization: `Bearer ${t}`, Accept: "text/event-stream" },
+      signal,
+    }),
   cancel: (t: string, slug: string, runId: string) =>
     request<SharedRun>(`/shared/${encodeURIComponent(slug)}/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" }, t, BACKEND_API_URL),
 };

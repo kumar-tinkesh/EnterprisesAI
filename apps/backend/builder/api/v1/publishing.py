@@ -5,6 +5,10 @@
     POST   /{agents|workflows}/{id}/public-keys     make one — the key is in the response, once
     PATCH  /public-keys/{key_id}                    pause/resume, move to another version, limits, origins, share link
     DELETE /public-keys/{key_id}                    revoke (it stops working at once; the record stays)
+    GET    /public-keys/{key_id}/callers            who ran it from its share link, with their use
+    GET    /public-keys/{key_id}/callers/{user_id}/runs   one person's share-link runs
+    PUT    /public-keys/{key_id}/callers/{user_id}/block  stop them starting new runs from the link
+    DELETE /public-keys/{key_id}/callers/{user_id}/block  let them again
     GET    /published                               everything the caller published: keys + usage over N days
 
 Publishing is for the agent's/workflow's creator or a tenant admin. A key
@@ -13,8 +17,12 @@ make it use tools that change data, the maker has to say yes to that
 explicitly (``acknowledge_write_tools``).
 
 A key can also have a share link (``share``): /r/{share_slug} in the web app,
-where anyone who signs in runs it (builder.api.v1.shared) — still as the key's
-maker, up to ``per_user_daily_limit`` runs a day each.
+where anyone who signs in runs it (builder.api.v1.shared), up to
+``per_user_daily_limit`` runs a day each — with the maker's tools, or with
+each visitor's own (``tool_mode``: "publisher" | "visitor" | "mixed" — the
+visitor's except ``publisher_server_ids``, whose calls use and wait for the
+maker; the API and the widget always run as the maker). Of visitor-mode runs the maker sees who and
+how many, never what they asked or got.
 """
 from __future__ import annotations
 
@@ -23,7 +31,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import CurrentUser
@@ -33,12 +41,13 @@ from builder.agents.config import AgentConfig
 from builder.api.v1.agents import get_agent
 from builder.api.v1.deps import can_manage, get_end_user
 from builder.api.v1.workflows import _get_workflow
-from builder.models import BuilderAgent, BuilderPublicKey, BuilderRun, BuilderVersion, BuilderWorkflow
+from builder.models import BuilderAgent, BuilderApproval, BuilderPublicKey, BuilderRun, BuilderVersion, BuilderWorkflow
 from builder.publishing.service import (
-    PublishError, definition_for, definition_problems, new_key, new_share_slug, start_of_day, usage, write_tools,
+    PublishError, connection_needs, definition_for, definition_problems, new_key, new_share_slug, start_of_day, usage, write_tools,
 )
 from builder.runs import states
 from builder.runs.db import as_utc, utcnow
+from builder.runs.service import callers_of, run_view
 
 router = APIRouter()
 
@@ -67,6 +76,9 @@ class KeyIn(BaseModel):
     acknowledge_write_tools: bool = False
     share: bool = False
     per_user_daily_limit: int | None = Field(default=None, ge=1, le=10_000)
+    tool_mode: Literal["publisher", "visitor", "mixed"] = "publisher"
+    # "mixed": the servers that use YOUR account (and your approval); the rest use each visitor's.
+    publisher_server_ids: list[str] = Field(default_factory=list, max_length=50)
 
     @field_validator("allowed_origins")
     @classmethod
@@ -86,6 +98,8 @@ class KeyUpdate(BaseModel):
     share: bool | None = None
     per_user_daily_limit: int | None = Field(default=None, ge=1, le=10_000)
     no_per_user_limit: bool = False
+    tool_mode: Literal["publisher", "visitor", "mixed"] | None = None
+    publisher_server_ids: list[str] | None = Field(default=None, max_length=50)
 
     @field_validator("allowed_origins")
     @classmethod
@@ -110,7 +124,9 @@ class KeyOut(BaseModel):
     share_enabled: bool
     share_slug: str | None
     tool_mode: str
+    publisher_server_ids: list[str]
     per_user_daily_limit: int | None
+    people: int  # distinct people who ran it from the share link, ever
 
 
 class KeyCreated(KeyOut):
@@ -131,7 +147,11 @@ async def _out(db: AsyncSession, key: BuilderPublicKey, user: CurrentUser) -> di
         "daily_quota": key.daily_quota, "runs_today": await usage(db, key.id, start_of_day(utcnow())),
         "last_used_at": as_utc(key.last_used_at), "created_at": as_utc(key.created_at), "owner_id": key.owner_id,
         "is_mine": key.owner_id == user.id, "share_enabled": bool(key.share_enabled), "share_slug": key.share_slug,
-        "tool_mode": key.tool_mode or "publisher", "per_user_daily_limit": key.per_user_daily_limit,
+        "tool_mode": key.tool_mode or "publisher", "publisher_server_ids": list(key.publisher_server_ids or []),
+        "per_user_daily_limit": key.per_user_daily_limit,
+        "people": (await db.execute(
+            select(func.count(func.distinct(BuilderRun.caller_user_id))).where(BuilderRun.public_key_id == key.id, BuilderRun.caller_user_id.is_not(None))
+        )).scalar_one(),
     }
 
 
@@ -161,6 +181,8 @@ async def publish_check(kind: Kind, target_id: str, version: int | None = None, 
         "write_tools": await write_tools(db, definition),
         "problems": await definition_problems(db, user, definition, {}),
         "advice": advice,
+        # The systems it uses (as you), for a mixed share link to say which stay yours.
+        "systems": [x for x in await connection_needs(db, user, definition) if x["server_id"]],
     }
 
 
@@ -189,7 +211,8 @@ async def create_key(kind: Kind, target_id: str, payload: KeyIn, user: CurrentUs
         key_prefix=prefix, status="active", version=payload.version, allowed_origins=payload.allowed_origins,
         requests_per_minute=payload.requests_per_minute, daily_quota=payload.daily_quota,
         share_enabled=payload.share, share_slug=new_share_slug() if payload.share else None,
-        per_user_daily_limit=payload.per_user_daily_limit,
+        per_user_daily_limit=payload.per_user_daily_limit, tool_mode=payload.tool_mode,
+        publisher_server_ids=list(dict.fromkeys(payload.publisher_server_ids)),
         **({"agent_id": target.id} if kind == "agents" else {"workflow_id": target.id}),
     )
     db.add(key)
@@ -222,7 +245,9 @@ async def update_key(key_id: str, payload: KeyUpdate, user: CurrentUser = Depend
         key.share_enabled = payload.share
         if payload.share and not key.share_slug:
             key.share_slug = new_share_slug()
-    for field in ("name", "status", "allowed_origins", "requests_per_minute", "daily_quota", "per_user_daily_limit"):
+    if payload.publisher_server_ids is not None:
+        key.publisher_server_ids = list(dict.fromkeys(payload.publisher_server_ids))
+    for field in ("name", "status", "allowed_origins", "requests_per_minute", "daily_quota", "per_user_daily_limit", "tool_mode"):
         value = getattr(payload, field)
         if value is not None:
             setattr(key, field, value.strip() if isinstance(value, str) else value)
@@ -239,6 +264,90 @@ async def update_key(key_id: str, payload: KeyUpdate, user: CurrentUser = Depend
 async def revoke_key(key_id: str, user: CurrentUser = Depends(get_end_user), db: AsyncSession = Depends(get_db)):
     key = await _key(db, key_id, user)
     key.status = "revoked"
+    await db.commit()
+
+
+class CallerOut(BaseModel):
+    user_id: str
+    name: str
+    email: str
+    runs: int
+    runs_today: int
+    succeeded: int
+    failed: int
+    waiting: int
+    last_run_at: datetime | None
+    blocked: bool
+    # Runs with their own tools (a visitor link): counted here, but what's in them stays theirs.
+    private_runs: int
+
+
+@router.get("/public-keys/{key_id}/callers", response_model=list[CallerOut])
+async def list_callers(key_id: str, user: CurrentUser = Depends(get_end_user), db: AsyncSession = Depends(get_db)):
+    """Everyone who ran it from the share link (and anyone blocked), most recent first.
+    The runs used the publisher's tools, so who and how much is theirs to see."""
+    key = await _key(db, key_id, user)
+    rows = (
+        await db.execute(
+            select(BuilderRun.caller_user_id, BuilderRun.status, BuilderRun.created_at, BuilderRun.owner_id, BuilderRun.id)
+            .where(BuilderRun.public_key_id == key.id, BuilderRun.caller_user_id.is_not(None))
+        )
+    ).all()
+    today = start_of_day(utcnow())
+    blocked = set(key.blocked_user_ids or [])
+    # Runs held up by a decision that's the publisher's (their own runs, or their app in a mixed one).
+    yours = set((await db.execute(
+        select(BuilderApproval.run_id).where(
+            BuilderApproval.run_id.in_([r[4] for r in rows if r[1] == states.WAITING] or [""]),
+            BuilderApproval.owner_id == key.owner_id, BuilderApproval.status == states.APPROVAL_PENDING,
+        )
+    )).scalars())
+    empty = {"runs": 0, "runs_today": 0, "succeeded": 0, "failed": 0, "waiting": 0, "last_run_at": None, "private_runs": 0}
+    stats: dict[str, dict] = {uid: dict(empty) for uid in blocked}
+    for uid, status, created, owner, run_id in rows:
+        s = stats.setdefault(uid, dict(empty))
+        s["private_runs"] += owner != key.owner_id
+        created = as_utc(created)
+        s["runs"] += 1
+        s["runs_today"] += created >= today
+        s["succeeded"] += status == states.SUCCEEDED
+        s["failed"] += status == states.FAILED
+        s["waiting"] += run_id in yours
+        s["last_run_at"] = max(filter(None, [s["last_run_at"], created]))
+    people = await callers_of(db, stats)
+    out = [CallerOut(user_id=uid, name=people[uid]["name"], email=people[uid]["email"], blocked=uid in blocked, **s) for uid, s in stats.items()]
+    return sorted(out, key=lambda c: c.last_run_at.timestamp() if c.last_run_at else 0, reverse=True)
+
+
+@router.get("/public-keys/{key_id}/callers/{caller_id}/runs")
+async def caller_runs(key_id: str, caller_id: str, user: CurrentUser = Depends(get_end_user), db: AsyncSession = Depends(get_db)):
+    key = await _key(db, key_id, user)
+    runs = (
+        await db.execute(
+            select(BuilderRun)
+            # Only the runs with the publisher's own tools: a visitor's own-tools runs hold their data.
+            .where(BuilderRun.public_key_id == key.id, BuilderRun.caller_user_id == caller_id, BuilderRun.owner_id == key.owner_id)
+            .order_by(BuilderRun.created_at.desc())
+            .limit(50)
+        )
+    ).scalars().all()
+    return [await run_view(db, r, detail=False) for r in runs]
+
+
+@router.put("/public-keys/{key_id}/callers/{caller_id}/block", status_code=204)
+async def block_caller(key_id: str, caller_id: str, user: CurrentUser = Depends(get_end_user), db: AsyncSession = Depends(get_db)):
+    key = await _key(db, key_id, user)
+    if caller_id == key.owner_id:
+        raise HTTPException(status_code=422, detail="You can't block yourself.")
+    # A new list, so the JSON column is seen as changed.
+    key.blocked_user_ids = list(dict.fromkeys([*(key.blocked_user_ids or []), caller_id]))
+    await db.commit()
+
+
+@router.delete("/public-keys/{key_id}/callers/{caller_id}/block", status_code=204)
+async def unblock_caller(key_id: str, caller_id: str, user: CurrentUser = Depends(get_end_user), db: AsyncSession = Depends(get_db)):
+    key = await _key(db, key_id, user)
+    key.blocked_user_ids = [u for u in (key.blocked_user_ids or []) if u != caller_id]
     await db.commit()
 
 
@@ -260,6 +369,7 @@ class PublishedStats(BaseModel):
     total_requests: int
     success_rate: float  # of the finished ones, 0–1
     avg_latency_ms: int  # of the finished ones
+    people: int  # distinct people who ran something from a share link in the window
 
 
 class PublishedOut(BaseModel):
@@ -287,7 +397,7 @@ async def published(days: int = 14, user: CurrentUser = Depends(get_end_user), d
     ).scalars().all()
     rows = (
         await db.execute(
-            select(BuilderRun.public_key_id, BuilderRun.status, BuilderRun.created_at, BuilderRun.started_at, BuilderRun.finished_at)
+            select(BuilderRun.public_key_id, BuilderRun.status, BuilderRun.created_at, BuilderRun.started_at, BuilderRun.finished_at, BuilderRun.caller_user_id)
             .where(BuilderRun.public_key_id.in_([k.id for k in keys] or [""]), BuilderRun.created_at >= since)
         )
     ).all()
@@ -296,7 +406,8 @@ async def published(days: int = 14, user: CurrentUser = Depends(get_end_user), d
     per_key: dict[str, int] = {}
     ok = finished = 0
     latency: list[float] = []
-    for key_id, status, created, started, ended in rows:
+    callers = {row[-1] for row in rows if row[-1]}
+    for key_id, status, created, started, ended, _ in rows:
         per_key[key_id] = per_key.get(key_id, 0) + 1
         if status not in states.TERMINAL:
             continue
@@ -336,6 +447,7 @@ async def published(days: int = 14, user: CurrentUser = Depends(get_end_user), d
             total_requests=len(rows),
             success_rate=round(ok / finished, 4) if finished else 0.0,
             avg_latency_ms=round(sum(latency) / len(latency)) if latency else 0,
+            people=len(callers),
         ),
         series=[PublishedDay(date=d, success=v[0], error=v[1]) for d, v in per_day.items()],
         keys=listed,

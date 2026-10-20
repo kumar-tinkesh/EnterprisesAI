@@ -112,7 +112,7 @@ def _step_summary(state: dict, graph: S.Graph, agents: dict) -> str:
     return "\n\n---\n**Step by step**\n\n" + "\n\n".join(parts) if parts else ""
 
 
-async def execute_workflow(run: BuilderRun, user: CurrentUser, worker_id: str) -> None:
+async def execute_workflow(run: BuilderRun, user: CurrentUser, worker_id: str, *, tool_owners: dict[str, CurrentUser] | None = None) -> None:
     definition = run.definition["workflow"]
     config = WorkflowConfig.model_validate(definition.get("config") or {})
     graph = S.build_graph(definition["nodes"], definition["edges"])
@@ -143,7 +143,10 @@ async def execute_workflow(run: BuilderRun, user: CurrentUser, worker_id: str) -
         knowledge_base_ids=config.knowledge_base_ids(), sub_agents=run.definition.get("sub_agents") or {},
         # As for an agent's run: someone else's request (public, webhook) doesn't touch the owner's memory.
         memory=run.purpose in ("run", "test") and not run.webhook_id,
+        knowledge_tenant_id=run.definition.get("home_tenant_id"),
+        tool_owners=tool_owners or {},
     )
+    stream = (run.input or {}).get("stream", True) and not dry_run
 
     async def run_step(node_id: str, node_run_id: str, attempt: int) -> NodeOutcome:
         node = graph.nodes[node_id]
@@ -159,6 +162,8 @@ async def execute_workflow(run: BuilderRun, user: CurrentUser, worker_id: str) -
             input_text=n["input"] or "", parts=[tuple(p) for p in n["parts"]], original_input=original,
             failed_inputs=state["failed_inputs"].get(node_id, []), agents=agents, approvals=config.approvals,
             emit=emit_event, **step_extras, depth=depth if node_id in feeds_output else "auto",
+            # Only a step whose answer is the run's answer is worth watching being written.
+            stream=stream and node_id in feeds_output,
         )
         return await RUNNERS[node["type"]](ctx)
 

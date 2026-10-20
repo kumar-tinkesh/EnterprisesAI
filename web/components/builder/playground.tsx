@@ -10,11 +10,13 @@ import { Spinner } from "@/components/ui/spinner";
 import { ApprovalCard } from "@/components/builder/approval-card";
 import { Field, Select, Textarea } from "@/components/builder/fields";
 import { ConnectButton } from "@/components/connections/connect-button";
+import { StreamToggle } from "@/components/builder/stream-toggle";
 import { ApiError } from "@/lib/api";
 import { builderApi } from "@/lib/builder/api";
 import { isFinished, type RunView } from "@/lib/builder/run-state";
 import type { InputVariable, Problem, Run } from "@/lib/builder/types";
 import { useRunStream } from "@/lib/builder/use-run-stream";
+import { useStreamPref } from "@/lib/builder/stream-pref";
 import { cn } from "@/lib/utils";
 
 const TONE_DOT = { info: "text-sky-500", ok: "text-emerald-500", warn: "text-amber-500", error: "text-red-500" } as const;
@@ -78,6 +80,7 @@ export function Playground({
   const [runId, setRunId] = useState<string | null>(null);
   const [problems, setProblems] = useState<Problem[]>([]);
   const { view, live } = useRunStream(runId, token);
+  const [streamOn] = useStreamPref();
 
   useEffect(() => onView(view), [view, onView]);
 
@@ -92,13 +95,13 @@ export function Playground({
       setProblems([]);
       if (beforeRun && !(await beforeRun())) return null;
       // Each run is a chat of its own, so it shows in Executions → Chat history too.
-      if (kind === "agent") return builderApi.startAgentRun(token, targetId, text, "auto", { new_conversation: true });
+      if (kind === "agent") return builderApi.startAgentRun(token, targetId, text, "auto", { new_conversation: true }, [], streamOn);
       const variables: Record<string, unknown> = {};
       for (const f of fields) {
         const v = coerce(f, values[f.name] ?? "");
         if (v !== undefined) variables[f.name] = v;
       }
-      return builderApi.startWorkflowRun(token, targetId, text, variables, "auto", { new_conversation: true });
+      return builderApi.startWorkflowRun(token, targetId, text, variables, "auto", { new_conversation: true }, streamOn);
     },
     onSuccess: (run) => {
       if (!run) return;
@@ -127,6 +130,7 @@ export function Playground({
       <div className="flex items-center gap-2 border-b border-zinc-200 px-4 py-3">
         <Play className="h-4 w-4 text-indigo-600" />
         <h2 className="flex-1 text-sm font-semibold text-zinc-900">Playground</h2>
+        <StreamToggle />
         {(history.data ?? []).length > 0 && (
           <Select className="h-8 w-44 text-xs" value={runId ?? ""} onChange={(e) => setRunId(e.target.value || null)} aria-label="Earlier runs">
             <option value="">Earlier runs…</option>
@@ -216,6 +220,12 @@ export function Playground({
           <ApprovalCard key={a.id} approval={a} token={token} onDone={() => undefined} />
         ))}
 
+        {view.output === null && view.live?.text && (
+          <div className="rounded-xl border border-indigo-200 bg-indigo-50/40 p-3" aria-live="polite">
+            <p className="mb-1 text-xs font-semibold text-indigo-800">Writing…</p>
+            <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-800">{view.live.text}<span className="animate-pulse">▍</span></div>
+          </div>
+        )}
         {view.output !== null && (
           <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-3">
             <p className="mb-1 text-xs font-semibold text-emerald-800">Answer</p>

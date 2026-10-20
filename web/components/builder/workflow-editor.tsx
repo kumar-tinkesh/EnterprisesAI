@@ -46,6 +46,8 @@ import { emptyRunView, isFinished, type RunView } from "@/lib/builder/run-state"
 import type { Agent, AnswerDepth, NodeType, Problem, RunNode, WorkflowConfig, WorkflowEdge, WorkflowNode } from "@/lib/builder/types";
 import type { BuildTarget } from "@/lib/builder/use-builder-actions";
 import { useRunStream } from "@/lib/builder/use-run-stream";
+import { useStreamPref } from "@/lib/builder/stream-pref";
+import { StreamToggle } from "@/components/builder/stream-toggle";
 import { useAuthStore } from "@/stores/auth-store";
 import { cn } from "@/lib/utils";
 
@@ -128,6 +130,7 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
   const [switchOpen, setSwitchOpen] = useState(false);
   const [depthOpen, setDepthOpen] = useState(false);
   const [depth, setDepthState] = useState<AnswerDepth>("auto");
+  const [streamOn] = useStreamPref();
   const [inputText, setInputTextState] = useState("");
   // A run started from the canvas (Run / the AI bar), shown on the nodes.
   const [canvasRunId, setCanvasRunId] = useState<string | null>(null);
@@ -443,7 +446,7 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
         return null;
       }
       // A chat of its own, so the run shows in Executions → Chat history too.
-      return builderApi.startWorkflowRun(token, id, text, {}, depth, { new_conversation: true });
+      return builderApi.startWorkflowRun(token, id, text, {}, depth, { new_conversation: true }, streamOn);
     },
     onSuccess: (run) => {
       if (!run) return;
@@ -989,10 +992,14 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
                         {canvasRun.view.status ?? "starting"}
                       </span>
                       <span className="flex-1 text-xs text-zinc-500">{running ? "Running on the canvas…" : "Last run"}</span>
+                      <StreamToggle />
                       <button type="button" aria-label="Close run" onClick={() => setRunCardOpen(false)} className="text-zinc-400 hover:text-zinc-700 cursor-pointer"><X className="h-3.5 w-3.5" /></button>
                     </div>
                     <div className="max-h-72 space-y-2 overflow-y-auto">
                       {canvasRun.view.approvals.map((a) => <ApprovalCard key={a.id} approval={a} token={token} onDone={() => undefined} />)}
+                      {canvasRun.view.output === null && canvasRun.view.live?.text && (
+                        <div className="whitespace-pre-wrap text-sm text-zinc-900" aria-live="polite">{canvasRun.view.live.text}<span className="animate-pulse">▍</span></div>
+                      )}
                       {canvasRun.view.output !== null && (
                         <>
                           <div className="flex items-center justify-end border-b border-zinc-100 pb-1">

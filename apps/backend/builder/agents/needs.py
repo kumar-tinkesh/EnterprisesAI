@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Callable, Literal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -95,9 +95,14 @@ def pick_tools(need: ToolNeed, available: list[str]) -> list[str]:
     return picked or available[:MAX_FALLBACK_TOOLS]
 
 
-async def resolve_needs(db: AsyncSession, user: CurrentUser, needs: list[ToolNeed]) -> list[NeedState]:
+async def resolve_needs(
+    db: AsyncSession, user: CurrentUser, needs: list[ToolNeed], *, user_for: Callable[[str], CurrentUser] | None = None,
+) -> list[NeedState]:
+    """``user_for(server_id)``: whose account a server is used with, when that
+    isn't always ``user`` (a mixed share link: some servers are the publisher's)."""
     if not needs:
         return []
+    owner = user_for or (lambda _sid: user)
     servers = list((await db.execute(select(VendorMCPServer))).scalars())
     tools_of: dict[str, list[str]] = {}
     visible: dict[str, bool] = {}
@@ -109,7 +114,7 @@ async def resolve_needs(db: AsyncSession, user: CurrentUser, needs: list[ToolNee
             if not server_matches(server, need):
                 continue
             if server.id not in visible:
-                visible[server.id] = await is_server_visible_to_user(db, user=user, server=server)
+                visible[server.id] = await is_server_visible_to_user(db, user=owner(server.id), server=server)
             if not visible[server.id]:
                 continue
             if server.id not in tools_of:
@@ -120,7 +125,7 @@ async def resolve_needs(db: AsyncSession, user: CurrentUser, needs: list[ToolNee
                 state = NeedState(need, "not_verified", server.id, server.name)
             else:
                 if server.id not in connected:
-                    connected[server.id] = await mcp_auth.has_user_credential(db, server_id=server.id, user_id=user.id)
+                    connected[server.id] = await mcp_auth.has_user_credential(db, server_id=server.id, user_id=owner(server.id).id)
                 state = (
                     NeedState(need, "ready", server.id, server.name, pick_tools(need, tools_of[server.id]))
                     if connected[server.id] else NeedState(need, "not_connected", server.id, server.name)

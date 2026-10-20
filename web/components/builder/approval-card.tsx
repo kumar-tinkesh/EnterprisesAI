@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Hand, ShieldAlert } from "lucide-react";
+import { Hand, Link2, ShieldAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -40,6 +40,12 @@ export function ApprovalCard({ approval, token, onDone }: { approval: Approval; 
         </p>
         {approval.risk && approval.kind !== "human_step" && <RiskBadge risk={approval.risk} />}
       </div>
+      {approval.caller && (
+        <p className="flex items-center gap-1 text-[11px] text-amber-900" title="This run came in through your share link and uses your connected tools.">
+          <Link2 className="h-3 w-3 shrink-0" /> Via share link · {approval.caller.name || approval.caller.email || "a deleted account"}
+          {approval.caller.name && approval.caller.email ? ` (${approval.caller.email})` : ""}
+        </p>
+      )}
       {p.message && <p className="text-xs text-amber-900">{p.message}</p>}
 
       {approval.kind === "tool_call" && (

@@ -38,6 +38,20 @@ async def _run_user(owner_id: str) -> CurrentUser | None:
     return CurrentUser(id=user.id, email=user.email, full_name=user.full_name, role=user.role, tenant_id=user.tenant_id)
 
 
+async def run_tool_owners(run: BuilderRun) -> dict[str, CurrentUser] | None:
+    """The run's servers used with another person's account (a mixed share
+    link: ``definition["tool_owners"]`` = {server_id: publisher user id}), as
+    users. None when one of them no longer has access — the run must then
+    stop rather than quietly use the run user's own account instead."""
+    owners: dict[str, CurrentUser] = {}
+    for server_id, user_id in (run.definition.get("tool_owners") or {}).items():
+        owner = await _run_user(user_id)
+        if owner is None:
+            return None
+        owners[server_id] = owner
+    return owners
+
+
 async def _finish(run_id: str, worker_id: str, status: str, **values) -> None:
     if await lease.release(run_id, worker_id, status=status, **values):
         await emit(run_id, "run_status", status=status, error=values.get("error"))
@@ -55,14 +69,18 @@ async def execute(run_id: str, worker_id: str) -> None:
     if user is None:
         await _finish(run_id, worker_id, states.FAILED, error="The user who started this run no longer has access.")
         return
+    tool_owners = await run_tool_owners(run)
+    if tool_owners is None:
+        await _finish(run_id, worker_id, states.FAILED, error="Whoever shared this no longer has access, so their apps can't be used.")
+        return
     await emit(run_id, "run_status", status=states.RUNNING)
     if run.kind == "agent":
-        await _execute_agent(run, user, worker_id)
+        await _execute_agent(run, user, worker_id, tool_owners)
     elif run.kind == "workflow":
         from builder.workflows.engine import execute_workflow
 
         try:
-            await execute_workflow(run, user, worker_id)
+            await execute_workflow(run, user, worker_id, tool_owners=tool_owners)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 — a bug must fail the run, not wedge it
@@ -123,7 +141,7 @@ async def _set_node(node_run_id: str, **values) -> None:
         await db.commit()
 
 
-async def _execute_agent(run: BuilderRun, user: CurrentUser, worker_id: str) -> None:
+async def _execute_agent(run: BuilderRun, user: CurrentUser, worker_id: str, tool_owners: dict[str, CurrentUser] | None = None) -> None:
     agent = run.definition["agent"]
     config = AgentConfig.model_validate(agent.get("config") or {})
     input_text = (run.input or {}).get("text") or ""
@@ -142,6 +160,10 @@ async def _execute_agent(run: BuilderRun, user: CurrentUser, worker_id: str) -> 
         # wrote the request: they don't get to read or fill that person's memory.
         memory=run.purpose in ("run", "test") and not run.webhook_id,
         attachment_ids=[a["id"] for a in (run.input or {}).get("attachments") or [] if a.get("id")],
+        knowledge_tenant_id=run.definition.get("home_tenant_id"),
+        tool_owners=tool_owners or {},
+        # Unless the person turned it off; a test case has nobody watching.
+        stream=(run.input or {}).get("stream", True) and run.purpose != "test",
     )
     try:
         result = await run_agent(ctx)

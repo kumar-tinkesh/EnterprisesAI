@@ -7,7 +7,8 @@
     POST /runs/{run_id}/cancel
     GET  /approvals                    my decisions to make (?status=pending)
     POST /approvals/{approval_id}      approve | reject | edit (with arguments)
-    WS   /runs/{run_id}/events?token=  live events, after a snapshot
+    WS   /runs/{run_id}/events?token=  live events, after a snapshot (an answer being written comes as
+                                       "output_delta" {node_id, turn, at, text} unless the run was started with stream: false)
 
 A run is visible only to the person who started it: it holds results from
 their own connected accounts (their mail, their files), even when the agent
@@ -42,6 +43,7 @@ from builder.runs.events import get_event_bus
 from builder.runs.service import (
     RunActionError,
     approval_view,
+    callers_of,
     cancel_run,
     create_agent_run,
     create_workflow_run,
@@ -64,6 +66,8 @@ class RunStart(BaseModel):
     new_conversation: bool = False
     # Files uploaded to /attachments, sent with this message (agents only).
     attachment_ids: list[str] = Field(default_factory=list, max_length=5)
+    # Send the answer as it's written ("output_delta" events on /runs/{id}/events).
+    stream: bool = True
 
 
 class Decision(BaseModel):
@@ -113,7 +117,7 @@ async def start_agent_run(
     history = await conversation_history(db, conv.id) if conv else None
     run = await create_agent_run(
         db, user, agent, text=payload.input, variables=payload.variables, depth=payload.depth,
-        conversation_id=conv.id if conv else None, history=history, attachments=attachments,
+        conversation_id=conv.id if conv else None, history=history, attachments=attachments, stream=payload.stream,
     )
     return await run_view(db, run, detail=False)
 
@@ -136,7 +140,7 @@ async def start_workflow_run(
     conv = await _open_chat(db, user, "workflow", wf.id, payload)
     run = await create_workflow_run(
         db, user, wf, text=payload.input, variables=payload.variables, depth=payload.depth,
-        conversation_id=conv.id if conv else None,
+        conversation_id=conv.id if conv else None, stream=payload.stream,
     )
     return await run_view(db, run, detail=False)
 
@@ -257,7 +261,12 @@ async def list_approvals(
     if status_:
         query = query.where(BuilderApproval.status == status_)
     approvals = (await db.execute(query.order_by(BuilderApproval.created_at.desc()).limit(200))).scalars().all()
-    return [approval_view(a) for a in approvals]
+    # Runs started through a share link: whose request each one is.
+    run_callers = dict((await db.execute(
+        select(BuilderRun.id, BuilderRun.caller_user_id).where(BuilderRun.id.in_({a.run_id for a in approvals}), BuilderRun.caller_user_id.is_not(None))
+    )).tuples().all()) if approvals else {}
+    people = await callers_of(db, run_callers.values())
+    return [approval_view(a, people.get(run_callers.get(a.run_id, ""))) for a in approvals]
 
 
 @router.post("/approvals/{approval_id}")

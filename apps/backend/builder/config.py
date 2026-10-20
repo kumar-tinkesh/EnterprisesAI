@@ -65,6 +65,13 @@ class BuilderSettings(BaseSettings):
     BUILDER_VERSIONS_KEEP: int = 100
     # Model calls: how many times to retry a failing model request.
     AGENT_MODEL_RETRY_DELAY_SECONDS: float = 2.0
+    # ── Publishing ──
+    # Runs one IP address may start a minute through the public API and share
+    # links, across every key (each key's own limits apply as well). 0 = off.
+    PUBLIC_RUNS_PER_IP_PER_MINUTE: int = 30
+    # Behind a proxy that sets X-Forwarded-For (and strips it from clients),
+    # read the caller's address from it; otherwise anyone could pick their own.
+    TRUST_FORWARDED_FOR: bool = False
 
 
 @lru_cache

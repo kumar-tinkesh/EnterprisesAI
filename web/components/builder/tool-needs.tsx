@@ -75,7 +75,7 @@ export function NeedsList({
               ))}
             </div>
             <p className="pl-5 text-[10.5px] text-zinc-500" title={s.match.join(", ")}>
-              {s.status === "ready" ? `${s.server_name} · ${s.tools.join(", ")}` : s.status === "missing" ? `${st.label} — ${s.match[0]}` : `${s.server_name} · ${st.label}`}
+              {s.status === "ready" ? `${s.server_name} · ${s.tools.join(", ")}` : s.status === "missing" ? `${st.label}${s.match[0] ? ` — ${s.match[0]}` : ""}` : `${s.server_name} · ${st.label}`}
             </p>
           </li>
         );

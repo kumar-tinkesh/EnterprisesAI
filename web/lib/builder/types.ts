@@ -404,7 +404,7 @@ export interface Insights {
 /** Everything the signed-in user published, at a glance (GET /builder/published). */
 export interface Published {
   days: number;
-  stats: { live_keys: number; total_requests: number; success_rate: number; avg_latency_ms: number };
+  stats: { live_keys: number; total_requests: number; success_rate: number; avg_latency_ms: number; people: number };
   /** One per day, oldest first (UTC dates). */
   series: { date: string; success: number; error: number }[];
   keys: (PublicKey & { kind: "agent" | "workflow"; target_id: string; target_name: string; requests: number })[];
@@ -428,10 +428,26 @@ export interface PublicKey {
   /** Share link: /r/{share_slug}, run by anyone who signs in. */
   share_enabled: boolean;
   share_slug: string | null;
-  /** Whose connected tools share-link runs use. */
-  tool_mode: "publisher";
+  /** Whose connected tools share-link runs use: yours, or each visitor's own (they approve too). */
+  tool_mode: ToolMode;
+  /** On a "mixed" link: the servers that use your account (and your approval). */
+  publisher_server_ids: string[];
   /** Runs a day each signed-in person may start from the share link (null = no own limit). */
   per_user_daily_limit: number | null;
+  /** Distinct people who ran it from the share link, ever. */
+  people: number;
+}
+
+/** Whose apps a share-link run uses: yours, each visitor's own, or theirs except the ones you keep (publisher_server_ids). */
+export type ToolMode = "publisher" | "visitor" | "mixed";
+
+/** On a visitor link: the systems it uses and which I still have to connect (GET /shared/{slug}/needs). */
+export interface SharedNeeds {
+  tool_mode: ToolMode;
+  /** owner "you": the visitor connects it; "publisher": it uses the sharer's account (and their approval). */
+  systems: (ToolNeedStatus & { owner: "you" | "publisher" })[];
+  /** Empty = ready to run. */
+  problems: string[];
 }
 
 /** What a share link runs (GET /shared/{slug}, no login). */
@@ -443,6 +459,7 @@ export interface SharedInfo {
   version: number;
   shared_by: string;
   per_user_daily_limit: number | null;
+  tool_mode: ToolMode;
 }
 
 /** One of my runs through a share link: only what a caller may see. */
@@ -456,6 +473,8 @@ export interface SharedRun {
   version: number;
   input: string;
   created_at: string;
+  /** On a visitor link, a waiting run's decisions — they're mine to make. */
+  approvals: Approval[];
 }
 
 /** Returned once, at creation: the key itself. */
@@ -470,6 +489,8 @@ export interface PublishCheck {
   /** Why it can't run right now (as you). */
   problems: string[];
   advice: string[];
+  /** The systems it uses (as you): what a mixed share link can keep as yours. */
+  systems: ToolNeedStatus[];
 }
 
 export interface SchedulePreview {
@@ -654,6 +675,31 @@ export interface Approval {
     step?: string;
   };
   created_at: string;
+  /** Set when the run came in through a share link: whose request you're deciding on. */
+  caller?: Caller | null;
+}
+
+/** Someone signed in who ran a share link. */
+export interface Caller {
+  id: string;
+  name: string;
+  email: string;
+}
+
+/** A person's use of one key's share link (GET /public-keys/{id}/callers). */
+export interface ShareCaller {
+  user_id: string;
+  name: string;
+  email: string;
+  runs: number;
+  runs_today: number;
+  succeeded: number;
+  failed: number;
+  waiting: number;
+  last_run_at: string | null;
+  blocked: boolean;
+  /** Runs with their own tools (a visitor link): counted, but their content isn't yours to see. */
+  private_runs: number;
 }
 
 export interface RunNode {
@@ -727,6 +773,10 @@ export interface Run {
   conversation_id?: string | null;
   started_at?: string | null;
   finished_at?: string | null;
+  /** Started with a publishable key (the API, the widget or a share link). */
+  public_key_id?: string | null;
+  /** Who started it from a share link. */
+  caller?: Caller | null;
   nodes?: RunNode[];
   tool_calls?: RunToolCall[];
   approvals?: Approval[];
@@ -744,4 +794,6 @@ export type RunEvent =
   | { type: "condition"; node_id: string; branch: string; target: string }
   | { type: "approval_requested"; approval_id: string; kind: Approval["kind"]; node_id?: string; tool?: string }
   | { type: "approval_resolved"; approval_id: string; status: string }
-  | { type: "output"; text: string; sources?: string[] };
+  | { type: "output"; text: string; sources?: string[] }
+  /** The answer as it's written: ``text`` starts at ``at`` in that turn's answer. */
+  | { type: "output_delta"; node_id: string; turn: number; at: number; text: string };

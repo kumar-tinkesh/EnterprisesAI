@@ -51,6 +51,26 @@ export interface RunView {
   /** Per sub-agent (by name): the tool it's calling now, and the tools it has used. */
   subActive: Record<string, string | null>;
   subUsed: Record<string, string[]>;
+  /** The answer being written right now (streaming), until the real output arrives. */
+  live: LiveText | null;
+}
+
+export interface LiveText {
+  node: string;
+  turn: number;
+  text: string;
+}
+
+/**
+ * Add a batch of streamed text. A batch must start where the text so far ends
+ * (``at``); one starting at 0 begins the turn afresh (a new turn, or a retried
+ * request), and one that doesn't fit — the viewer joined late — waits for a
+ * fresh start rather than splicing a gap.
+ */
+export function addLive(live: LiveText | null, d: { node_id: string; turn: number; at: number; text: string }): LiveText | null {
+  if (d.at === 0) return { node: d.node_id, turn: d.turn, text: d.text };
+  if (live && live.node === d.node_id && live.turn === d.turn && live.text.length === d.at) return { ...live, text: live.text + d.text };
+  return live;
 }
 
 export const emptyRunView: RunView = {
@@ -67,6 +87,7 @@ export const emptyRunView: RunView = {
   guardrails: [],
   subActive: {},
   subUsed: {},
+  live: null,
 };
 
 const TERMINAL: RunStatus[] = ["succeeded", "failed", "cancelled"];
@@ -98,6 +119,7 @@ function fromSnapshot(view: RunView, run: Run): RunView {
     output: run.output_text ?? view.output,
     sources: run.output?.sources ?? view.sources,
     error: run.error,
+    live: run.output_text || isFinished(run.status) ? null : view.live,
     guardrails: run.output?.guardrails ?? view.guardrails,
   };
 }
@@ -140,8 +162,13 @@ export function reduceRunEvent(view: RunView, event: RunEvent | ApprovalsRefresh
       };
     }
     case "agent_turn":
+      // A turn that ends in tool calls wasn't the answer: its text makes way for the timeline.
       return event.tool_calls.length
-        ? { ...view, timeline: add(view, { tone: "info", text: `decided to use ${event.tool_calls.map(displayTool).join(", ")}`, nodeId: event.node_id, ...viaOf(event) }) }
+        ? {
+            ...view,
+            timeline: add(view, { tone: "info", text: `decided to use ${event.tool_calls.map(displayTool).join(", ")}`, nodeId: event.node_id, ...viaOf(event) }),
+            live: view.live?.node === event.node_id && !event.via ? null : view.live,
+          }
         : view;
     case "tool_call": {
       const via = event.via;
@@ -189,7 +216,9 @@ export function reduceRunEvent(view: RunView, event: RunEvent | ApprovalsRefresh
       };
     }
     case "output":
-      return { ...view, output: event.text, sources: event.sources ?? [] };
+      return { ...view, output: event.text, sources: event.sources ?? [], live: null };
+    case "output_delta":
+      return { ...view, live: addLive(view.live, event) };
     default:
       return view;
   }

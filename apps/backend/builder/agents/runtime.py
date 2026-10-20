@@ -42,6 +42,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
@@ -122,6 +123,14 @@ class AgentContext:
     memory: bool = False
     # Files sent with the request (BuilderAttachment ids, the run user's own).
     attachment_ids: list[str] = field(default_factory=list)
+    # Workspace its knowledge bases are searched in, when that isn't the run
+    # user's: a visitor's share-link run of someone else's agent.
+    knowledge_tenant_id: str | None = None
+    # Servers used with another person's account (builder.runs.tool_calls.CallSite.tool_owners).
+    tool_owners: dict[str, CurrentUser] = field(default_factory=dict)
+    # Send the answer's text as it's written ("output_delta" events), when
+    # nothing has to check it first (see _streams).
+    stream: bool = False
 
 
 @dataclass
@@ -202,7 +211,43 @@ async def _image_urls(messages: list[dict]) -> dict[str, str]:
     }
 
 
-async def _complete(ctx: AgentContext, messages: list[dict], tool_defs: list[dict] | None):
+def _streams(ctx: AgentContext) -> bool:
+    """Stream only an answer nobody has to check before it's shown: personal
+    data scrubbing, the groundedness check and custom rules can change or
+    withhold it, and text already on someone's screen can't be taken back."""
+    g = ctx.config.guardrails
+    return ctx.stream and not (g.pii_output or g.groundedness or g.custom_rules)
+
+
+class _Live:
+    """One model turn's text, sent as it arrives in small batches (an event per
+    token would swamp the event bus). ``at`` is where a batch starts in the
+    turn's text, so a viewer who joined late — or a retried request starting
+    over at 0 — knows to start fresh rather than splice."""
+
+    BATCH_CHARS, BATCH_SECONDS = 48, 0.12
+
+    def __init__(self, ctx: AgentContext, turn: int):
+        self.ctx, self.turn = ctx, turn
+        self.sent, self.pending, self.last = 0, "", time.monotonic()
+
+    def restart(self) -> None:
+        self.sent, self.pending = 0, ""
+
+    async def __call__(self, text: str) -> None:
+        self.pending += text
+        if len(self.pending) >= self.BATCH_CHARS or time.monotonic() - self.last >= self.BATCH_SECONDS:
+            await self.flush()
+
+    async def flush(self) -> None:
+        if not self.pending:
+            return
+        text, self.pending, self.last = self.pending, "", time.monotonic()
+        await self.ctx.emit("output_delta", node_id=self.ctx.node_id, turn=self.turn, at=self.sent, text=text)
+        self.sent += len(text)
+
+
+async def _complete(ctx: AgentContext, messages: list[dict], tool_defs: list[dict] | None, live: _Live | None = None):
     from apps.llm_gateway.types import CompletionRequest, ToolDefinition
 
     images = await _image_urls(messages)
@@ -223,10 +268,18 @@ async def _complete(ctx: AgentContext, messages: list[dict], tool_defs: list[dic
         )
         for attempt in range(1 + rel.retries):
             try:
-                return await asyncio.wait_for(
-                    _gateway().complete(request, provider=ctx.agent.get("llm_provider") or None),
+                if live is None:
+                    return await asyncio.wait_for(
+                        _gateway().complete(request, provider=ctx.agent.get("llm_provider") or None),
+                        timeout=rel.request_timeout_seconds or 300,
+                    )
+                live.restart()  # a retry or the fallback model starts the text over
+                response = await asyncio.wait_for(
+                    _stream_complete(request, ctx.agent.get("llm_provider") or None, live),
                     timeout=rel.request_timeout_seconds or 300,
                 )
+                await live.flush()
+                return response
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 — classified below
@@ -238,6 +291,16 @@ async def _complete(ctx: AgentContext, messages: list[dict], tool_defs: list[dic
                     continue
                 break
     raise AgentFailed(f"The model request failed: {last_error}")
+
+
+async def _stream_complete(request, provider: str | None, live: _Live):
+    gateway = _gateway()
+    if not hasattr(gateway, "complete_streamed"):  # a gateway that can't stream: the whole answer at once
+        response = await gateway.complete(request, provider=provider)
+        if response.content:
+            await live(response.content)
+        return response
+    return await gateway.complete_streamed(request, provider=provider, on_text=live)
 
 
 async def _checkpoint(ctx: AgentContext, state: dict) -> None:
@@ -343,7 +406,8 @@ async def _delegate(ctx: AgentContext, sub: dict, turn: int, index: int, task: s
 
     sub_ctx = AgentContext(
         run_id=ctx.run_id, node_run_id=row.id, node_id=node_id, attempt=1, user=ctx.user, agent=sub, config=config,
-        input_text=task, approvals=approvals, emit=emit, dry_run=ctx.dry_run,
+        input_text=task, approvals=approvals, emit=emit, dry_run=ctx.dry_run, knowledge_tenant_id=ctx.knowledge_tenant_id,
+        tool_owners=ctx.tool_owners,
     )
     try:
         result = await run_agent(sub_ctx)
@@ -398,7 +462,7 @@ async def _run_call(
             return "Error: give a query to search for."
         await ctx.emit("tool_call", phase="started", tool=KNOWLEDGE_TOOL, risk="read", node_id=ctx.node_id)
         async with session_factory() as db:
-            text, passages = await search_knowledge(db, tenant_id=ctx.user.tenant_id, kb_ids=ctx.config.knowledge_base_ids, query=query)
+            text, passages = await search_knowledge(db, tenant_id=ctx.knowledge_tenant_id or ctx.user.tenant_id, kb_ids=ctx.config.knowledge_base_ids, query=query)
         sources.extend(p["filename"] for p in passages)
         if ctx.config.guardrails.groundedness:
             evidence = state.setdefault("evidence", [])
@@ -413,7 +477,7 @@ async def _run_call(
     site = CallSite(
         run_id=ctx.run_id, node_run_id=ctx.node_run_id, node_id=ctx.node_id, user=ctx.user,
         approvals=ctx.approvals, timeout=ctx.config.tools.timeout_seconds,
-        requester=ctx.agent.get("name") or "The agent", emit=ctx.emit, dry_run=ctx.dry_run,
+        requester=ctx.agent.get("name") or "The agent", emit=ctx.emit, dry_run=ctx.dry_run, tool_owners=ctx.tool_owners,
     )
     key = f"{ctx.node_id}:a{ctx.attempt}:t{turn}:c{index}"
     try:
@@ -469,7 +533,10 @@ async def run_agent(ctx: AgentContext) -> AgentResult:
         node_run = await db.get(BuilderNodeRun, ctx.node_run_id)
         state: dict[str, Any] = dict(node_run.state or {})
         # Tool needs: whatever of those systems this person has connected by now.
-        ready = [s for s in await resolve_needs(db, ctx.user, ctx.config.tool_needs) if s.status == "ready"]
+        ready = [
+            s for s in await resolve_needs(db, ctx.user, ctx.config.tool_needs, user_for=lambda sid: ctx.tool_owners.get(sid, ctx.user))
+            if s.status == "ready"
+        ]
         tools = await resolve_agent_tools(
             db, ctx.config.tool_ids + [t for s in ready for t in s.tool_ids], labels={s.server_id: s.need.system for s in ready},
         )
@@ -553,7 +620,8 @@ async def run_agent(ctx: AgentContext) -> AgentResult:
         if out_of_budget and not state.get("budget_note"):
             messages.append({"role": "system", "content": "You have used all the tool calls allowed for this task. Answer now with what you have."})
             state["budget_note"] = True
-        response = await _complete(ctx, messages, None if out_of_budget else (tool_defs or None))
+        live = _Live(ctx, state["turn"] + 1) if _streams(ctx) else None
+        response = await _complete(ctx, messages, None if out_of_budget else (tool_defs or None), live)
         state["turn"] += 1
         state["prompt_tokens"] += response.usage.prompt_tokens or 0
         state["completion_tokens"] += response.usage.completion_tokens or 0

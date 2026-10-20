@@ -1,9 +1,10 @@
 """The public API (mounted at ``/api/v1/public``) — no login, a publishable key.
 
     GET  /info                    what this key runs: name, what to send, inputs
-    POST /runs                    run it: {"input": "...", "variables": {...}, "wait_seconds": 20}
+    POST /runs                    run it: {"input": "...", "variables": {...}, "wait_seconds": 20, "stream": true}
                                   200 when it finished within wait_seconds, else 202 — then poll
     GET  /runs/{run_id}           a run this key started
+    GET  /runs/{run_id}/events    the same, live (SSE: builder.publishing.live) — the answer as it's written
     POST /runs/{run_id}/cancel
     POST /hooks/{token}           a webhook: run its agent on what was posted (builder.triggers.webhooks)
     GET  /widget.js               a chat bubble for any website:
@@ -21,7 +22,7 @@ import asyncio
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,7 +33,10 @@ from builder.models import BuilderPublicKey, BuilderRun
 from builder.publishing.service import (
     PublishError, definition_for, hash_key, input_fields, public_view, start_public_run, target_of,
 )
+from builder.publishing.ip_limit import check_ip_limit
+from builder.publishing.live import SSE_HEADERS, caller_events
 from builder.runs import states
+from builder.runs.db import session_factory
 from builder.runs.service import cancel_run
 
 router = APIRouter()
@@ -45,6 +49,8 @@ class PublicRunIn(BaseModel):
     variables: dict = Field(default_factory=dict)
     # How long to hold the request open for the answer (0 = return at once and poll).
     wait_seconds: float = Field(default=20, ge=0, le=30)
+    # Send the answer as it's written, on GET /runs/{id}/events (start with wait_seconds 0 to watch it).
+    stream: bool = True
 
 
 def _fail(exc: PublishError) -> JSONResponse:
@@ -98,9 +104,10 @@ async def _wait(db: AsyncSession, run_id: str, seconds: float) -> BuilderRun:
 
 
 @router.post("/runs")
-async def start(payload: PublicRunIn, key: BuilderPublicKey = Depends(public_key), db: AsyncSession = Depends(get_db)):
+async def start(payload: PublicRunIn, request: Request, key: BuilderPublicKey = Depends(public_key), db: AsyncSession = Depends(get_db)):
+    await check_ip_limit(request)
     try:
-        run = await start_public_run(db, key, text=payload.input, variables=payload.variables)
+        run = await start_public_run(db, key, text=payload.input, variables=payload.variables, stream=payload.stream)
     except PublishError as exc:
         return _fail(exc)
     run = await _wait(db, run.id, payload.wait_seconds)
@@ -117,6 +124,17 @@ async def _own_run(db: AsyncSession, run_id: str, key: BuilderPublicKey) -> Buil
 @router.get("/runs/{run_id}")
 async def read(run_id: str, key: BuilderPublicKey = Depends(public_key), db: AsyncSession = Depends(get_db)):
     return public_view(await _own_run(db, run_id, key))
+
+
+@router.get("/runs/{run_id}/events")
+async def events(run_id: str, key: BuilderPublicKey = Depends(public_key), db: AsyncSession = Depends(get_db)):
+    await _own_run(db, run_id, key)
+
+    async def view() -> dict:
+        async with session_factory() as fresh:
+            return public_view(await fresh.get(BuilderRun, run_id))
+
+    return StreamingResponse(caller_events(run_id, view), media_type="text/event-stream", headers=SSE_HEADERS)
 
 
 @router.post("/runs/{run_id}/cancel")

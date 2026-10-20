@@ -89,6 +89,12 @@ class StepContext:
     sub_agents: dict[str, dict] = field(default_factory=dict)
     # Agent steps may use their agent's long-term memory (a person's own run, not a public/webhook one).
     memory: bool = False
+    # Workspace the knowledge bases are searched in when it isn't the run user's (AgentContext.knowledge_tenant_id).
+    knowledge_tenant_id: str | None = None
+    # Servers used with another person's account (builder.runs.tool_calls.CallSite.tool_owners).
+    tool_owners: dict[str, CurrentUser] = field(default_factory=dict)
+    # Stream this agent step's answer as it's written (it feeds the run's output).
+    stream: bool = False
 
     @property
     def node_id(self) -> str:
@@ -165,6 +171,7 @@ async def run_agent_step(ctx: StepContext) -> NodeOutcome:
         run_id=ctx.run_id, node_run_id=ctx.node_run_id, node_id=ctx.node_id, attempt=ctx.attempt,
         user=ctx.user, agent=agent, config=config, input_text=task, approvals=approvals, emit=ctx.emit,
         dry_run=ctx.dry_run, depth=ctx.depth, sub_agents=ctx.sub_agents, memory=ctx.memory,
+        knowledge_tenant_id=ctx.knowledge_tenant_id, tool_owners=ctx.tool_owners, stream=ctx.stream,
     )
     try:
         result = await run_agent(agent_ctx)
@@ -299,6 +306,7 @@ async def run_tool_step(ctx: StepContext) -> NodeOutcome:
         run_id=ctx.run_id, node_run_id=ctx.node_run_id, node_id=ctx.node_id, user=ctx.user,
         approvals=ctx.approval_overrides.apply(ctx.approvals) if ctx.approval_overrides else ctx.approvals, timeout=float((ctx.node.get("config_overrides") or {}).get("timeout_seconds") or 60),
         requester=f'Workflow step "{ctx.graph.label(ctx.node_id)}"', emit=ctx.emit, dry_run=ctx.dry_run,
+        tool_owners=ctx.tool_owners,
     )
     outcome = await ledgered_call(site, tool, f"{ctx.node_id}:a{ctx.attempt}:tool", arguments)
     if outcome.declined:

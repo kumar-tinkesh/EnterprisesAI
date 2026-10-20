@@ -10,6 +10,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import CurrentUser
+from src.models import User
 
 from builder.agents.runtime import message_text
 from builder.models import BuilderAgent, BuilderApproval, BuilderNodeRun, BuilderRun, BuilderToolCall
@@ -49,6 +50,7 @@ async def create_run(
     variables: dict | None = None, schedule_id: str | None = None, purpose: str = "run", public_key_id: str | None = None,
     depth: str = "auto", conversation_id: str | None = None, history: list[dict] | None = None,
     attachments: list[dict] | None = None, webhook_id: str | None = None, caller_user_id: str | None = None,
+    stream: bool = True,
 ) -> BuilderRun:
     """Queue a run of an already-frozen ``definition`` (see agent_snapshot /
     workflow_definition), executing as ``user``. The agents it may hand tasks
@@ -70,6 +72,8 @@ async def create_run(
             **({"history": history} if history else {}),
             # Files sent with it: [{id, filename, kind}] (the content stays in builder_attachments).
             **({"attachments": attachments} if attachments else {}),
+            # Streaming is the default; only "off" is written down.
+            **({"stream": False} if not stream else {}),
         },
         status=states.QUEUED,
         state={},
@@ -92,12 +96,12 @@ async def create_agent_run(
     db: AsyncSession, user: CurrentUser, agent: BuilderAgent, *, text: str, variables: dict | None = None,
     schedule_id: str | None = None, purpose: str = "run", depth: str = "auto",
     conversation_id: str | None = None, history: list[dict] | None = None,
-    attachments: list[dict] | None = None, webhook_id: str | None = None,
+    attachments: list[dict] | None = None, webhook_id: str | None = None, stream: bool = True,
 ) -> BuilderRun:
     return await create_run(
         db, user, "agent", agent.id, definition={"agent": agent_snapshot(agent)}, version=agent.version,
         text=text, variables=variables, schedule_id=schedule_id, purpose=purpose, depth=depth,
-        conversation_id=conversation_id, history=history, attachments=attachments, webhook_id=webhook_id,
+        conversation_id=conversation_id, history=history, attachments=attachments, webhook_id=webhook_id, stream=stream,
     )
 
 
@@ -128,6 +132,7 @@ async def workflow_definition(db: AsyncSession, tenant_id: str, workflow: dict, 
 async def create_workflow_run(
     db: AsyncSession, user: CurrentUser, workflow, *, text: str, variables: dict | None = None,
     schedule_id: str | None = None, purpose: str = "run", depth: str = "auto", conversation_id: str | None = None,
+    stream: bool = True,
 ) -> BuilderRun:
     """Freezes the workflow and every agent its steps use, so edits made while
     it runs (or before a resume) don't change what this run does."""
@@ -135,7 +140,7 @@ async def create_workflow_run(
     return await create_run(
         db, user, "workflow", workflow.id, definition=definition, version=workflow.version,
         text=text, variables=variables, schedule_id=schedule_id, purpose=purpose, depth=depth,
-        conversation_id=conversation_id,
+        conversation_id=conversation_id, stream=stream,
     )
 
 
@@ -218,13 +223,25 @@ def _cap(text: str | None, limit: int) -> str | None:
     return text[:limit] + "…"
 
 
-def approval_view(a: BuilderApproval) -> dict:
+async def callers_of(db: AsyncSession, user_ids) -> dict[str, dict]:
+    """Who started share-link runs: {user_id: {id, name, email}} (a deleted account keeps its id, blank otherwise)."""
+    ids = {i for i in user_ids if i}
+    if not ids:
+        return {}
+    rows = (await db.execute(select(User.id, User.full_name, User.email).where(User.id.in_(ids)))).all()
+    found = {r.id: {"id": r.id, "name": (r.full_name or "").strip(), "email": r.email} for r in rows}
+    return {i: found.get(i, {"id": i, "name": "", "email": ""}) for i in ids}
+
+
+def approval_view(a: BuilderApproval, caller: dict | None = None) -> dict:
+    """``caller``: who started the run through a share link — the publisher
+    decides, so they should see whose request this is."""
     payload = dict(a.payload or {})
     payload.pop("input_schema", None)
     return {
         "id": a.id, "run_id": a.run_id, "kind": a.kind, "node_id": a.node_id, "tool_name": a.tool_name, "risk": a.risk,
         "status": a.status, "payload": payload, "edited_input": a.edited_input,
-        "created_at": a.created_at, "resolved_at": a.resolved_at,
+        "created_at": a.created_at, "resolved_at": a.resolved_at, "caller": caller,
     }
 
 
@@ -241,6 +258,8 @@ async def run_view(db: AsyncSession, run: BuilderRun, *, detail: bool = True) ->
         "purpose": run.purpose,
         "conversation_id": run.conversation_id,
         "webhook_id": run.webhook_id,
+        "public_key_id": run.public_key_id,
+        "caller": (await callers_of(db, [run.caller_user_id])).get(run.caller_user_id) if run.caller_user_id else None,
     }
     if not detail:
         return view
@@ -269,10 +288,10 @@ async def run_view(db: AsyncSession, run: BuilderRun, *, detail: bool = True) ->
         }
         for c in calls
     ]
-    view["approvals"] = [approval_view(a) for a in approvals]
+    view["approvals"] = [approval_view(a, view["caller"]) for a in approvals]
     return view
 
 
 __all__ = [
-    "RunActionError", "agent_snapshot", "workflow_snapshot", "workflow_definition", "create_run", "create_agent_run", "create_workflow_run", "cancel_run", "decide_approval", "run_view", "approval_view",
+    "RunActionError", "agent_snapshot", "workflow_snapshot", "workflow_definition", "create_run", "create_agent_run", "create_workflow_run", "cancel_run", "decide_approval", "run_view", "approval_view", "callers_of",
 ]

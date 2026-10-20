@@ -21,7 +21,7 @@ and workflow tool steps.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
 from sqlalchemy import select
@@ -59,6 +59,12 @@ class CallSite:
     emit: Callable[..., Awaitable[None]]
     # A test run: don't send data-changing calls, answer them as if they worked.
     dry_run: bool = False
+    # Servers used with someone else's account than ``user`` (a mixed share
+    # link: the publisher's): the call runs as them and they approve it.
+    tool_owners: dict[str, CurrentUser] = field(default_factory=dict)
+
+    def owner(self, server_id: str) -> CurrentUser:
+        return self.tool_owners.get(server_id, self.user)
 
 
 DRY_RUN_RESULT = (
@@ -77,10 +83,12 @@ class CallOutcome:
 
 
 async def _ask(db, site: CallSite, ledger: BuilderToolCall, tool: AgentTool, kind: str, arguments: dict) -> BuilderApproval:
+    # Whoever's account the call would use decides on it.
+    decider = site.owner(tool.server_id)
     approval = BuilderApproval(
         run_id=site.run_id,
-        tenant_id=site.user.tenant_id,
-        owner_id=site.user.id,
+        tenant_id=decider.tenant_id,
+        owner_id=decider.id,
         kind=kind,
         node_id=site.node_id,
         tool_call_id=ledger.id,
@@ -206,7 +214,7 @@ async def ledgered_call(site: CallSite, tool: AgentTool, call_key: str, argument
     try:
         async with session_factory() as db:
             result = await invoke_tool(
-                db, user=site.user, server_id=tool.server_id, tool_name=tool.tool_name, arguments=arguments,
+                db, user=site.owner(tool.server_id), server_id=tool.server_id, tool_name=tool.tool_name, arguments=arguments,
                 confirm=True, timeout=site.timeout,
             )
         text, structured, is_error = result.output.text, result.output.structured, result.output.is_error

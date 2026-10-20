@@ -4,15 +4,19 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, Clock, ExternalLink, LogIn, Network, Send, ShieldAlert, Square, UserPlus } from "lucide-react";
+import { Bot, CheckCircle2, CircleDashed, Clock, ExternalLink, LogIn, Network, Plug, Send, ShieldAlert, Square, UserPlus } from "lucide-react";
 
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Field, Textarea } from "@/components/builder/fields";
+import { ApprovalCard } from "@/components/builder/approval-card";
+import { NeedsList } from "@/components/builder/tool-needs";
+import { StreamToggle } from "@/components/builder/stream-toggle";
 import { ApiError } from "@/lib/api";
 import { sharedApi } from "@/lib/builder/api";
-import type { InputVariable, SharedRun } from "@/lib/builder/types";
+import type { InputVariable, SharedRun, ToolMode } from "@/lib/builder/types";
+import { useStreamPref } from "@/lib/builder/stream-pref";
 import { useAuthStore } from "@/stores/auth-store";
 import { cn } from "@/lib/utils";
 
@@ -26,6 +30,33 @@ function ago(iso: string): string {
   return `${Math.round(s / 86400)}d ago`;
 }
 
+/** Read a Server-Sent Events body: ``on(event, data)`` per message, until it ends. */
+async function readEvents(res: Response, on: (event: string, data: unknown) => void): Promise<void> {
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) return;
+    buffer += decoder.decode(value, { stream: true });
+    let end: number;
+    while ((end = buffer.indexOf("\n\n")) >= 0) {
+      const block = buffer.slice(0, end);
+      buffer = buffer.slice(end + 2);
+      let event = "message";
+      let data = "";
+      for (const line of block.split("\n")) {
+        if (line.startsWith("event: ")) event = line.slice(7);
+        else if (line.startsWith("data: ")) data += line.slice(6);
+      }
+      if (data) on(event, JSON.parse(data));
+    }
+  }
+}
+
+/** The answer being written: one turn's text, built from batches that must line up (``at``). */
+type Live = { runId: string; turn: number; text: string };
+
 function errorText(err: unknown): string {
   if (err instanceof ApiError) {
     const problems = (err.body as { problems?: string[] })?.problems ?? [];
@@ -36,8 +67,11 @@ function errorText(err: unknown): string {
 
 /**
  * A share link (/r/{slug}): what was shared, open to anyone; signing in runs
- * it. Runs use the sharer's tools, so anything that would change data waits
- * for their approval — this page shows that wait and picks up the answer.
+ * it. On a "publisher" link runs use the sharer's tools, so anything that
+ * would change data waits for THEIR approval — this page shows that wait. On
+ * a "visitor" link they use the person's own: they connect what's missing
+ * here first, and decide their own approvals here too. A "mixed" link is a
+ * visitor one where some apps are the sharer's — their account, their OK.
  */
 export default function SharedPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -85,7 +119,7 @@ export default function SharedPage() {
               </div>
             </div>
           ) : (
-            <Runner slug={slug} token={token} inputs={info.data.inputs} kind={info.data.kind} limit={info.data.per_user_daily_limit} />
+            <Runner slug={slug} token={token} inputs={info.data.inputs} kind={info.data.kind} limit={info.data.per_user_daily_limit} toolMode={info.data.tool_mode} />
           )}
 
           {mounted && user && (
@@ -100,17 +134,28 @@ export default function SharedPage() {
   );
 }
 
-function Runner({ slug, token, inputs, kind, limit }: { slug: string; token: string; inputs: InputVariable[]; kind: "agent" | "workflow"; limit: number | null }) {
+function Runner({
+  slug, token, inputs, kind, limit, toolMode,
+}: { slug: string; token: string; inputs: InputVariable[]; kind: "agent" | "workflow"; limit: number | null; toolMode: ToolMode }) {
   const queryClient = useQueryClient();
   const [text, setText] = useState("");
   const [values, setValues] = useState<Record<string, string>>({});
   const [current, setCurrent] = useState<SharedRun | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [live, setLive] = useState<Live | null>(null);
+  const [streamOn] = useStreamPref();
   const alive = useRef(true);
-  useEffect(() => () => { alive.current = false; }, []);
+  const watching = useRef<AbortController | null>(null);
+  useEffect(() => () => {
+    alive.current = false;
+    watching.current?.abort();
+  }, []);
 
   const history = useQuery({ queryKey: ["shared-runs", slug, token], queryFn: () => sharedApi.runs(token, slug) });
+  const own = toolMode !== "publisher";
+  // Under "builder-tool-needs": connecting an account anywhere refreshes it (server-connect invalidates that key).
+  const needs = useQuery({ queryKey: ["builder-tool-needs", "shared", slug, token], queryFn: () => sharedApi.needs(token, slug), enabled: own });
   const refreshHistory = useCallback(() => void queryClient.invalidateQueries({ queryKey: ["shared-runs", slug] }), [queryClient, slug]);
 
   // Follow a run until it's done. A run waiting on the sharer's approval keeps
@@ -130,6 +175,38 @@ function Runner({ slug, token, inputs, kind, limit }: { slug: string; token: str
     refreshHistory();
   }, [token, slug, refreshHistory]);
 
+  // Watch a run live: its state and the answer as it's written. Falls back to
+  // checking every few seconds if the live connection can't be had or drops.
+  const watch = useCallback(async (run: SharedRun) => {
+    watching.current?.abort();
+    const ctrl = new AbortController();
+    watching.current = ctrl;
+    let last = run;
+    try {
+      const res = await sharedApi.events(token, slug, run.run_id, ctrl.signal);
+      if (!res.ok || !res.body) throw new Error(String(res.status));
+      await readEvents(res, (event, data) => {
+        if (event === "run") {
+          last = data as SharedRun;
+          setCurrent((c) => (c?.run_id === last.run_id ? last : c));
+          if (last.output !== null || DONE.has(last.status)) setLive((l) => (l?.runId === last.run_id ? null : l));
+        } else if (event === "delta") {
+          const d = data as { turn: number; at: number; text: string };
+          setLive((l) =>
+            d.at === 0 ? { runId: run.run_id, turn: d.turn, text: d.text }
+              : l && l.runId === run.run_id && l.turn === d.turn && l.text.length === d.at ? { ...l, text: l.text + d.text }
+                : l,
+          );
+        }
+      });
+    } catch {
+      if (ctrl.signal.aborted) return;
+    }
+    if (ctrl.signal.aborted || !alive.current) return;
+    if (DONE.has(last.status)) refreshHistory();
+    else void follow(last);
+  }, [token, slug, follow, refreshHistory]);
+
   const variables = () => {
     const out: Record<string, unknown> = {};
     for (const v of inputs) {
@@ -148,11 +225,13 @@ function Runner({ slug, token, inputs, kind, limit }: { slug: string; token: str
     setBusy(true);
     setError(null);
     try {
-      const run = await sharedApi.run(token, slug, { input: text.trim(), variables: variables(), wait_seconds: 20 });
+      // Streaming: start at once and watch it being written; otherwise wait a little for the whole answer.
+      const run = await sharedApi.run(token, slug, { input: text.trim(), variables: variables(), wait_seconds: streamOn ? 0 : 20, stream: streamOn });
       setCurrent(run);
+      setLive(null);
       setText("");
       refreshHistory();
-      void follow(run);
+      if (!DONE.has(run.status)) void (streamOn ? watch(run) : follow(run));
     } catch (err) {
       setError(errorText(err));
     } finally {
@@ -162,14 +241,49 @@ function Runner({ slug, token, inputs, kind, limit }: { slug: string; token: str
 
   const open = (run: SharedRun) => {
     setCurrent(run);
-    if (!DONE.has(run.status)) void follow(run);
+    setLive(null);
+    if (!DONE.has(run.status)) void (streamOn ? watch(run) : follow(run));
   };
 
   const missing = inputs.some((v) => v.required && !(values[v.name] ?? "").trim());
-  const canSend = !busy && !missing && (kind === "workflow" || !!text.trim());
+  const blocked = own && (!needs.data || needs.data.problems.length > 0);
+  const canSend = !busy && !missing && !blocked && (kind === "workflow" || !!text.trim());
 
   return (
     <>
+      {own && (
+        <section className="space-y-2 rounded-xl border border-zinc-200 bg-white p-5">
+          <h2 className="flex items-center gap-1.5 text-sm font-semibold text-zinc-900">
+            <Plug className="h-4 w-4 text-sky-500" /> {toolMode === "mixed" ? "Uses some of your accounts" : "Uses your own accounts"}
+          </h2>
+          <p className="text-xs text-zinc-500">
+            It works with apps you connect, as you — and asks you before it changes anything in them. Whoever shared it can see that you used it, not what was in it.
+          </p>
+          {needs.isLoading ? (
+            <Spinner className="h-4 w-4 text-zinc-400" />
+          ) : needs.isError ? (
+            <p className="text-xs text-red-600">{errorText(needs.error)}</p>
+          ) : (
+            <>
+              {needs.data!.systems.some((x) => x.owner === "you") && <NeedsList token={token} statuses={needs.data!.systems.filter((x) => x.owner === "you")} light />}
+              {needs.data!.systems.some((x) => x.owner === "publisher") && (
+                <div className="space-y-1 border-t border-zinc-100 pt-2">
+                  <p className="text-[11px] font-medium text-zinc-700">With the sharer&apos;s account (they approve what it changes there):</p>
+                  {needs.data!.systems.filter((x) => x.owner === "publisher").map((x) => (
+                    <p key={x.system} className="flex items-center gap-1.5 text-[11.5px] text-zinc-700">
+                      {x.status === "ready" ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> : <CircleDashed className="h-3.5 w-3.5 text-zinc-400" />}
+                      {x.server_name || x.system}
+                    </p>
+                  ))}
+                </div>
+              )}
+              {needs.data!.problems.map((p) => <p key={p} className="text-xs text-amber-700">• {p}</p>)}
+              {needs.data!.problems.length === 0 && <p className="text-xs text-emerald-600">All set.</p>}
+            </>
+          )}
+        </section>
+      )}
+
       <section className="space-y-3 rounded-xl border border-zinc-200 bg-white p-5">
         {inputs.map((v) => (
           <Field key={v.name} label={`${v.label || v.name}${v.required ? "" : " (optional)"}`} hint={v.description || undefined}>
@@ -203,13 +317,16 @@ function Runner({ slug, token, inputs, kind, limit }: { slug: string; token: str
         {error && <p className="text-xs text-red-600" role="alert">{error}</p>}
         <div className="flex items-center justify-between gap-2">
           <p className="text-[11px] text-zinc-500">{limit ? `Up to ${limit} runs a day.` : ""}</p>
+          <StreamToggle className="ml-auto" />
           <Button disabled={!canSend} onClick={() => void submit()}>
             {busy ? <Spinner className="h-4 w-4" /> : <Send />} Run
           </Button>
         </div>
       </section>
 
-      {current && <Result run={current} slug={slug} token={token} onChange={setCurrent} />}
+      {current && (
+        <Result run={current} live={live?.runId === current.run_id ? live.text : ""} slug={slug} token={token} own={own} onChange={setCurrent} />
+      )}
 
       {(history.data ?? []).length > 0 && (
         <section className="rounded-xl border border-zinc-200 bg-white">
@@ -240,7 +357,9 @@ function StatusDot({ run }: { run: SharedRun }) {
   return <span className={cn("h-2 w-2 shrink-0 rounded-full", color)} title={run.status} />;
 }
 
-function Result({ run, slug, token, onChange }: { run: SharedRun; slug: string; token: string; onChange: (r: SharedRun) => void }) {
+function Result({
+  run, live, slug, token, own, onChange,
+}: { run: SharedRun; live: string; slug: string; token: string; own: boolean; onChange: (r: SharedRun) => void }) {
   const [stopping, setStopping] = useState(false);
   const stop = async () => {
     setStopping(true);
@@ -250,6 +369,15 @@ function Result({ run, slug, token, onChange }: { run: SharedRun; slug: string; 
       /* it may have just finished */
     } finally {
       setStopping(false);
+    }
+  };
+
+  // After a decision, show where the run went without waiting for the next poll.
+  const reload = async () => {
+    try {
+      onChange(await sharedApi.get(token, slug, run.run_id));
+    } catch {
+      /* the poll picks it up */
     }
   };
 
@@ -275,9 +403,13 @@ function Result({ run, slug, token, onChange }: { run: SharedRun; slug: string; 
       ) : (
         <div className="flex items-center gap-2 text-sm text-zinc-700">
           {run.waiting_for === "approval" ? (
-            <><ShieldAlert className="h-4 w-4 shrink-0 text-amber-500" /> Waiting for whoever shared this to approve a step. You can leave — the answer will be under Your runs.</>
+            own && run.approvals.length > 0 ? (
+              <><ShieldAlert className="h-4 w-4 shrink-0 text-amber-500" /> It needs your OK before going on:</>
+            ) : (
+              <><ShieldAlert className="h-4 w-4 shrink-0 text-amber-500" /> Waiting for whoever shared this to approve a step. You can leave — the answer will be under Your runs.</>
+            )
           ) : (
-            <><Spinner className="h-4 w-4 shrink-0 text-zinc-400" /> Working on it…</>
+            <><Spinner className="h-4 w-4 shrink-0 text-zinc-400" /> {live ? "Writing…" : "Working on it…"}</>
           )}
           <button
             type="button"
@@ -289,6 +421,10 @@ function Result({ run, slug, token, onChange }: { run: SharedRun; slug: string; 
           </button>
         </div>
       )}
+      {!DONE.has(run.status) && live && (
+        <p className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-900">{live}<span className="animate-pulse">▍</span></p>
+      )}
+      {run.approvals.map((a) => <ApprovalCard key={a.id} approval={a} token={token} onDone={() => void reload()} />)}
       <p className="flex items-center gap-1 text-[11px] text-zinc-500"><Clock className="h-3 w-3" /> {ago(run.created_at)}</p>
     </section>
   );

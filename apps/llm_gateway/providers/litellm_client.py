@@ -137,6 +137,8 @@ class LiteLLMClient(BaseLLMClient):
         model = self._litellm_model(bare)
         kwargs = self._build_kwargs(request, model)
         kwargs["stream"] = True
+        # The last chunk then carries the call's token usage (cost, budgets).
+        kwargs["stream_options"] = {"include_usage": True}
         try:
             async_stream = await litellm.acompletion(**kwargs)
         except LLMGatewayError:
@@ -147,7 +149,18 @@ class LiteLLMClient(BaseLLMClient):
         try:
             async for chunk in async_stream:
                 choices = getattr(chunk, "choices", None) or []
+                raw_usage = getattr(chunk, "usage", None)
+                usage = (
+                    TokenUsage(
+                        prompt_tokens=getattr(raw_usage, "prompt_tokens", 0) or 0,
+                        completion_tokens=getattr(raw_usage, "completion_tokens", 0) or 0,
+                        total_tokens=getattr(raw_usage, "total_tokens", 0) or 0,
+                    )
+                    if raw_usage else None
+                )
                 if not choices:
+                    if usage:
+                        yield StreamChunk(usage=usage)
                     continue
                 delta = getattr(choices[0], "delta", None)
                 tc: list[ToolCall] = []
@@ -161,6 +174,7 @@ class LiteLLMClient(BaseLLMClient):
                                 id=getattr(t, "id", "") or "",
                                 name=getattr(fn, "name", "") or "",
                                 arguments=getattr(fn, "arguments", "") or "",
+                                index=getattr(t, "index", 0) or 0,
                             )
                         )
                 yield StreamChunk(
@@ -168,6 +182,7 @@ class LiteLLMClient(BaseLLMClient):
                     reasoning=getattr(delta, "reasoning_content", None) if delta is not None else None,
                     finish_reason=getattr(choices[0], "finish_reason", None),
                     tool_calls=tc,
+                    usage=usage,
                 )
         except LLMGatewayError:
             raise

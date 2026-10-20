@@ -11,7 +11,7 @@ import { Field, Select, Textarea, Toggle } from "@/components/builder/fields";
 import { timeAgo } from "@/components/builder/version-history";
 import { ApiError } from "@/lib/api";
 import { PUBLIC_API_URL, builderApi, shareUrl } from "@/lib/builder/api";
-import type { PublicKey, PublicKeyCreated } from "@/lib/builder/types";
+import type { PublicKey, PublicKeyCreated, ToolMode, ToolNeedStatus } from "@/lib/builder/types";
 import { cn } from "@/lib/utils";
 
 function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
@@ -34,8 +34,8 @@ function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) 
 function snippets(key: string, title: string) {
   return {
     website: `<script src="${PUBLIC_API_URL}/widget.js"\n        data-key="${key}"\n        data-title="${title.replace(/"/g, "&quot;")}"></script>`,
-    curl: `curl -X POST ${PUBLIC_API_URL}/runs \\\n  -H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"input": "Hello", "wait_seconds": 20}'`,
-    javascript: `const res = await fetch("${PUBLIC_API_URL}/runs", {\n  method: "POST",\n  headers: { Authorization: "Bearer ${key}", "Content-Type": "application/json" },\n  body: JSON.stringify({ input: "Hello", wait_seconds: 20 }),\n});\nconst run = await res.json(); // 200: run.output — 202: poll GET /runs/{run.run_id}`,
+    curl: `# The whole answer (waits up to 20 s, then poll GET /runs/{run_id}):\ncurl -X POST ${PUBLIC_API_URL}/runs \\\n  -H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"input": "Hello", "wait_seconds": 20, "stream": false}'\n\n# Or watch it being written: start with "wait_seconds": 0, then\ncurl -N ${PUBLIC_API_URL}/runs/RUN_ID/events -H "Authorization: Bearer ${key}"`,
+    javascript: `const headers = { Authorization: "Bearer ${key}", "Content-Type": "application/json" };\nconst start = await fetch("${PUBLIC_API_URL}/runs", {\n  method: "POST", headers,\n  body: JSON.stringify({ input: "Hello", wait_seconds: 0 }), // streaming is on unless "stream": false\n});\nconst { run_id } = await start.json();\n\n// Server-Sent Events: "delta" = the next piece of the answer, "run" = its state (status, output).\nconst res = await fetch(\`${PUBLIC_API_URL}/runs/\${run_id}/events\`, { headers });\nconst reader = res.body.getReader();\nconst decoder = new TextDecoder();\nfor (let r; !(r = await reader.read()).done; ) console.log(decoder.decode(r.value));`,
   };
 }
 
@@ -67,6 +67,8 @@ export function PublishPanel({
   const [ack, setAck] = useState(false);
   const [share, setShare] = useState(true);
   const [perUser, setPerUser] = useState("");
+  const [toolMode, setToolMode] = useState<ToolMode>("publisher");
+  const [keepMine, setKeepMine] = useState<string[]>([]);
   const [created, setCreated] = useState<PublicKeyCreated | null>(null);
   const [tab, setTab] = useState<"website" | "curl" | "javascript">("website");
   const [error, setError] = useState<string | null>(null);
@@ -96,6 +98,8 @@ export function PublishPanel({
         acknowledge_write_tools: ack,
         share,
         per_user_daily_limit: share && perUser.trim() ? Number(perUser) : null,
+        tool_mode: toolMode,
+        publisher_server_ids: toolMode === "mixed" ? keepMine : [],
       }),
     onSuccess: (k) => {
       setCreated(k);
@@ -105,7 +109,8 @@ export function PublishPanel({
     onError: fail,
   });
   const update = useMutation({
-    mutationFn: ({ id, ...body }: { id: string; status?: "active" | "paused"; share?: boolean }) => builderApi.updatePublicKey(token, id, body),
+    mutationFn: ({ id, ...body }: { id: string; status?: "active" | "paused"; share?: boolean; tool_mode?: ToolMode; publisher_server_ids?: string[] }) =>
+      builderApi.updatePublicKey(token, id, body),
     onSuccess: () => void refresh(),
     onError: fail,
   });
@@ -172,7 +177,9 @@ export function PublishPanel({
             ))}
             {writeTools.length > 0 && (
               <div className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-950">
-                <p className="font-semibold">Anyone with the key could make it use tools that change data — with your accounts:</p>
+                <p className="font-semibold">
+                  Anyone with the key could make it use tools that change data — with your accounts{share && toolMode !== "publisher" ? " (through the API and website chat; the share link uses each person's own, except apps you keep)" : ""}:
+                </p>
                 <p className="font-mono">{writeTools.join(", ")}</p>
                 <p>Calls that need your approval still wait for you (you&apos;ll see them in your approvals).</p>
                 <label className="flex cursor-pointer items-start gap-2">
@@ -186,7 +193,16 @@ export function PublishPanel({
               <Toggle checked={share} onChange={setShare} label="Share link — anyone can use it after signing in" />
               {share && (
                 <>
-                  <p className="text-[11px] text-zinc-500">It runs with your connected tools, so anything that would change data waits for your approval.</p>
+                  <ShareModePicker
+                    name="new-key"
+                    mode={toolMode}
+                    mine={keepMine}
+                    systems={check.data?.systems ?? []}
+                    onChange={(c) => {
+                      if (c.tool_mode) setToolMode(c.tool_mode);
+                      if (c.publisher_server_ids) setKeepMine(c.publisher_server_ids);
+                    }}
+                  />
                   <Field label="Runs a day per person">
                     <Input className="h-9" type="number" min={1} placeholder="No limit" value={perUser} onChange={(e) => setPerUser(e.target.value)} />
                   </Field>
@@ -232,7 +248,25 @@ export function PublishPanel({
                       {k.last_used_at ? ` · used ${timeAgo(k.last_used_at)}` : ""}
                     </p>
                     {k.allowed_origins.length > 0 && <p className="truncate text-[11px] text-zinc-500">Sites: {k.allowed_origins.join(", ")}</p>}
-                    {k.share_enabled && k.share_slug && <div className="mt-1.5"><ShareLink slug={k.share_slug} compact /></div>}
+                    {k.share_enabled && k.share_slug && (
+                      <div className="mt-1.5 space-y-1">
+                        <ShareLink slug={k.share_slug} compact />
+                        <details className="text-[11px] text-zinc-500">
+                          <summary className="cursor-pointer select-none">
+                            Uses {k.tool_mode === "visitor" ? "each person's own apps" : k.tool_mode === "mixed" ? `their apps, except ${k.publisher_server_ids.length} of yours` : "your apps"} · change
+                          </summary>
+                          <div className="mt-1.5">
+                            <ShareModePicker
+                              name={`key-${k.id}`}
+                              mode={k.tool_mode}
+                              mine={k.publisher_server_ids}
+                              systems={check.data?.systems ?? []}
+                              onChange={(c) => update.mutate({ id: k.id, ...c })}
+                            />
+                          </div>
+                        </details>
+                      </div>
+                    )}
                   </div>
                   <div className="flex shrink-0 gap-1">
                     <button
@@ -274,6 +308,56 @@ export function PublishPanel({
   );
 }
 
+const MODES: [ToolMode, string, string][] = [
+  ["publisher", "Mine", "Everyone uses your accounts. Anything that would change data waits for your approval."],
+  ["visitor", "Each person's own", "They connect their own accounts on the link page and approve their own runs. You see who used it, not what was in it."],
+  ["mixed", "Some mine, some theirs", "Pick the apps that stay yours (your account, your approval). They connect the rest and approve those themselves."],
+];
+
+/** Whose apps a share link uses — and on a mixed one, which apps stay yours. */
+function ShareModePicker({
+  name, mode, mine, systems, onChange,
+}: {
+  name: string;
+  mode: ToolMode;
+  mine: string[];
+  systems: ToolNeedStatus[];
+  onChange: (change: { tool_mode?: ToolMode; publisher_server_ids?: string[] }) => void;
+}) {
+  return (
+    <fieldset className="space-y-1.5">
+      <legend className="mb-1 text-xs font-medium text-zinc-700">Whose connected apps it uses</legend>
+      {MODES.map(([value, label, hint]) => (
+        <label key={value} className="flex cursor-pointer items-start gap-2">
+          <input type="radio" name={`tool-mode-${name}`} className="mt-0.5 h-4 w-4 accent-indigo-600" checked={mode === value} onChange={() => onChange({ tool_mode: value })} />
+          <span>
+            <span className="block text-sm text-zinc-800">{label}</span>
+            <span className="block text-[11px] text-zinc-500">{hint}</span>
+          </span>
+        </label>
+      ))}
+      {mode === "mixed" && (
+        <div className="ml-6 space-y-1 rounded-md bg-zinc-50 p-2">
+          <p className="text-[11px] font-medium text-zinc-700">Use my account for:</p>
+          {systems.length === 0 && <p className="text-[11px] text-zinc-500">It doesn&apos;t use any connected apps.</p>}
+          {systems.map((sys) => (
+            <label key={sys.server_id!} className="flex cursor-pointer items-center gap-2 text-xs text-zinc-800">
+              <input
+                type="checkbox"
+                className="h-3.5 w-3.5 accent-indigo-600"
+                checked={mine.includes(sys.server_id!)}
+                onChange={(e) => onChange({ publisher_server_ids: e.target.checked ? [...mine, sys.server_id!] : mine.filter((x) => x !== sys.server_id) })}
+              />
+              {sys.server_name || sys.system}
+              {sys.status !== "ready" && <span className="text-[10px] text-amber-600">you haven&apos;t connected it</span>}
+            </label>
+          ))}
+        </div>
+      )}
+    </fieldset>
+  );
+}
+
 /** The /r/{slug} link to send people; the same link comes back if sharing is turned off and on. */
 function ShareLink({ slug, compact }: { slug: string; compact?: boolean }) {
   const url = shareUrl(slug);
@@ -284,7 +368,7 @@ function ShareLink({ slug, compact }: { slug: string; compact?: boolean }) {
         <a href={url} target="_blank" rel="noopener noreferrer" className="min-w-0 flex-1 truncate font-mono text-[11px] text-indigo-500 hover:text-indigo-400">{url}</a>
         <CopyButton text={url} label="Copy link" />
       </div>
-      {!compact && <p className="text-[11px] text-zinc-500">Whoever opens it signs in (or signs up) and runs it. Approvals come to you.</p>}
+      {!compact && <p className="text-[11px] text-zinc-500">Whoever opens it signs in (or signs up) and runs it.</p>}
     </div>
   );
 }

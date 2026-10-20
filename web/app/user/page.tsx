@@ -25,6 +25,7 @@ import {
 
 import ProtectedDashboard from "@/components/protected-dashboard";
 import { Avatar } from "@/components/builder/chat/chat-message";
+import { ApprovalCard } from "@/components/builder/approval-card";
 import { DailyBars, GOOD } from "@/components/charts/daily-bars";
 import { builderApi } from "@/lib/builder/api";
 import { vendorApi } from "@/lib/api";
@@ -200,6 +201,14 @@ function Dashboard() {
           <ul className="mt-3 grid gap-2 lg:grid-cols-2">
             {pending.slice(0, 4).map((a) => {
               const run = runList.find((r) => r.id === a.run_id);
+              // Not in recent run history (a share-link / API run, or an old one): no chat to send them to, so decide here.
+              if (!run) {
+                return (
+                  <li key={a.id} className="lg:col-span-2">
+                    <ApprovalCard approval={a} token={token} onDone={() => void approvals.refetch()} />
+                  </li>
+                );
+              }
               return (
                 <li key={a.id}>
                   <Link href={run ? runHref(run) : "/user/executions"} className="flex items-center gap-3 rounded-lg border border-amber-100 bg-white p-3 hover:border-amber-300">
