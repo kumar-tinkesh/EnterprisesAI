@@ -187,6 +187,13 @@ function TemplatePanel({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
   const queryClient = useQueryClient();
   const [shown, setShown] = useState<string | null>(null);
   const templates = useQuery({ queryKey: ["builder-templates", token], queryFn: () => builderApi.listTemplates(token), enabled: !!token });
+  const workflows = useQuery({ queryKey: ["builder-workflows"], queryFn: () => builderApi.listWorkflows(token), enabled: !!token });
+  // Already made from this template: open that one rather than adding another copy.
+  const use = (key: string, name: string) => {
+    const existing = (workflows.data ?? []).filter((w) => w.can_manage && w.name === name).sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0];
+    if (existing) onOpen({ kind: "workflow", id: existing.id });
+    else create.mutate(key);
+  };
   const create = useMutation({
     mutationFn: (key: string) => builderApi.createFromTemplate(token, key),
     onSuccess: (wf) => {
@@ -215,7 +222,7 @@ function TemplatePanel({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
               <button
                 type="button"
                 disabled={create.isPending}
-                onClick={() => create.mutate(t.key)}
+                onClick={() => use(t.key, t.name)}
                 className="inline-flex shrink-0 items-center gap-1 rounded-md bg-indigo-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-indigo-500 disabled:opacity-60 cursor-pointer"
               >
                 {create.isPending && create.variables === t.key ? <Spinner className="h-3 w-3" /> : <Plus className="h-3 w-3" />} Use

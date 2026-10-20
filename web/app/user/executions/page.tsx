@@ -458,18 +458,6 @@ function Row({
           </span>
         )}
         {s && s.runs > 0 && <span className="hidden shrink-0 @lg:block"><Spark daily={s.daily} /></span>}
-        {/* The score, until the pointer brings the actions. */}
-        {h && s?.health_score != null && (
-          <span
-            className={cn(
-              "w-9 shrink-0 rounded-md py-0.5 text-center text-xs font-semibold tabular-nums transition-opacity group-hover:opacity-0 group-focus-within:opacity-0",
-              s.health_status === "production_ready" ? "bg-emerald-50 text-emerald-700" : s.health_status === "not_tested" ? "bg-zinc-100 text-zinc-500" : "bg-amber-50 text-amber-700",
-            )}
-            title={`Health: ${h.label}, ${s.health_score}/100`}
-          >
-            {s.health_score}
-          </span>
-        )}
       </button>
       <span className="absolute right-2 top-1/2 flex -translate-y-1/2 items-center rounded-lg bg-white opacity-0 shadow-sm transition-opacity focus-within:opacity-100 group-hover:opacity-100">
         <button type="button" onClick={() => onOpen("chat")} aria-label={`Chat with ${item.name}`} title="Chat" className={cn("rounded-md p-1.5 hover:bg-indigo-50 hover:text-indigo-600 cursor-pointer", active && chatActive ? "text-indigo-500" : "text-zinc-500")}>
