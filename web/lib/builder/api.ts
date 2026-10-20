@@ -32,6 +32,8 @@ import type {
   PublicKeyCreated,
   PublishCheck,
   Schedule,
+  SharedInfo,
+  SharedRun,
   SchedulePreview,
   TestCase,
   TestCategory,
@@ -186,9 +188,15 @@ export const builderApi = {
   listPublicKeys: (t: string, kind: "agent" | "workflow", id: string) => call<PublicKey[]>(t, `/${kind}s/${id}/public-keys`),
   createPublicKey: (
     t: string, kind: "agent" | "workflow", id: string,
-    body: { name: string; version: number | null; allowed_origins: string[]; requests_per_minute: number; daily_quota: number | null; acknowledge_write_tools: boolean },
+    body: {
+      name: string; version: number | null; allowed_origins: string[]; requests_per_minute: number; daily_quota: number | null;
+      acknowledge_write_tools: boolean; share: boolean; per_user_daily_limit: number | null;
+    },
   ) => call<PublicKeyCreated>(t, `/${kind}s/${id}/public-keys`, "POST", body),
-  updatePublicKey: (t: string, keyId: string, body: { status?: "active" | "paused"; version?: number; latest?: boolean; name?: string }) =>
+  updatePublicKey: (
+    t: string, keyId: string,
+    body: { status?: "active" | "paused"; version?: number; latest?: boolean; name?: string; share?: boolean; per_user_daily_limit?: number; no_per_user_limit?: boolean },
+  ) =>
     call<PublicKey>(t, `/public-keys/${keyId}`, "PATCH", body),
   revokePublicKey: (t: string, keyId: string) => call<void>(t, `/public-keys/${keyId}`, "DELETE"),
   overview: (t: string, days = 7) => call<Overview>(t, `/overview?days=${days}`),
@@ -224,6 +232,23 @@ export const builderApi = {
   improveText: (t: string, field: string, text: string, context = "") =>
     call<{ text: string }>(t, "/assist/improve-text", "POST", { field, text, context }),
 };
+
+/** Share links (/api/v1/shared/{slug}): the info needs no login; running needs one. */
+export const sharedApi = {
+  info: (slug: string) => request<SharedInfo>(`/shared/${encodeURIComponent(slug)}`, {}, undefined, BACKEND_API_URL),
+  run: (t: string, slug: string, body: { input: string; variables: Record<string, unknown>; wait_seconds: number }) =>
+    request<SharedRun>(`/shared/${encodeURIComponent(slug)}/runs`, { method: "POST", body: JSON.stringify(body) }, t, BACKEND_API_URL),
+  runs: (t: string, slug: string) => request<SharedRun[]>(`/shared/${encodeURIComponent(slug)}/runs`, {}, t, BACKEND_API_URL),
+  get: (t: string, slug: string, runId: string) =>
+    request<SharedRun>(`/shared/${encodeURIComponent(slug)}/runs/${encodeURIComponent(runId)}`, {}, t, BACKEND_API_URL),
+  cancel: (t: string, slug: string, runId: string) =>
+    request<SharedRun>(`/shared/${encodeURIComponent(slug)}/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" }, t, BACKEND_API_URL),
+};
+
+/** The app's share-link page for a key: what a publisher copies and sends. */
+export function shareUrl(slug: string): string {
+  return `${typeof window === "undefined" ? "" : window.location.origin}/r/${slug}`;
+}
 
 /** The public API (no login; a publishable key): what published agents/workflows are called on. */
 export const PUBLIC_API_URL = `${BACKEND_API_URL}/public`;

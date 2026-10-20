@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Building2, ShieldCheck, Users } from "lucide-react";
 
 import { LoginForm } from "@/components/login-form";
 import { SignupForm } from "@/components/signup-form";
+import { rememberNext } from "@/lib/after-login";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
@@ -12,6 +13,13 @@ type Mode = "login" | "signup";
 
 export default function AuthPage() {
   const [mode, setMode] = useState<Mode>("login");
+
+  // /auth?next=/r/abc&mode=signup — a share link sent them here; go back there after.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    rememberNext(params.get("next"));
+    if (params.get("mode") === "signup") setMode("signup");
+  }, []);
 
   return (
     <main className="flex min-h-screen items-center justify-center p-6">

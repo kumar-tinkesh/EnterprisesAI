@@ -48,7 +48,7 @@ async def create_run(
     db: AsyncSession, user: CurrentUser, kind: str, target_id: str, *, definition: dict, version: int, text: str,
     variables: dict | None = None, schedule_id: str | None = None, purpose: str = "run", public_key_id: str | None = None,
     depth: str = "auto", conversation_id: str | None = None, history: list[dict] | None = None,
-    attachments: list[dict] | None = None, webhook_id: str | None = None,
+    attachments: list[dict] | None = None, webhook_id: str | None = None, caller_user_id: str | None = None,
 ) -> BuilderRun:
     """Queue a run of an already-frozen ``definition`` (see agent_snapshot /
     workflow_definition), executing as ``user``. The agents it may hand tasks
@@ -76,6 +76,7 @@ async def create_run(
         schedule_id=schedule_id,
         purpose=purpose,
         public_key_id=public_key_id,
+        caller_user_id=caller_user_id,
         conversation_id=conversation_id,
         webhook_id=webhook_id,
     )

@@ -3,7 +3,7 @@
     GET    /{agents|workflows}/{id}/publish-check   what publishing would expose: write tools, problems, advice
     GET    /{agents|workflows}/{id}/public-keys     its keys (with today's use)
     POST   /{agents|workflows}/{id}/public-keys     make one — the key is in the response, once
-    PATCH  /public-keys/{key_id}                    pause/resume, move to another version, limits, origins
+    PATCH  /public-keys/{key_id}                    pause/resume, move to another version, limits, origins, share link
     DELETE /public-keys/{key_id}                    revoke (it stops working at once; the record stays)
     GET    /published                               everything the caller published: keys + usage over N days
 
@@ -11,6 +11,10 @@ Publishing is for the agent's/workflow's creator or a tenant admin. A key
 runs as whoever made it, with their connected tools — so when callers could
 make it use tools that change data, the maker has to say yes to that
 explicitly (``acknowledge_write_tools``).
+
+A key can also have a share link (``share``): /r/{share_slug} in the web app,
+where anyone who signs in runs it (builder.api.v1.shared) — still as the key's
+maker, up to ``per_user_daily_limit`` runs a day each.
 """
 from __future__ import annotations
 
@@ -31,7 +35,7 @@ from builder.api.v1.deps import can_manage, get_end_user
 from builder.api.v1.workflows import _get_workflow
 from builder.models import BuilderAgent, BuilderPublicKey, BuilderRun, BuilderVersion, BuilderWorkflow
 from builder.publishing.service import (
-    PublishError, definition_for, definition_problems, new_key, start_of_day, usage, write_tools,
+    PublishError, definition_for, definition_problems, new_key, new_share_slug, start_of_day, usage, write_tools,
 )
 from builder.runs import states
 from builder.runs.db import as_utc, utcnow
@@ -61,6 +65,8 @@ class KeyIn(BaseModel):
     requests_per_minute: int = Field(default=20, ge=1, le=600)
     daily_quota: int | None = Field(default=None, ge=1, le=1_000_000)
     acknowledge_write_tools: bool = False
+    share: bool = False
+    per_user_daily_limit: int | None = Field(default=None, ge=1, le=10_000)
 
     @field_validator("allowed_origins")
     @classmethod
@@ -77,6 +83,9 @@ class KeyUpdate(BaseModel):
     requests_per_minute: int | None = Field(default=None, ge=1, le=600)
     daily_quota: int | None = Field(default=None, ge=1, le=1_000_000)
     no_daily_quota: bool = False
+    share: bool | None = None
+    per_user_daily_limit: int | None = Field(default=None, ge=1, le=10_000)
+    no_per_user_limit: bool = False
 
     @field_validator("allowed_origins")
     @classmethod
@@ -98,6 +107,10 @@ class KeyOut(BaseModel):
     created_at: datetime
     owner_id: str
     is_mine: bool
+    share_enabled: bool
+    share_slug: str | None
+    tool_mode: str
+    per_user_daily_limit: int | None
 
 
 class KeyCreated(KeyOut):
@@ -117,7 +130,8 @@ async def _out(db: AsyncSession, key: BuilderPublicKey, user: CurrentUser) -> di
         "allowed_origins": key.allowed_origins or [], "requests_per_minute": key.requests_per_minute,
         "daily_quota": key.daily_quota, "runs_today": await usage(db, key.id, start_of_day(utcnow())),
         "last_used_at": as_utc(key.last_used_at), "created_at": as_utc(key.created_at), "owner_id": key.owner_id,
-        "is_mine": key.owner_id == user.id,
+        "is_mine": key.owner_id == user.id, "share_enabled": bool(key.share_enabled), "share_slug": key.share_slug,
+        "tool_mode": key.tool_mode or "publisher", "per_user_daily_limit": key.per_user_daily_limit,
     }
 
 
@@ -174,6 +188,8 @@ async def create_key(kind: Kind, target_id: str, payload: KeyIn, user: CurrentUs
         tenant_id=target.tenant_id, owner_id=user.id, kind=kind[:-1], name=payload.name.strip(), key_hash=digest,
         key_prefix=prefix, status="active", version=payload.version, allowed_origins=payload.allowed_origins,
         requests_per_minute=payload.requests_per_minute, daily_quota=payload.daily_quota,
+        share_enabled=payload.share, share_slug=new_share_slug() if payload.share else None,
+        per_user_daily_limit=payload.per_user_daily_limit,
         **({"agent_id": target.id} if kind == "agents" else {"workflow_id": target.id}),
     )
     db.add(key)
@@ -202,12 +218,18 @@ async def update_key(key_id: str, payload: KeyUpdate, user: CurrentUser = Depend
     elif payload.version is not None:
         await _check_version(db, kind, target, payload.version)
         key.version = payload.version
-    for field in ("name", "status", "allowed_origins", "requests_per_minute", "daily_quota"):
+    if payload.share is not None:
+        key.share_enabled = payload.share
+        if payload.share and not key.share_slug:
+            key.share_slug = new_share_slug()
+    for field in ("name", "status", "allowed_origins", "requests_per_minute", "daily_quota", "per_user_daily_limit"):
         value = getattr(payload, field)
         if value is not None:
             setattr(key, field, value.strip() if isinstance(value, str) else value)
     if payload.no_daily_quota:
         key.daily_quota = None
+    if payload.no_per_user_limit:
+        key.per_user_daily_limit = None
     await db.commit()
     await db.refresh(key)
     return KeyOut(**await _out(db, key, user))

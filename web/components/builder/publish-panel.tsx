@@ -2,15 +2,15 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Check, Copy, Globe, KeyRound, Pause, Play, Send, Trash2, X } from "lucide-react";
+import { AlertTriangle, Check, Copy, Globe, KeyRound, Link2, Pause, Play, Send, Trash2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
-import { Field, Select, Textarea } from "@/components/builder/fields";
+import { Field, Select, Textarea, Toggle } from "@/components/builder/fields";
 import { timeAgo } from "@/components/builder/version-history";
 import { ApiError } from "@/lib/api";
-import { PUBLIC_API_URL, builderApi } from "@/lib/builder/api";
+import { PUBLIC_API_URL, builderApi, shareUrl } from "@/lib/builder/api";
 import type { PublicKey, PublicKeyCreated } from "@/lib/builder/types";
 import { cn } from "@/lib/utils";
 
@@ -65,6 +65,8 @@ export function PublishPanel({
   const [rpm, setRpm] = useState(20);
   const [quota, setQuota] = useState("");
   const [ack, setAck] = useState(false);
+  const [share, setShare] = useState(true);
+  const [perUser, setPerUser] = useState("");
   const [created, setCreated] = useState<PublicKeyCreated | null>(null);
   const [tab, setTab] = useState<"website" | "curl" | "javascript">("website");
   const [error, setError] = useState<string | null>(null);
@@ -92,6 +94,8 @@ export function PublishPanel({
         requests_per_minute: rpm,
         daily_quota: quota.trim() ? Number(quota) : null,
         acknowledge_write_tools: ack,
+        share,
+        per_user_daily_limit: share && perUser.trim() ? Number(perUser) : null,
       }),
     onSuccess: (k) => {
       setCreated(k);
@@ -101,7 +105,7 @@ export function PublishPanel({
     onError: fail,
   });
   const update = useMutation({
-    mutationFn: ({ id, status }: { id: string; status: "active" | "paused" }) => builderApi.updatePublicKey(token, id, { status }),
+    mutationFn: ({ id, ...body }: { id: string; status?: "active" | "paused"; share?: boolean }) => builderApi.updatePublicKey(token, id, body),
     onSuccess: () => void refresh(),
     onError: fail,
   });
@@ -114,7 +118,7 @@ export function PublishPanel({
       <div className="flex items-start justify-between border-b border-zinc-200 px-4 py-3">
         <div>
           <h2 className="flex items-center gap-1.5 text-sm font-semibold text-zinc-900"><Globe className="h-4 w-4" /> Publish</h2>
-          <p className="text-xs text-zinc-500">Let apps and websites use this {kind} with a key — no login.</p>
+          <p className="text-xs text-zinc-500">Send a link anyone can use after signing in, or let apps and websites call it with a key.</p>
         </div>
         <button type="button" aria-label="Close" onClick={onClose} className="text-zinc-400 hover:text-zinc-700 cursor-pointer"><X className="h-4 w-4" /></button>
       </div>
@@ -122,6 +126,7 @@ export function PublishPanel({
       <div className="flex-1 space-y-4 overflow-y-auto p-4">
         {created ? (
           <div className="space-y-3 rounded-lg border border-emerald-200 bg-emerald-50/50 p-3">
+            {created.share_enabled && created.share_slug && <ShareLink slug={created.share_slug} />}
             <p className="text-sm font-semibold text-emerald-900">Published — copy the key now</p>
             <p className="text-xs text-emerald-900">It won&apos;t be shown again. It only runs this {kind}, so it can sit in a web page.</p>
             <div className="flex items-center gap-2 rounded bg-white p-2 font-mono text-xs break-all">
@@ -177,6 +182,17 @@ export function PublishPanel({
               </div>
             )}
 
+            <div className="space-y-2 rounded-lg border border-zinc-200 p-2.5">
+              <Toggle checked={share} onChange={setShare} label="Share link — anyone can use it after signing in" />
+              {share && (
+                <>
+                  <p className="text-[11px] text-zinc-500">It runs with your connected tools, so anything that would change data waits for your approval.</p>
+                  <Field label="Runs a day per person">
+                    <Input className="h-9" type="number" min={1} placeholder="No limit" value={perUser} onChange={(e) => setPerUser(e.target.value)} />
+                  </Field>
+                </>
+              )}
+            </div>
             <Field label="Key name">
               <Input className="h-9" value={keyName} maxLength={120} onChange={(e) => setKeyName(e.target.value)} />
             </Field>
@@ -216,8 +232,19 @@ export function PublishPanel({
                       {k.last_used_at ? ` · used ${timeAgo(k.last_used_at)}` : ""}
                     </p>
                     {k.allowed_origins.length > 0 && <p className="truncate text-[11px] text-zinc-500">Sites: {k.allowed_origins.join(", ")}</p>}
+                    {k.share_enabled && k.share_slug && <div className="mt-1.5"><ShareLink slug={k.share_slug} compact /></div>}
                   </div>
                   <div className="flex shrink-0 gap-1">
+                    <button
+                      type="button"
+                      title={k.share_enabled ? "Turn the share link off" : "Make a share link"}
+                      aria-label={k.share_enabled ? `Turn off the share link of ${k.name}` : `Make a share link for ${k.name}`}
+                      aria-pressed={k.share_enabled}
+                      onClick={() => update.mutate({ id: k.id, share: !k.share_enabled })}
+                      className={cn("rounded p-1 hover:bg-zinc-100 cursor-pointer", k.share_enabled ? "text-indigo-500 hover:text-indigo-400" : "text-zinc-400 hover:text-zinc-800")}
+                    >
+                      <Link2 className="h-3.5 w-3.5" />
+                    </button>
                     <button
                       type="button"
                       title={k.status === "active" ? "Pause" : "Resume"}
@@ -243,6 +270,21 @@ export function PublishPanel({
           </ul>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** The /r/{slug} link to send people; the same link comes back if sharing is turned off and on. */
+function ShareLink({ slug, compact }: { slug: string; compact?: boolean }) {
+  const url = shareUrl(slug);
+  return (
+    <div className={cn("space-y-1", !compact && "rounded bg-white p-2")}>
+      {!compact && <p className="text-xs font-semibold text-zinc-900">Share link</p>}
+      <div className="flex items-center gap-2">
+        <a href={url} target="_blank" rel="noopener noreferrer" className="min-w-0 flex-1 truncate font-mono text-[11px] text-indigo-500 hover:text-indigo-400">{url}</a>
+        <CopyButton text={url} label="Copy link" />
+      </div>
+      {!compact && <p className="text-[11px] text-zinc-500">Whoever opens it signs in (or signs up) and runs it. Approvals come to you.</p>}
     </div>
   );
 }

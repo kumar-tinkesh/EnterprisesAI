@@ -24,7 +24,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Index, Integer, LargeBinary, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.db.base import Base, TimestampMixin
@@ -134,6 +134,9 @@ class BuilderRun(Base, TimestampMixin):
     purpose: Mapped[str] = mapped_column(String(20), default="run", server_default="run", index=True)
     # Started through the public API with this publishable key (purpose "public").
     public_key_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    # The signed-in person who started it through the key's share link (/r/{slug});
+    # they see only their own. The run still executes as ``owner_id``.
+    caller_user_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     # The playground chat this run is one message of (NULL = a one-off run).
     conversation_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     # Estimated from the tokens and the model that answered (builder.pricing);
@@ -454,6 +457,14 @@ class BuilderPublicKey(Base, TimestampMixin):
     requests_per_minute: Mapped[int] = mapped_column(Integer, default=20)
     daily_quota: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Share link (/r/{share_slug}): anyone who signs in may run it there. The
+    # slug stays once made, so turning sharing off and on keeps the same link.
+    share_slug: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, unique=True, index=True)
+    share_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Whose connected tools a share-link run uses: "publisher" (for now the only one).
+    tool_mode: Mapped[str] = mapped_column(String(20), default="publisher")
+    # Runs a day one signed-in person may start through the share link (NULL = no own limit).
+    per_user_daily_limit: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
 
 class BuilderAgentMemory(Base, TimestampMixin):

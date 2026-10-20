@@ -49,6 +49,11 @@ def hash_key(key: str) -> str:
     return hashlib.sha256(key.encode()).hexdigest()
 
 
+def new_share_slug() -> str:
+    """The /r/{slug} part of a share link: random, so links can't be guessed."""
+    return secrets.token_urlsafe(9)
+
+
 # ── what gets run ───────────────────────────────────────────────────────────
 
 
@@ -138,22 +143,33 @@ async def target_of(db: AsyncSession, key: BuilderPublicKey) -> BuilderAgent | B
     return target
 
 
-async def usage(db: AsyncSession, key_id: str, since: datetime) -> int:
-    return (
-        await db.execute(select(func.count()).select_from(BuilderRun).where(BuilderRun.public_key_id == key_id, BuilderRun.created_at >= since))
-    ).scalar_one()
+async def usage(db: AsyncSession, key_id: str, since: datetime, *, caller_user_id: str | None = None) -> int:
+    query = select(func.count()).select_from(BuilderRun).where(BuilderRun.public_key_id == key_id, BuilderRun.created_at >= since)
+    if caller_user_id:
+        query = query.where(BuilderRun.caller_user_id == caller_user_id)
+    return (await db.execute(query)).scalar_one()
 
 
 def start_of_day(now: datetime) -> datetime:
     return now.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
-async def start_public_run(db: AsyncSession, key: BuilderPublicKey, *, text: str, variables: dict) -> BuilderRun:
+async def start_public_run(
+    db: AsyncSession, key: BuilderPublicKey, *, text: str, variables: dict, caller_user_id: str | None = None,
+) -> BuilderRun:
+    """Run what ``key`` published, as its publisher. ``caller_user_id``: the
+    signed-in person who started it through the share link (their own daily
+    limit applies too)."""
     now = utcnow()
     if await usage(db, key.id, now - timedelta(minutes=1)) >= key.requests_per_minute:
         raise PublishError(429, f"Too many requests: this key allows {key.requests_per_minute} a minute.")
     if key.daily_quota is not None and await usage(db, key.id, start_of_day(now)) >= key.daily_quota:
         raise PublishError(429, f"This key's daily limit ({key.daily_quota} runs) is used up; it resets at 00:00 UTC.")
+    if (
+        caller_user_id and key.per_user_daily_limit is not None
+        and await usage(db, key.id, start_of_day(now), caller_user_id=caller_user_id) >= key.per_user_daily_limit
+    ):
+        raise PublishError(429, f"You've used your {key.per_user_daily_limit} runs for today; they reset at 00:00 UTC.")
     user = await publisher(db, key)
     target = await target_of(db, key)
     definition, version = await definition_for(db, key.kind, target, key.version)
@@ -165,7 +181,7 @@ async def start_public_run(db: AsyncSession, key: BuilderPublicKey, *, text: str
     key.last_used_at = now
     return await create_run(
         db, user, key.kind, target.id, definition=definition, version=version, text=text, variables=variables,
-        purpose="public", public_key_id=key.id,
+        purpose="public", public_key_id=key.id, caller_user_id=caller_user_id,
     )
 
 
@@ -189,6 +205,6 @@ def public_view(run: BuilderRun) -> dict:
 
 
 __all__ = [
-    "PublishError", "new_key", "hash_key", "definition_for", "write_tools", "input_fields", "definition_problems",
+    "PublishError", "new_key", "hash_key", "new_share_slug", "definition_for", "write_tools", "input_fields", "definition_problems",
     "publisher", "target_of", "usage", "start_of_day", "start_public_run", "public_view", "KEY_PREFIX",
 ]

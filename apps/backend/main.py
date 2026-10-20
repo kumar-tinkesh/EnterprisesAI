@@ -41,6 +41,7 @@ from user.api.v1.router import router as user_router  # noqa: E402
 from knowledge.api.v1.router import router as knowledge_router  # noqa: E402
 from builder.api.v1.public import router as public_router  # noqa: E402
 from builder.api.v1.router import router as builder_router  # noqa: E402
+from builder.api.v1.shared import router as shared_router  # noqa: E402
 from builder.services.tool_runtime import shutdown_pool  # noqa: E402
 
 from apps.backend.config import get_backend_settings  # noqa: E402
@@ -176,6 +177,7 @@ def create_app() -> FastAPI:
         tags=["builder"],
     )
     app.include_router(public_router, prefix=public_prefix, tags=["public"])
+    app.include_router(shared_router, prefix=f"{_backend_settings.BACKEND_API_V1_PREFIX}/shared", tags=["shared"])
     return app
 
 

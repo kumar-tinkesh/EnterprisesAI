@@ -425,6 +425,37 @@ export interface PublicKey {
   created_at: string;
   owner_id: string;
   is_mine: boolean;
+  /** Share link: /r/{share_slug}, run by anyone who signs in. */
+  share_enabled: boolean;
+  share_slug: string | null;
+  /** Whose connected tools share-link runs use. */
+  tool_mode: "publisher";
+  /** Runs a day each signed-in person may start from the share link (null = no own limit). */
+  per_user_daily_limit: number | null;
+}
+
+/** What a share link runs (GET /shared/{slug}, no login). */
+export interface SharedInfo {
+  kind: "agent" | "workflow";
+  name: string;
+  description: string;
+  inputs: InputVariable[];
+  version: number;
+  shared_by: string;
+  per_user_daily_limit: number | null;
+}
+
+/** One of my runs through a share link: only what a caller may see. */
+export interface SharedRun {
+  run_id: string;
+  status: RunStatus;
+  output: string | null;
+  sources: string[];
+  waiting_for: "approval" | null;
+  error: string | null;
+  version: number;
+  input: string;
+  created_at: string;
 }
 
 /** Returned once, at creation: the key itself. */
