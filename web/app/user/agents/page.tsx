@@ -264,12 +264,12 @@ export default function UserAgentsPage() {
                         <Spinner className="h-3.5 w-3.5 text-sky-600" />
                         Connecting {s.name}...
                       </span>
-                      <span className="text-[10px] font-mono text-sky-600 uppercase">Connecting</span>
+                      <span className="text-xs font-mono text-sky-600 uppercase">Connecting</span>
                     </div>
                     <div className="h-2 w-full overflow-hidden rounded-full bg-sky-200">
                       <div className="h-full bg-gradient-to-r from-indigo-500 via-sky-500 to-emerald-500 animate-pulse rounded-full w-full" />
                     </div>
-                    <p className="text-[11px] text-sky-700">Verifying credentials and synchronizing MCP tools...</p>
+                    <p className="text-xs text-sky-700">Verifying credentials and synchronizing MCP tools...</p>
                   </div>
                 )}
                 {disconnectMutation.isPending && (disconnectMutation.variables as any) === s.id && (
@@ -279,7 +279,7 @@ export default function UserAgentsPage() {
                         <Spinner className="h-3.5 w-3.5 text-red-600" />
                         Disconnecting {s.name}...
                       </span>
-                      <span className="text-[10px] font-mono text-red-600 uppercase">Disconnecting</span>
+                      <span className="text-xs font-mono text-red-600 uppercase">Disconnecting</span>
                     </div>
                     <div className="h-2 w-full overflow-hidden rounded-full bg-red-200">
                       <div className="h-full bg-gradient-to-r from-red-400 via-red-500 to-amber-500 animate-pulse rounded-full w-full" />

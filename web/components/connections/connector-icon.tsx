@@ -192,7 +192,7 @@ export function ConnectorIcon({ name, size = "md", className }: { name: string; 
 export function VerifiedBadge({ className }: { className?: string }) {
   return (
     <span
-      className={cn("inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-[10px] font-bold text-white", className)}
+      className={cn("inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-xs font-semibold text-white", className)}
       title="Connected"
       aria-label="Connected"
     >

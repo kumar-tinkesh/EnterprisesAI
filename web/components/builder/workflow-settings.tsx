@@ -75,7 +75,7 @@ export function WorkflowSettings({
             <div className="space-y-3">
               <div className="grid grid-cols-2 gap-2.5">
                 <label className="block">
-                  <span className="mb-1 block text-[11px] font-medium text-zinc-600">Max run time</span>
+                  <span className="mb-1 block text-xs font-medium text-zinc-600">Max run time</span>
                   <select className={selectCls} value={config.max_run_seconds ?? ""} onChange={(e) => set({ max_run_seconds: e.target.value ? Number(e.target.value) : null })}>
                     <option value="">No limit (Default)</option>
                     <option value={60}>1 minute</option>
@@ -86,7 +86,7 @@ export function WorkflowSettings({
                   </select>
                 </label>
                 <label className="block">
-                  <span className="mb-1 block text-[11px] font-medium text-zinc-600">If a step fails</span>
+                  <span className="mb-1 block text-xs font-medium text-zinc-600">If a step fails</span>
                   <select
                     className={selectCls}
                     value={config.on_node_failure ?? "abort"}
@@ -119,7 +119,7 @@ export function WorkflowSettings({
                 </div>
               )}
               <label className="block">
-                <span className="mb-1 block text-[11px] font-medium text-zinc-600">Most steps per run</span>
+                <span className="mb-1 block text-xs font-medium text-zinc-600">Most steps per run</span>
                 <input
                   type="number"
                   min={1}
@@ -156,7 +156,7 @@ function Governance({ config, token, set }: { config: WorkflowConfig; token: str
   return (
     <div className="space-y-3">
       <div>
-        <span className="mb-1 block text-[11px] font-medium text-zinc-600">Default Knowledge Base</span>
+        <span className="mb-1 block text-xs font-medium text-zinc-600">Default Knowledge Base</span>
         <p className="mb-1.5 text-[10.5px] text-zinc-500">Every agent step searches these, on top of its own.</p>
         {kbs.isLoading ? (
           <Spinner className="h-4 w-4 text-zinc-400" />
@@ -178,7 +178,7 @@ function Governance({ config, token, set }: { config: WorkflowConfig; token: str
         )}
       </div>
       <div>
-        <span className="mb-1 block text-[11px] font-medium text-zinc-600">Approval Overrides (this workflow)</span>
+        <span className="mb-1 block text-xs font-medium text-zinc-600">Approval Overrides (this workflow)</span>
         <p className="mb-1.5 text-[10.5px] text-zinc-500">Ask before tools run — Default leaves it to each step&apos;s agent.</p>
         <div className="grid grid-cols-3 gap-2">
           {([["read", "Reads", Eye], ["edit", "Writes", Edit3], ["delete", "Deletes", Trash2]] as const).map(([kind, label, Icon]) => (

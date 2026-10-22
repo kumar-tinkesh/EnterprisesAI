@@ -57,7 +57,7 @@ export function NeedsList({
               <st.Icon className={cn("h-3.5 w-3.5 shrink-0", st.tone)} />
               <span className={cn("min-w-0 flex-1 truncate text-[11.5px] font-medium", light ? "text-zinc-800" : "text-zinc-100")}>
                 {s.system}
-                {s.required && <span className="ml-1 text-[10px] font-normal text-amber-500">required</span>}
+                {s.required && <span className="ml-1 text-xs font-normal text-amber-500">required</span>}
               </span>
               {s.status === "not_connected" && s.server_id && (onConnect ? (
                 <button
@@ -113,7 +113,7 @@ export function SystemsChip({ token, needs }: { token: string; needs: ToolNeed[]
           setAt(at || !r ? null : { top: r.bottom + 4, left: r.left });
         }}
         className={cn(
-          "nodrag inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] cursor-pointer",
+          "nodrag inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-xs cursor-pointer",
           !status.data
             ? "border-white/10 bg-white/5 text-zinc-400"
             : sum.blocked
@@ -128,7 +128,7 @@ export function SystemsChip({ token, needs }: { token: string; needs: ToolNeed[]
           <>
             <div className="fixed inset-0 z-[999]" onClick={() => setAt(null)} />
             <div style={at} className="fixed z-[1000] max-h-72 w-72 overflow-y-auto rounded-lg border border-white/10 bg-zinc-900 p-1.5 shadow-2xl">
-              <p className="px-1.5 pb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Systems this step uses</p>
+              <p className="px-1.5 pb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">Systems this step uses</p>
               {status.data ? (
                 <NeedsList
                   token={token}
@@ -139,9 +139,9 @@ export function SystemsChip({ token, needs }: { token: string; needs: ToolNeed[]
                   }}
                 />
               ) : (
-                <p className="px-1.5 py-1 text-[11px] text-zinc-500">Checking…</p>
+                <p className="px-1.5 py-1 text-xs text-zinc-500">Checking…</p>
               )}
-              <p className="px-1.5 pt-1 text-[10px] text-zinc-500">
+              <p className="px-1.5 pt-1 text-xs text-zinc-500">
                 {statuses.some((s) => s.required) ? "Runs once every required system is connected." : "Runs once at least one is connected; the others join as they're connected."}
               </p>
             </div>
@@ -164,8 +164,8 @@ export function NeedsSection({ token, needs }: { token: string; needs: ToolNeed[
   return (
     <div className="mt-3 rounded-lg border border-zinc-200 p-2">
       <p className="text-xs font-medium text-zinc-700">Systems it uses</p>
-      <p className="mb-1.5 text-[11px] text-zinc-500">Their tools are added on every run once the system is connected — nothing to pick by hand.</p>
-      {status.data ? <NeedsList token={token} statuses={status.data} light /> : <p className="text-[11px] text-zinc-400">Checking…</p>}
+      <p className="mb-1.5 text-xs text-zinc-500">Their tools are added on every run once the system is connected — nothing to pick by hand.</p>
+      {status.data ? <NeedsList token={token} statuses={status.data} light /> : <p className="text-xs text-zinc-400">Checking…</p>}
     </div>
   );
 }

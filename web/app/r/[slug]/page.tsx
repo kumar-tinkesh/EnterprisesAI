@@ -123,7 +123,7 @@ export default function SharedPage() {
           )}
 
           {mounted && user && (
-            <p className="text-center text-[11px] text-zinc-500">
+            <p className="text-center text-xs text-zinc-500">
               Signed in as {user.email} ·{" "}
               <button type="button" onClick={logout} className="underline hover:text-zinc-800 cursor-pointer">Sign out</button>
             </p>
@@ -268,7 +268,7 @@ function Runner({
               {needs.data!.systems.some((x) => x.owner === "you") && <NeedsList token={token} statuses={needs.data!.systems.filter((x) => x.owner === "you")} light />}
               {needs.data!.systems.some((x) => x.owner === "publisher") && (
                 <div className="space-y-1 border-t border-zinc-100 pt-2">
-                  <p className="text-[11px] font-medium text-zinc-700">With the sharer&apos;s account (they approve what it changes there):</p>
+                  <p className="text-xs font-medium text-zinc-700">With the sharer&apos;s account (they approve what it changes there):</p>
                   {needs.data!.systems.filter((x) => x.owner === "publisher").map((x) => (
                     <p key={x.system} className="flex items-center gap-1.5 text-[11.5px] text-zinc-700">
                       {x.status === "ready" ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> : <CircleDashed className="h-3.5 w-3.5 text-zinc-400" />}
@@ -316,7 +316,7 @@ function Runner({
         </Field>
         {error && <p className="text-xs text-red-600" role="alert">{error}</p>}
         <div className="flex items-center justify-between gap-2">
-          <p className="text-[11px] text-zinc-500">{limit ? `Up to ${limit} runs a day.` : ""}</p>
+          <p className="text-xs text-zinc-500">{limit ? `Up to ${limit} runs a day.` : ""}</p>
           <StreamToggle className="ml-auto" />
           <Button disabled={!canSend} onClick={() => void submit()}>
             {busy ? <Spinner className="h-4 w-4" /> : <Send />} Run
@@ -341,7 +341,7 @@ function Runner({
                 >
                   <StatusDot run={r} />
                   <span className="min-w-0 flex-1 truncate text-sm text-zinc-800">{r.input || "(no message)"}</span>
-                  <span className="shrink-0 text-[11px] text-zinc-500">{ago(r.created_at)}</span>
+                  <span className="shrink-0 text-xs text-zinc-500">{ago(r.created_at)}</span>
                 </button>
               </li>
             ))}
@@ -389,7 +389,7 @@ function Result({
           <p className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-900">{run.output}</p>
           {run.sources.length > 0 && (
             <div className="space-y-1 border-t border-zinc-100 pt-2">
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Sources</p>
+              <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Sources</p>
               {run.sources.map((s) => (
                 <a key={s} href={s} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 truncate text-xs text-indigo-500 hover:text-indigo-400">
                   <ExternalLink className="h-3 w-3 shrink-0" /> <span className="truncate">{s}</span>
@@ -425,7 +425,7 @@ function Result({
         <p className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-900">{live}<span className="animate-pulse">▍</span></p>
       )}
       {run.approvals.map((a) => <ApprovalCard key={a.id} approval={a} token={token} onDone={() => void reload()} />)}
-      <p className="flex items-center gap-1 text-[11px] text-zinc-500"><Clock className="h-3 w-3" /> {ago(run.created_at)}</p>
+      <p className="flex items-center gap-1 text-xs text-zinc-500"><Clock className="h-3 w-3" /> {ago(run.created_at)}</p>
     </section>
   );
 }

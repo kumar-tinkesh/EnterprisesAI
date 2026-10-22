@@ -18,7 +18,7 @@ export function Avatar({ name, size = 28, live = false }: { name: string; size?:
   return (
     <span
       aria-hidden
-      className={cn("relative flex shrink-0 items-center justify-center rounded-[32%] font-bold tracking-tight", live && "animate-pulse")}
+      className={cn("relative flex shrink-0 items-center justify-center rounded-[32%] font-semibold tracking-tight", live && "animate-pulse")}
       style={{
         width: size,
         height: size,
@@ -55,7 +55,7 @@ export function CopyButton({ text }: { text: string }) {
 export function FileChip({ file, onRemove }: { file: Pick<Attachment, "filename" | "kind">; onRemove?: () => void }) {
   const Icon = file.kind === "image" ? ImageIcon : FileText;
   return (
-    <span className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-2 py-1 text-[11px] text-zinc-700">
+    <span className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-2 py-1 text-xs text-zinc-700">
       <Icon className="h-3.5 w-3.5 shrink-0 text-indigo-500" />
       <span className="min-w-0 truncate">{file.filename}</span>
       {onRemove && (
@@ -81,7 +81,7 @@ export function UserMessage({ text, onEdit, files = [] }: { text: string; onEdit
           <button
             type="button"
             onClick={onEdit}
-            className="mt-1 inline-flex items-center gap-1 text-[11px] text-zinc-400 opacity-100 transition hover:text-zinc-700 sm:opacity-0 sm:group-hover:opacity-100 sm:focus:opacity-100 cursor-pointer"
+            className="mt-1 inline-flex items-center gap-1 text-xs text-zinc-400 opacity-100 transition hover:text-zinc-700 sm:opacity-0 sm:group-hover:opacity-100 sm:focus:opacity-100 cursor-pointer"
           >
             <Pencil className="h-3 w-3" /> Edit &amp; resend
           </button>
@@ -106,24 +106,24 @@ function ToolCallRow({ call, stepName }: { call: RunToolCall; stepName?: string 
       <summary className="flex cursor-pointer list-none items-center gap-2 px-2.5 py-2 text-xs">
         {CALL_ICON[failed ? "failed" : call.status] ?? <Wrench className="h-3.5 w-3.5 text-zinc-400" />}
         <span className="min-w-0 truncate font-mono font-medium text-zinc-800">{displayTool(call.tool_name)}</span>
-        {stepName && <span className="hidden shrink-0 text-[10px] text-zinc-400 sm:inline">in {stepName}</span>}
+        {stepName && <span className="hidden shrink-0 text-xs text-zinc-400 sm:inline">in {stepName}</span>}
         {call.risk !== "read" && (
-          <span className="shrink-0 rounded bg-amber-50 px-1 text-[10px] font-semibold uppercase text-amber-700">{call.risk}</span>
+          <span className="shrink-0 rounded bg-amber-50 px-1 text-xs font-semibold uppercase text-amber-700">{call.risk}</span>
         )}
-        {call.status === "declined" && <span className="shrink-0 text-[10px] font-medium text-amber-700">declined</span>}
-        <span className="ml-auto shrink-0 tabular-nums text-[10px] text-zinc-400">{call.duration_ms != null ? formatDuration(call.duration_ms) : ""}</span>
+        {call.status === "declined" && <span className="shrink-0 text-xs font-medium text-amber-700">declined</span>}
+        <span className="ml-auto shrink-0 tabular-nums text-xs text-zinc-400">{call.duration_ms != null ? formatDuration(call.duration_ms) : ""}</span>
         <ChevronDown className="h-3.5 w-3.5 shrink-0 text-zinc-400 transition-transform group-open/call:rotate-180" />
       </summary>
       <div className="space-y-2 border-t border-zinc-100 p-2.5">
         {hasArgs && (
           <div>
-            <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">Sent</p>
+            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-400">Sent</p>
             <pre className="max-h-40 overflow-auto rounded bg-zinc-50 p-2 font-mono text-[10.5px] leading-relaxed text-zinc-700">{JSON.stringify(call.arguments, null, 2)}</pre>
           </div>
         )}
         <div>
-          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">{failed ? "Error" : "Got back"}</p>
-          <p className={cn("max-h-56 overflow-auto whitespace-pre-wrap break-words rounded p-2 text-[11px] leading-relaxed", failed ? "bg-red-50 text-red-700" : "bg-zinc-50 text-zinc-600")}>
+          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-400">{failed ? "Error" : "Got back"}</p>
+          <p className={cn("max-h-56 overflow-auto whitespace-pre-wrap break-words rounded p-2 text-xs leading-relaxed", failed ? "bg-red-50 text-red-700" : "bg-zinc-50 text-zinc-600")}>
             {call.result_preview || (call.status === "declined" ? "You declined this call." : "(nothing)")}
           </p>
         </div>
@@ -263,7 +263,7 @@ export const AnswerMessage = memo(function AnswerMessage({
                 aria-pressed={shape === r.key}
                 onClick={() => setShape(r.key)}
                 className={cn(
-                  "rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors cursor-pointer",
+                  "rounded-full border px-2 py-0.5 text-xs font-medium transition-colors cursor-pointer",
                   shape === r.key ? "border-indigo-500 bg-indigo-50 text-indigo-700" : "border-zinc-200 text-zinc-500 hover:border-zinc-300 hover:text-zinc-800",
                 )}
               >
@@ -273,10 +273,10 @@ export const AnswerMessage = memo(function AnswerMessage({
           </div>
         )}
         {(run.output?.sources?.length ?? 0) > 0 && (
-          <p className="mt-2 text-[11px] text-zinc-500">Sources: {run.output!.sources!.join(", ")}</p>
+          <p className="mt-2 text-xs text-zinc-500">Sources: {run.output!.sources!.join(", ")}</p>
         )}
         <RunTrail run={run} stepName={stepName} />
-        <div className={cn("mt-1.5 flex flex-wrap items-center gap-3 text-[11px] text-zinc-400 transition-opacity", !latest && "sm:opacity-0 sm:group-hover/answer:opacity-100")}>
+        <div className={cn("mt-1.5 flex flex-wrap items-center gap-3 text-xs text-zinc-400 transition-opacity", !latest && "sm:opacity-0 sm:group-hover/answer:opacity-100")}>
           {ms != null && <span className="tabular-nums">{formatDuration(ms)}</span>}
           {(run.prompt_tokens ?? 0) + (run.completion_tokens ?? 0) > 0 && (
             <span className="tabular-nums" title={`${run.prompt_tokens ?? 0} tokens in, ${run.completion_tokens ?? 0} out${run.cost_usd == null ? " · this model has no known price" : ""}`}>

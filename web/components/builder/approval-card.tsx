@@ -41,7 +41,7 @@ export function ApprovalCard({ approval, token, onDone }: { approval: Approval; 
         {approval.risk && approval.kind !== "human_step" && <RiskBadge risk={approval.risk} />}
       </div>
       {approval.caller && (
-        <p className="flex items-center gap-1 text-[11px] text-amber-900" title="This run came in through your share link and uses your connected tools.">
+        <p className="flex items-center gap-1 text-xs text-amber-900" title="This run came in through your share link and uses your connected tools.">
           <Link2 className="h-3 w-3 shrink-0" /> Via share link · {approval.caller.name || approval.caller.email || "a deleted account"}
           {approval.caller.name && approval.caller.email ? ` (${approval.caller.email})` : ""}
         </p>
@@ -50,7 +50,7 @@ export function ApprovalCard({ approval, token, onDone }: { approval: Approval; 
 
       {approval.kind === "tool_call" && (
         <>
-          <p className="text-[11px] font-medium text-zinc-600">Arguments (you can change them)</p>
+          <p className="text-xs font-medium text-zinc-600">Arguments (you can change them)</p>
           <JsonField value={args} onChange={setArgs} rows={5} />
           <div className="flex flex-wrap gap-2">
             <Button size="sm" disabled={busy} onClick={() => decide.mutate({ decision: "approve" })}>Approve</Button>
@@ -62,7 +62,7 @@ export function ApprovalCard({ approval, token, onDone }: { approval: Approval; 
 
       {approval.kind === "uncertain_call" && (
         <>
-          <pre className="max-h-32 overflow-auto rounded bg-white p-2 text-[11px] text-zinc-700">{JSON.stringify(p.arguments ?? {}, null, 2)}</pre>
+          <pre className="max-h-32 overflow-auto rounded bg-white p-2 text-xs text-zinc-700">{JSON.stringify(p.arguments ?? {}, null, 2)}</pre>
           <div className="flex flex-wrap gap-2">
             <Button size="sm" disabled={busy} onClick={() => decide.mutate({ decision: "approve" })}>It didn&apos;t run — run it again</Button>
             <Button size="sm" variant="outline" disabled={busy} onClick={() => decide.mutate({ decision: "reject" })}>It already ran — skip it</Button>

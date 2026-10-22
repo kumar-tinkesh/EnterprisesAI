@@ -75,7 +75,7 @@ export function StepTest({
         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600"><FlaskConical className="h-3.5 w-3.5" /></span>
         <div className="min-w-0 flex-1">
           <h2 className="truncate text-sm font-semibold text-zinc-900">Test · {title}</h2>
-          <p className="truncate text-[11px] text-zinc-500">Only this step, as it is now. Tools really run.</p>
+          <p className="truncate text-xs text-zinc-500">Only this step, as it is now. Tools really run.</p>
         </div>
         <button type="button" aria-label="Close" title="Close" onClick={onClose} className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 cursor-pointer">
           <X className="h-3.5 w-3.5" />
@@ -110,7 +110,7 @@ export function StepTest({
 
         {runId && (
           <div className="space-y-3">
-            <span className={cn("inline-block rounded-full px-2 py-0.5 text-[11px] font-semibold", STATUS_TONE[view.status ?? ""] ?? "bg-sky-100 text-sky-700")}>
+            <span className={cn("inline-block rounded-full px-2 py-0.5 text-xs font-semibold", STATUS_TONE[view.status ?? ""] ?? "bg-sky-100 text-sky-700")}>
               {view.status ?? "starting"}
             </span>
             {view.approvals.map((a) => <ApprovalCard key={a.id} approval={a} token={token} onDone={() => undefined} />)}
@@ -118,7 +118,7 @@ export function StepTest({
               <div className="rounded-lg border border-zinc-200 p-2.5 text-sm text-zinc-900"><MarkdownView text={view.output} /></div>
             )}
             {view.status === "failed" && view.error && <p className="text-xs text-red-600">{view.error}</p>}
-            {view.guardrails.map((g, i) => <p key={i} className="text-[11px] text-amber-700">Guardrail: {g.message}</p>)}
+            {view.guardrails.map((g, i) => <p key={i} className="text-xs text-amber-700">Guardrail: {g.message}</p>)}
             {/* Only this step's own lines (the input and output around it are scaffolding). */}
             <RunTimeline view={{ ...view, timeline: view.timeline.filter((t) => !t.nodeId || t.nodeId === "step") }} stepName={() => title} />
           </div>
@@ -137,7 +137,7 @@ export function StepResult({ title, text, onClose }: { title: string; text: stri
         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-sky-50 text-sky-600"><FileText className="h-3.5 w-3.5" /></span>
         <div className="min-w-0 flex-1">
           <h2 className="truncate text-sm font-semibold text-zinc-900">{title}</h2>
-          <p className="truncate text-[11px] text-zinc-500">Its answer in the last run</p>
+          <p className="truncate text-xs text-zinc-500">Its answer in the last run</p>
         </div>
         <button
           type="button"

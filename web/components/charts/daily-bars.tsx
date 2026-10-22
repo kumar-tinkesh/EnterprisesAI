@@ -46,10 +46,10 @@ export function DailyBars({
   const bad = badLabel.toLowerCase();
 
   return (
-    <section className="rounded-xl border border-zinc-200 bg-white p-4 sm:p-5" aria-label={title}>
+    <section className="rounded-lg border border-zinc-200 p-4 sm:p-5" aria-label={title}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="font-semibold text-zinc-900">{title}</h2>
+          <h2 className="text-base font-semibold text-zinc-900">{title}</h2>
           <p className="text-xs text-zinc-500">{subtitle}</p>
           {summary && <p className="mt-1 text-xs text-zinc-600">{summary}</p>}
         </div>
@@ -68,7 +68,7 @@ export function DailyBars({
         <div className="mt-4 max-h-72 overflow-y-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-left text-[11px] uppercase tracking-wider text-zinc-500">
+              <tr className="text-left text-xs uppercase tracking-wider text-zinc-500">
                 <th className="py-1 font-medium">Day</th>
                 <th className="py-1 text-right font-medium">{goodLabel}</th>
                 <th className="py-1 text-right font-medium">{badLabel}</th>
@@ -87,7 +87,7 @@ export function DailyBars({
         </div>
       ) : (
         <div className="mt-4 flex gap-2">
-          <div className="flex h-48 flex-col justify-between pb-5 text-right text-[10px] tabular-nums text-zinc-500" aria-hidden>
+          <div className="flex h-48 flex-col justify-between pb-5 text-right text-xs tabular-nums text-zinc-500" aria-hidden>
             {[4, 3, 2, 1, 0].map((i) => <span key={i} className="leading-none">{tick * i}</span>)}
           </div>
           <div className="relative min-w-0 flex-1">
@@ -115,7 +115,7 @@ export function DailyBars({
                       {d.bad > 0 && <div className="w-full rounded-t-[4px]" style={{ flexGrow: d.bad, background: CRITICAL, minHeight: 2 }} />}
                       {d.good > 0 && <div className={cn("w-full", d.bad > 0 ? "" : "rounded-t-[4px]")} style={{ flexGrow: d.good, background: GOOD, minHeight: 2 }} />}
                     </div>
-                    <span className={cn("absolute bottom-0 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] text-zinc-500", i % 2 === (days.length - 1) % 2 ? "" : "hidden sm:inline")}>
+                    <span className={cn("absolute bottom-0 left-1/2 -translate-x-1/2 whitespace-nowrap text-xs text-zinc-500", i % 2 === (days.length - 1) % 2 ? "" : "hidden sm:inline")}>
                       {dayLabel(d.date)}
                     </span>
                     {hover === i && (

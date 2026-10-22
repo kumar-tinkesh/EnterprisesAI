@@ -115,7 +115,7 @@ function AgentStart({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
             >
               <Bot className="h-3.5 w-3.5 shrink-0 text-indigo-400" />
               <span className="min-w-0 flex-1 truncate">{a.name}</span>
-              {a.role && <span className="max-w-[40%] shrink-0 truncate text-[10px] text-zinc-500">{a.role}</span>}
+              {a.role && <span className="max-w-[40%] shrink-0 truncate text-xs text-zinc-500">{a.role}</span>}
             </button>
           ))}
         </ListPanel>
@@ -128,7 +128,7 @@ function AgentStart({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
 function ListPanel({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="w-full rounded-xl border border-white/10 bg-white/5 p-1.5 text-left">
-      <p className="px-2.5 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">{title}</p>
+      <p className="px-2.5 pb-1 pt-1.5 text-xs font-semibold uppercase tracking-wider text-zinc-500">{title}</p>
       <div className="max-h-56 overflow-y-auto">{children}</div>
     </div>
   );
@@ -154,7 +154,7 @@ function WorkflowStart({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
       >
         {createBlank.isPending ? <Spinner className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />} Start a blank workflow
       </button>
-      <p className="text-[11px] text-zinc-500">Then Add Step → Agent to use the agents you&apos;ve made, and drag lines to run them one after another or side by side.</p>
+      <p className="text-xs text-zinc-500">Then Add Step → Agent to use the agents you&apos;ve made, and drag lines to run them one after another or side by side.</p>
       {error && <p className="text-xs text-red-400">{error}</p>}
       <TemplatePanel onOpen={onOpen} />
       {recent.length > 0 && (
@@ -168,7 +168,7 @@ function WorkflowStart({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
             >
               <Network className="h-3.5 w-3.5 shrink-0 text-indigo-400" />
               <span className="min-w-0 flex-1 truncate">{w.name}</span>
-              <span className="shrink-0 text-[10px] text-zinc-500">{w.node_count} steps</span>
+              <span className="shrink-0 text-xs text-zinc-500">{w.node_count} steps</span>
             </button>
           ))}
         </ListPanel>
@@ -214,7 +214,7 @@ function TemplatePanel({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
               <button
                 type="button"
                 onClick={() => setShown(shown === t.key ? null : t.key)}
-                className={cn("shrink-0 text-[10px] cursor-pointer", sum.blocked ? "text-amber-400" : "text-emerald-400")}
+                className={cn("shrink-0 text-xs cursor-pointer", sum.blocked ? "text-amber-400" : "text-emerald-400")}
                 aria-expanded={shown === t.key}
               >
                 {sum.ready}/{sum.total} systems
@@ -223,12 +223,12 @@ function TemplatePanel({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
                 type="button"
                 disabled={create.isPending}
                 onClick={() => use(t.key, t.name)}
-                className="inline-flex shrink-0 items-center gap-1 rounded-md bg-indigo-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-indigo-500 disabled:opacity-60 cursor-pointer"
+                className="inline-flex shrink-0 items-center gap-1 rounded-md bg-indigo-600 px-2 py-1 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-60 cursor-pointer"
               >
                 {create.isPending && create.variables === t.key ? <Spinner className="h-3 w-3" /> : <Plus className="h-3 w-3" />} Use
               </button>
             </div>
-            <p className="mt-0.5 pl-5 text-[11px] text-zinc-500">{t.summary}</p>
+            <p className="mt-0.5 pl-5 text-xs text-zinc-500">{t.summary}</p>
             {shown === t.key && (
               <div className="mt-1.5 pl-3">
                 <p className="mb-1 px-1.5 text-[10.5px] text-zinc-400">{t.description}</p>

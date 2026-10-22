@@ -28,7 +28,7 @@ export default function AuthPage() {
           <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-500 text-white shadow-lg shadow-indigo-500/20">
             <Building2 className="h-6 w-6" />
           </div>
-          <h1 className="text-2xl font-bold">EnterpriseAI</h1>
+          <h1 className="text-2xl font-semibold">EnterpriseAI</h1>
           <p className="text-sm text-zinc-500">
             Vendor · Tenant · Workspace — one account, three dashboards
           </p>

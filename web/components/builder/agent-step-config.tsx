@@ -210,11 +210,11 @@ function StepOverrides({
   return (
     <div className="space-y-2 px-3.5 py-3">
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-semibold", on.length ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700")}>
+        <span className={cn("rounded-full px-2 py-0.5 text-xs font-semibold", on.length ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700")}>
           {on.length ? `${on.length} setting${on.length === 1 ? "" : "s"} changed for this step` : "Inheriting agent defaults"}
         </span>
         {on.length > 0 && (
-          <button type="button" className="ml-auto text-[11px] font-medium text-indigo-600 hover:text-indigo-500 cursor-pointer" onClick={() => onChange({ config_overrides: null })}>
+          <button type="button" className="ml-auto text-xs font-medium text-indigo-600 hover:text-indigo-500 cursor-pointer" onClick={() => onChange({ config_overrides: null })}>
             Reset
           </button>
         )}
@@ -264,7 +264,7 @@ function StepOverrides({
         </div>
       </Accordion>
 
-      <p className="pt-1 text-[11px] text-zinc-500">Switch a setting on to change it for this step only. Settings left off use the agent&apos;s own.</p>
+      <p className="pt-1 text-xs text-zinc-500">Switch a setting on to change it for this step only. Settings left off use the agent&apos;s own.</p>
 
       <OverrideParams.Provider value={params}>
         {OVERRIDES.map(({ id, title, Icon }) => {
@@ -277,7 +277,7 @@ function StepOverrides({
               Icon={Icon}
               open={open === id}
               onToggle={() => setOpen(open === id ? null : id)}
-              action={changed > 0 && <span className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">{changed} changed</span>}
+              action={changed > 0 && <span className="rounded-full bg-amber-50 px-1.5 py-0.5 text-xs font-semibold text-amber-700">{changed} changed</span>}
             >
               <div className="-mx-4 -my-3">
                 <AgentFields
@@ -367,19 +367,19 @@ function DraftConfig({
   return (
     <div className="space-y-2 px-3.5 py-3">
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-semibold", original ? "bg-amber-50 text-amber-700" : "bg-indigo-50 text-indigo-700")}>
+        <span className={cn("rounded-full px-2 py-0.5 text-xs font-semibold", original ? "bg-amber-50 text-amber-700" : "bg-indigo-50 text-indigo-700")}>
           {original ? "Customized for this workflow" : "New agent for this workflow"}
         </span>
         {original && (
-          <button type="button" className="ml-auto text-[11px] font-medium text-indigo-600 hover:text-indigo-500 cursor-pointer" onClick={() => onChange({ draft_agent: null })}>
+          <button type="button" className="ml-auto text-xs font-medium text-indigo-600 hover:text-indigo-500 cursor-pointer" onClick={() => onChange({ draft_agent: null })}>
             Undo customize
           </button>
         )}
       </div>
-      <p className="text-[11px] text-zinc-500">
+      <p className="text-xs text-zinc-500">
         {original ? `A copy of “${original.name}” — the original stays as it is.` : "It's created when you save the workflow."}
       </p>
-      {note && <p className="text-[11px] text-emerald-700">{note}</p>}
+      {note && <p className="text-xs text-emerald-700">{note}</p>}
 
       {!original && (
         <Accordion title="Describe with AI" sub="The AI fills in every part for you to check" Icon={Sparkles} open={open === "describe"} onToggle={() => setOpen(open === "describe" ? null : "describe")}>

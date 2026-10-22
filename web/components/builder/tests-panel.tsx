@@ -117,7 +117,7 @@ export function TestsPanel({
       <div className="space-y-2 border-b border-zinc-200 px-4 py-3">
         {latest ? (
           <div className="flex items-center gap-3">
-            <p className={cn("text-3xl font-bold tabular-nums", scoreTone(latest.score))}>{latest.score !== null ? `${latest.score}%` : "—"}</p>
+            <p className={cn("text-3xl font-semibold tabular-nums", scoreTone(latest.score))}>{latest.score !== null ? `${latest.score}%` : "—"}</p>
             <div className="min-w-0 flex-1 text-xs text-zinc-600">
               <p className="font-medium text-zinc-900">
                 {running ? `Running… ${latest.done}/${latest.total} done` : latest.status === "cancelled" ? "Cancelled" : `${latest.passed}/${latest.total} passed`}
@@ -131,7 +131,7 @@ export function TestsPanel({
         {latest && Object.keys(latest.dimensions).length > 0 && (
           <div className="flex flex-wrap gap-1.5">
             {(Object.keys(DIMENSION_LABELS) as (keyof typeof DIMENSION_LABELS)[]).filter((d) => latest.dimensions[d] !== undefined).map((d) => (
-              <span key={d} className="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] text-zinc-700">
+              <span key={d} className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-700">
                 {DIMENSION_LABELS[d]} <span className={cn("font-semibold", scoreTone(latest.dimensions[d]))}>{latest.dimensions[d]}%</span>
               </span>
             ))}
@@ -184,7 +184,7 @@ export function TestsPanel({
                   }}
                   className={cn("flex w-full items-center gap-3 border-b border-zinc-100 px-4 py-2.5 text-left hover:bg-zinc-50 cursor-pointer", t.id === currentId && "bg-indigo-50/60")}
                 >
-                  <span className={cn("w-12 text-lg font-bold tabular-nums", scoreTone(t.score))}>{t.score !== null ? `${t.score}%` : "—"}</span>
+                  <span className={cn("w-12 text-lg font-semibold tabular-nums", scoreTone(t.score))}>{t.score !== null ? `${t.score}%` : "—"}</span>
                   <span className="flex-1 text-xs text-zinc-600">
                     <span className="font-medium text-zinc-900">v{t.definition_version}</span> · {t.status === "running" ? "running" : t.status === "cancelled" ? "cancelled" : `${t.passed}/${t.total} passed`}
                     <span className="block text-zinc-400">{timeAgo(t.created_at)}</span>
@@ -210,7 +210,7 @@ function ResultsList({ results }: { results: TestResult[] }) {
             <ResultIcon status={r.status} />
             <span className="min-w-0 flex-1">
               <span className="block text-sm font-medium text-zinc-900">{r.title}</span>
-              <span className="text-[11px] text-zinc-500">{CATEGORY_LABELS[r.category] ?? r.category}</span>
+              <span className="text-xs text-zinc-500">{CATEGORY_LABELS[r.category] ?? r.category}</span>
             </span>
             {r.score !== null && <span className={cn("text-xs font-semibold tabular-nums", scoreTone(r.score * 100))}>{Math.round(r.score * 100)}%</span>}
             {open === r.id ? <ChevronDown className="h-4 w-4 text-zinc-400" /> : <ChevronRight className="h-4 w-4 text-zinc-400" />}
@@ -303,7 +303,7 @@ function CasesTab({
                 key={c}
                 type="button"
                 onClick={() => setGenCats(genCats.includes(c) ? genCats.filter((x) => x !== c) : [...genCats, c])}
-                className={cn("rounded-full border px-2 py-0.5 text-[11px] cursor-pointer", genCats.includes(c) ? "border-indigo-400 bg-indigo-100 text-indigo-800" : "border-zinc-200 text-zinc-500")}
+                className={cn("rounded-full border px-2 py-0.5 text-xs cursor-pointer", genCats.includes(c) ? "border-indigo-400 bg-indigo-100 text-indigo-800" : "border-zinc-200 text-zinc-500")}
               >
                 {CATEGORY_LABELS[c]}
               </button>
@@ -349,7 +349,7 @@ function CasesTab({
             <div className="flex items-start gap-2">
               <button type="button" onClick={() => setOpen(open === c.id ? null : c.id)} className="min-w-0 flex-1 text-left cursor-pointer">
                 <span className="block text-sm font-medium text-zinc-900">{c.title}</span>
-                <span className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-zinc-500">
+                <span className="mt-0.5 inline-flex items-center gap-1 text-xs text-zinc-500">
                   <CircleDashed className="h-3 w-3" /> {CATEGORY_LABELS[c.category] ?? c.category}{c.source === "generated" ? " · by AI" : ""}
                 </span>
               </button>

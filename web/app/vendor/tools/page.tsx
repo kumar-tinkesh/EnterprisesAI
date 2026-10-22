@@ -998,7 +998,7 @@ function ConnectCredentialModal({
                   <Spinner className="h-4 w-4 text-indigo-600" />
                   Testing connection & discovering tools...
                 </span>
-                <span className="text-[10px] font-mono text-indigo-600 uppercase">Connecting</span>
+                <span className="text-xs font-mono text-indigo-600 uppercase">Connecting</span>
               </div>
               <div className="h-2 w-full overflow-hidden rounded-full bg-indigo-200">
                 <div className="h-full bg-gradient-to-r from-indigo-500 via-sky-500 to-emerald-500 animate-pulse rounded-full w-full" />
@@ -1138,7 +1138,7 @@ function AnalyzeRepoModal({
                 </p>
               )}
               {analyzeResult.required_env_vars.length > 0 && (
-                <p className="text-[11px] text-indigo-700 font-medium pt-1">
+                <p className="text-xs text-indigo-700 font-medium pt-1">
                   Detected Credentials needed: {analyzeResult.required_env_vars.join(", ")} (Prompted on Test Connection)
                 </p>
               )}

@@ -86,7 +86,7 @@ export function Category({
 }
 
 export function Badge({ tone = "zinc", children }: { tone?: keyof typeof TONES; children: React.ReactNode }) {
-  return <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-semibold", TONES[tone])}>{children}</span>;
+  return <span className={cn("rounded-full px-2 py-0.5 text-xs font-semibold", TONES[tone])}>{children}</span>;
 }
 
 /** Why the AI chose something — shown next to the thing it chose. */
@@ -133,7 +133,7 @@ export function Stepper({
               >
                 <span
                   className={cn(
-                    "flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-semibold",
+                    "flex h-5 w-5 items-center justify-center rounded-full text-xs font-semibold",
                     on ? "bg-indigo-600 text-white" : seen ? "bg-emerald-100 text-emerald-700" : "bg-zinc-100 text-zinc-500",
                   )}
                 >

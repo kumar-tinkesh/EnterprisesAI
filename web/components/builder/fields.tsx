@@ -9,9 +9,9 @@ import { cn } from "@/lib/utils";
 export function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <label className="block space-y-1">
-      <span className="text-xs font-medium text-zinc-700">{label}</span>
+      <span className="text-sm font-medium text-zinc-700">{label}</span>
       {children}
-      {hint && <span className="block text-[11px] text-zinc-400">{hint}</span>}
+      {hint && <span className="block text-xs text-zinc-500">{hint}</span>}
     </label>
   );
 }
@@ -21,7 +21,7 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, React.TextareaHTML
     <textarea
       ref={ref}
       className={cn(
-        "w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm placeholder:text-zinc-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900",
+        "w-full rounded-md border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text-subtle)] focus-visible:outline-none focus-visible:border-[var(--accent-hover)] focus-visible:ring-2 focus-visible:ring-[var(--accent-wash-strong)]",
         className,
       )}
       {...props}
@@ -34,7 +34,7 @@ export function Select({ className, ...props }: React.SelectHTMLAttributes<HTMLS
   return (
     <select
       className={cn(
-        "h-9 w-full rounded-md border border-zinc-300 bg-white px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900",
+        "h-9 w-full rounded-md border border-[var(--border-strong)] bg-[var(--surface)] px-2 text-sm text-[var(--text)] focus-visible:outline-none focus-visible:border-[var(--accent-hover)] focus-visible:ring-2 focus-visible:ring-[var(--accent-wash-strong)]",
         className,
       )}
       {...props}
@@ -110,7 +110,7 @@ export function BoolParam({ k, label, checked, onChange }: { k: string; label: s
             key={String(v)}
             type="button"
             onClick={() => onChange(v)}
-            className={cn("rounded-md px-2.5 py-1 text-[11px] font-medium cursor-pointer", checked === v ? "bg-indigo-600 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200")}
+            className={cn("rounded-md px-2.5 py-1 text-xs font-medium cursor-pointer", checked === v ? "bg-indigo-600 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200")}
           >
             {v ? "On" : "Off"}
           </button>
@@ -153,7 +153,7 @@ export function Section({ title, children, action }: { title: string; children: 
 
 export function RiskBadge({ risk }: { risk: string }) {
   const tone = risk === "read" ? "bg-emerald-50 text-emerald-700" : risk === "delete" ? "bg-red-50 text-red-700" : "bg-amber-50 text-amber-700";
-  return <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase", tone)}>{risk}</span>;
+  return <span className={cn("rounded px-1.5 py-0.5 text-xs font-semibold uppercase", tone)}>{risk}</span>;
 }
 
 /** JSON object editor: shows text, reports parse errors, calls back with the object. */
@@ -194,7 +194,7 @@ export function JsonField({
           }
         }}
       />
-      {error && <p className="text-[11px] text-red-600">Not valid JSON yet: {error}</p>}
+      {error && <p className="text-xs text-red-600">Not valid JSON yet: {error}</p>}
     </div>
   );
 }

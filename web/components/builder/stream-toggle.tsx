@@ -16,7 +16,7 @@ export function StreamToggle({ className }: { className?: string }) {
       onClick={() => setOn(!on)}
       title={on ? "Answers appear as they're written. Click to get them whole." : "Answers appear when they're done. Click to watch them being written."}
       className={cn(
-        "inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium cursor-pointer",
+        "inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium cursor-pointer",
         on ? "border-indigo-300 bg-indigo-50 text-indigo-700" : "border-zinc-200 text-zinc-500 hover:text-zinc-800",
         className,
       )}

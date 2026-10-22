@@ -72,12 +72,12 @@ export function ToolPicker({
                   </span>
                   <RiskBadge risk={t.risk} />
                   {connected && (
-                    <span className="ml-auto flex shrink-0 items-center gap-0.5 text-[10px] text-emerald-600">
+                    <span className="ml-auto flex shrink-0 items-center gap-0.5 text-xs text-emerald-600">
                       <CheckCircle2 className="h-3 w-3" /> connected
                     </span>
                   )}
                 </div>
-                {t.description && <p className="mt-0.5 line-clamp-2 text-[11px] text-zinc-500">{t.description}</p>}
+                {t.description && <p className="mt-0.5 line-clamp-2 text-xs text-zinc-500">{t.description}</p>}
               </button>
               {!connected && <ConnectButton serverId={t.server_id} token={token} className="m-2 ml-0" />}
             </li>

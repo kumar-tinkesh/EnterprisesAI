@@ -81,7 +81,7 @@ export function VersionHistory({
           {(list.data ?? []).map((v) => (
             <li key={v.id} className={cn("border-b border-zinc-100 px-4 py-3", previewing === v.version && "bg-indigo-50/60")}>
               <div className="flex items-start gap-2">
-                <span className={cn("mt-0.5 rounded px-1.5 py-0.5 text-[10px] font-bold", v.is_current ? "bg-emerald-100 text-emerald-800" : "bg-zinc-100 text-zinc-600")}>
+                <span className={cn("mt-0.5 rounded px-1.5 py-0.5 text-xs font-semibold", v.is_current ? "bg-emerald-100 text-emerald-800" : "bg-zinc-100 text-zinc-600")}>
                   v{v.version}
                 </span>
                 <div className="min-w-0 flex-1">

@@ -50,7 +50,7 @@ export function UserShell({ fullBleed, children }: { fullBleed?: boolean; childr
   };
 
   return (
-    <div className="flex h-dvh flex-col overflow-hidden bg-zinc-950 md:flex-row">
+    <div className="flex h-dvh flex-col overflow-hidden bg-[var(--bg)] md:flex-row">
       {/* Phone: a top bar opens the sidebar as a drawer. */}
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-zinc-200 bg-white px-3 md:hidden">
         <button type="button" onClick={() => setDrawer(true)} aria-label="Open menu" className="rounded-md p-1.5 text-zinc-600 hover:bg-zinc-100 cursor-pointer">
@@ -85,10 +85,10 @@ export function UserShell({ fullBleed, children }: { fullBleed?: boolean; childr
 function Brand({ collapsed }: { collapsed?: boolean }) {
   return (
     <Link href="/user" className="flex min-w-0 items-center gap-2">
-      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-500 to-violet-500 text-white">
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-[var(--accent)] text-white">
         <Sparkles className="h-4 w-4" />
       </span>
-      {!collapsed && <span className="truncate text-sm font-bold text-zinc-900">EnterpriseAI</span>}
+      {!collapsed && <span className="truncate text-sm font-semibold tracking-tight text-zinc-900">EnterpriseAI</span>}
     </Link>
   );
 }
@@ -117,7 +117,7 @@ function SidebarBody({ pathname, collapsed, onToggle }: { pathname: string; coll
         )}
       </div>
 
-      <nav className="flex-1 space-y-1 overflow-y-auto p-2" aria-label="Main">
+      <nav className="flex-1 space-y-0.5 overflow-y-auto p-2" aria-label="Main">
         {NAV.map(({ href, label, Icon }) => {
           const active = href === "/user" ? pathname === "/user" : pathname.startsWith(href);
           return (
@@ -127,12 +127,12 @@ function SidebarBody({ pathname, collapsed, onToggle }: { pathname: string; coll
               title={collapsed ? label : undefined}
               aria-current={active ? "page" : undefined}
               className={cn(
-                "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
                 collapsed && "justify-center px-0",
-                active ? "bg-indigo-50 text-indigo-700" : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900",
+                active ? "bg-[var(--surface-strong)] text-[var(--text)]" : "text-zinc-500 hover:bg-zinc-50 hover:text-zinc-900",
               )}
             >
-              <Icon className={cn("h-4 w-4 shrink-0", active ? "text-indigo-600" : "text-zinc-400")} />
+              <Icon className={cn("h-4 w-4 shrink-0", active ? "text-[var(--link)]" : "text-zinc-400")} />
               {!collapsed && <span className="truncate">{label}</span>}
             </Link>
           );
@@ -146,7 +146,7 @@ function SidebarBody({ pathname, collapsed, onToggle }: { pathname: string; coll
             {!collapsed && (
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium text-zinc-900">{user.full_name || user.email}</p>
-                <p className="truncate text-[11px] text-zinc-500">{team ? "Team workspace" : "Personal workspace"}</p>
+                <p className="truncate text-xs text-zinc-500">{team ? "Team workspace" : "Personal workspace"}</p>
               </div>
             )}
           </div>
@@ -158,7 +158,7 @@ function SidebarBody({ pathname, collapsed, onToggle }: { pathname: string; coll
             router.replace("/auth");
           }}
           title={user ? `Sign out (${user.email})` : "Sign out"}
-          className={cn("flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-zinc-600 hover:bg-red-50 hover:text-red-700 cursor-pointer", collapsed && "justify-center px-0")}
+          className={cn("flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm text-zinc-500 hover:bg-zinc-50 hover:text-zinc-900 cursor-pointer", collapsed && "justify-center px-0")}
         >
           <LogOut className="h-4 w-4 shrink-0" />
           {!collapsed && "Sign out"}

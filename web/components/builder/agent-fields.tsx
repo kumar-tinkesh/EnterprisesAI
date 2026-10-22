@@ -37,7 +37,7 @@ function Chips({ options, value, onChange }: { options: [string, string][]; valu
             type="button"
             aria-pressed={on}
             onClick={() => onChange(on ? value.filter((v) => v !== id) : [...value, id])}
-            className={cn("rounded-full border px-2.5 py-1 text-[11px] font-medium cursor-pointer", on ? "border-indigo-300 bg-indigo-50 text-indigo-700" : "border-zinc-200 text-zinc-500 hover:text-zinc-800")}
+            className={cn("rounded-full border px-2.5 py-1 text-xs font-medium cursor-pointer", on ? "border-indigo-300 bg-indigo-50 text-indigo-700" : "border-zinc-200 text-zinc-500 hover:text-zinc-800")}
           >
             {label}
           </button>
@@ -115,7 +115,7 @@ export function AgentFields({
         type="button"
         disabled={improve.isPending || !(value[field] ?? "").trim()}
         onClick={() => improve.mutate({ field, text: value[field] ?? "" })}
-        className="inline-flex items-center gap-1 text-[11px] font-medium text-indigo-600 hover:text-indigo-800 disabled:opacity-40 cursor-pointer"
+        className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-800 disabled:opacity-40 cursor-pointer"
       >
         {improve.isPending && improve.variables?.field === field ? <Spinner className="h-3 w-3" /> : <Sparkles className="h-3 w-3" />}
         Improve
@@ -288,21 +288,21 @@ export function AgentFields({
         {missing.map((m) => (
           m.removed ? (
             <div key={m.serverId} className="mt-2 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1.5">
-              <p className="min-w-0 flex-1 text-[11px] text-red-800">
+              <p className="min-w-0 flex-1 text-xs text-red-800">
                 {m.tools.length === 1 ? "A tool" : `${m.tools.length} tools`} belong to a system that was removed or isn&apos;t available to you — remove {m.tools.length === 1 ? "it" : "them"} and add the new system&apos;s tools.
               </p>
               {!readOnly && editable("tool_ids") && (
-                <button type="button" onClick={() => setConfig({ tool_ids: toolIds.filter((t) => !m.tools.includes(t)) })} className="shrink-0 rounded-md border border-red-300 px-2 py-0.5 text-[11px] font-medium text-red-700 hover:bg-red-100 cursor-pointer">
+                <button type="button" onClick={() => setConfig({ tool_ids: toolIds.filter((t) => !m.tools.includes(t)) })} className="shrink-0 rounded-md border border-red-300 px-2 py-0.5 text-xs font-medium text-red-700 hover:bg-red-100 cursor-pointer">
                   Remove
                 </button>
               )}
             </div>
           ) : (
             <div key={m.serverId} className="mt-2 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5">
-              <p className="min-w-0 flex-1 text-[11px] text-amber-800">
+              <p className="min-w-0 flex-1 text-xs text-amber-800">
                 <span className="font-semibold">{m.name}</span> isn&apos;t connected for you — {m.tools.length === 1 ? "its tool" : `its ${m.tools.length} tools`} won&apos;t run.
               </p>
-              <ConnectButton serverId={m.serverId} token={token} className="px-2 py-0.5 text-[11px]" />
+              <ConnectButton serverId={m.serverId} token={token} className="px-2 py-0.5 text-xs" />
             </div>
           )
         ))}

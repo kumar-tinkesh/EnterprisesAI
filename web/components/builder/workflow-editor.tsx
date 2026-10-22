@@ -717,7 +717,7 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
                     className={cn("flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs hover:bg-zinc-100 cursor-pointer", w.id === id ? "text-indigo-600" : "text-zinc-700")}
                   >
                     <span className="min-w-0 flex-1 truncate">{w.name}</span>
-                    <span className="text-[10px] text-zinc-400">{w.node_count} steps</span>
+                    <span className="text-xs text-zinc-400">{w.node_count} steps</span>
                   </button>
                 ))}
               </div>
@@ -726,7 +726,7 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
           <Input aria-label="Workflow name" className="h-8 w-full min-w-0 max-w-56 border-transparent font-semibold hover:border-zinc-200" value={doc.name} disabled={!canManage || previewing} onChange={(e) => change((d) => ({ ...d, name: e.target.value }))} />
           <span className={cn("shrink-0 text-xs", dirty ? "text-amber-600" : "text-zinc-400")}>{!canManage ? "View only — shared by a teammate" : dirty ? "Unsaved changes" : "Saved"}</span>
           {problems.length > 0 && (
-            <span className="flex shrink-0 items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-700" title={problems.map((p) => p.message).join("\n")}>
+            <span className="flex shrink-0 items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700" title={problems.map((p) => p.message).join("\n")}>
               <AlertTriangle className="h-3 w-3" /> {problems.length}
             </span>
           )}
@@ -883,13 +883,13 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
                             <span className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-gradient-to-br text-white", look.head)}><look.Icon className="h-3.5 w-3.5" /></span>
                             <span className="min-w-0">
                               <span className="block text-xs font-semibold text-zinc-900">{look.label}</span>
-                              <span className="block truncate text-[11px] text-zinc-500">{look.hint}</span>
+                              <span className="block truncate text-xs text-zinc-500">{look.hint}</span>
                             </span>
                           </div>
                         );
                       })}
                     </div>
-                    <p className="pb-3 text-center text-[11px] text-zinc-400">Click or drag onto the canvas</p>
+                    <p className="pb-3 text-center text-xs text-zinc-400">Click or drag onto the canvas</p>
                   </div>
                 )}
 
@@ -987,7 +987,7 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
                 {canvasRunId && runCardOpen && !playOpen && !panelOpen && (
                   <div className="absolute bottom-3 right-3 z-20 w-96 max-w-[calc(100%-1.5rem)] rounded-xl border border-zinc-200 bg-white p-3 shadow-lg">
                     <div className="mb-2 flex items-center gap-2">
-                      <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-semibold",
+                      <span className={cn("rounded-full px-2 py-0.5 text-xs font-semibold",
                         canvasRun.view.status === "succeeded" ? "bg-emerald-100 text-emerald-700" : canvasRun.view.status === "failed" ? "bg-red-100 text-red-700" : canvasRun.view.status === "waiting" ? "bg-amber-100 text-amber-800" : "bg-sky-100 text-sky-700")}>
                         {canvasRun.view.status ?? "starting"}
                       </span>
@@ -1013,8 +1013,8 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
                         </>
                       )}
                       {canvasRun.view.status === "failed" && canvasRun.view.error && <p className="text-xs text-red-600">{canvasRun.view.error}</p>}
-                      {canvasRun.view.guardrails.map((g, i) => <p key={i} className="text-[11px] text-amber-700">Guardrail: {g.message}</p>)}
-                      {canvasRun.view.sources.length > 0 && <p className="text-[11px] text-zinc-500">Sources: {canvasRun.view.sources.join(", ")}</p>}
+                      {canvasRun.view.guardrails.map((g, i) => <p key={i} className="text-xs text-amber-700">Guardrail: {g.message}</p>)}
+                      {canvasRun.view.sources.length > 0 && <p className="text-xs text-zinc-500">Sources: {canvasRun.view.sources.join(", ")}</p>}
                     </div>
                   </div>
                 )}
@@ -1054,7 +1054,7 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
             !aiEdit.isPending && !instruction.trim() && canManage && !previewing ? (
               <div className="flex flex-wrap gap-1.5">
                 {CHIPS.map((chip) => (
-                  <button key={chip} type="button" onClick={() => setInstruction(chip)} className="rounded-full border border-white/10 bg-zinc-900/90 px-3 py-1 text-[11px] font-medium text-zinc-400 hover:border-indigo-400/40 hover:bg-indigo-500/10 hover:text-zinc-100 cursor-pointer">
+                  <button key={chip} type="button" onClick={() => setInstruction(chip)} className="rounded-full border border-white/10 bg-zinc-900/90 px-3 py-1 text-xs font-medium text-zinc-400 hover:border-indigo-400/40 hover:bg-indigo-500/10 hover:text-zinc-100 cursor-pointer">
                     ✨ {chip}
                   </button>
                 ))}

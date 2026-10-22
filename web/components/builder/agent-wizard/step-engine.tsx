@@ -51,7 +51,7 @@ export function EngineStep({ token, draft, update, insights, profiles }: StepPro
                       {p.label}
                       {aiPick === p.id && <Badge tone="indigo">AI pick</Badge>}
                     </span>
-                    <span className="mt-0.5 block text-[11px] leading-snug text-zinc-500">{p.summary}</span>
+                    <span className="mt-0.5 block text-xs leading-snug text-zinc-500">{p.summary}</span>
                   </span>
                 </button>
               );
@@ -59,7 +59,7 @@ export function EngineStep({ token, draft, update, insights, profiles }: StepPro
           </div>
         )}
         {profiles.length > 0 && !current && (
-          <p className="text-[11px] text-amber-700">Custom — you changed the settings below. Pick a profile to reset them.</p>
+          <p className="text-xs text-amber-700">Custom — you changed the settings below. Pick a profile to reset them.</p>
         )}
       </Category>
 

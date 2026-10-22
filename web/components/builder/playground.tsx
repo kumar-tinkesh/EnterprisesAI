@@ -230,7 +230,7 @@ export function Playground({
           <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-3">
             <p className="mb-1 text-xs font-semibold text-emerald-800">Answer</p>
             <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-800">{view.output}</div>
-            {view.sources.length > 0 && <p className="mt-2 text-[11px] text-zinc-500">Sources: {view.sources.join(", ")}</p>}
+            {view.sources.length > 0 && <p className="mt-2 text-xs text-zinc-500">Sources: {view.sources.join(", ")}</p>}
           </div>
         )}
         {view.status === "failed" && view.error && <p className="rounded-lg bg-red-50 p-3 text-xs text-red-700">{view.error}</p>}

@@ -75,7 +75,7 @@ export function ChatStep({ draft, update }: StepProps) {
               </button>
             </div>
           )}
-          {starters.length === 0 && <p className="text-[11px] text-zinc-400">None yet: the chat shows general questions instead.</p>}
+          {starters.length === 0 && <p className="text-xs text-zinc-400">None yet: the chat shows general questions instead.</p>}
         </div>
       </Category>
 
@@ -86,7 +86,7 @@ export function ChatStep({ draft, update }: StepProps) {
             <Input className="h-8 w-28 text-xs" type="number" min={5} max={200} value={memory.max_items} onChange={(e) => setMemory({ max_items: Math.max(5, Math.min(200, Number(e.target.value) || 50)) })} />
           </Field>
         )}
-        <p className="rounded-lg bg-zinc-50 p-2.5 text-[11px] leading-relaxed text-zinc-500">
+        <p className="rounded-lg bg-zinc-50 p-2.5 text-xs leading-relaxed text-zinc-500">
           Each person&apos;s memories are private to them, like their chats. Runs through a published key or a webhook never read or save them.
         </p>
       </Category>
@@ -125,7 +125,7 @@ export function MyMemories({ agentId, token }: { agentId: string; token: string 
             type="button"
             disabled={forgetAll.isPending}
             onClick={() => window.confirm("Forget everything it remembers about you?") && forgetAll.mutate()}
-            className="text-[11px] font-medium text-red-600 hover:underline disabled:opacity-50 cursor-pointer"
+            className="text-xs font-medium text-red-600 hover:underline disabled:opacity-50 cursor-pointer"
           >
             Forget all
           </button>
@@ -134,13 +134,13 @@ export function MyMemories({ agentId, token }: { agentId: string; token: string 
       {memories.isLoading ? (
         <div className="flex justify-center py-2"><Spinner className="h-4 w-4 text-zinc-400" /></div>
       ) : list.length === 0 ? (
-        <p className="text-[11px] text-zinc-400">Nothing yet. It saves facts as you chat, or add one yourself.</p>
+        <p className="text-xs text-zinc-400">Nothing yet. It saves facts as you chat, or add one yourself.</p>
       ) : (
         <ul className="max-h-56 space-y-1 overflow-y-auto">
           {list.map((m) => (
             <li key={m.id} className="group flex items-start gap-2 rounded-lg bg-violet-50/60 px-2.5 py-1.5 text-xs text-zinc-700">
               <span className="min-w-0 flex-1 break-words">{m.content}</span>
-              <span className="shrink-0 text-[10px] text-zinc-400">{m.source_run_id ? "learned" : "added"}</span>
+              <span className="shrink-0 text-xs text-zinc-400">{m.source_run_id ? "learned" : "added"}</span>
               <button type="button" aria-label="Forget this" onClick={() => forget.mutate(m.id)} className="shrink-0 text-zinc-400 hover:text-red-600 cursor-pointer">
                 <Trash2 className="h-3.5 w-3.5" />
               </button>
@@ -160,7 +160,7 @@ export function MyMemories({ agentId, token }: { agentId: string; token: string 
           {add.isPending ? <Spinner className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />} Remember
         </button>
       </form>
-      {error && <p className="text-[11px] text-red-600">{error}</p>}
+      {error && <p className="text-xs text-red-600">{error}</p>}
     </div>
   );
 }

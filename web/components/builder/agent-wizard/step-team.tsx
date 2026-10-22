@@ -56,7 +56,7 @@ export function TeamStep({ token, draft, update, agentId }: StepProps & { agentI
                   <Bot className="mt-0.5 h-3.5 w-3.5 shrink-0 text-indigo-400" />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate font-medium text-zinc-900">{a.name}</span>
-                    <span className="block truncate text-[11px] text-zinc-500">{a.role}{a.goal ? ` · ${a.goal}` : ""}</span>
+                    <span className="block truncate text-xs text-zinc-500">{a.role}{a.goal ? ` · ${a.goal}` : ""}</span>
                   </span>
                 </button>
               </li>
@@ -65,14 +65,14 @@ export function TeamStep({ token, draft, update, agentId }: StepProps & { agentI
         </ul>
       )}
       {missing.length > 0 && (
-        <p className="rounded-lg bg-amber-50 p-2 text-[11px] text-amber-800">
+        <p className="rounded-lg bg-amber-50 p-2 text-xs text-amber-800">
           {missing.length} picked agent{missing.length === 1 ? " was" : "s were"} deleted.{" "}
           <button type="button" className="font-medium underline cursor-pointer" onClick={() => update({ ...draft, config: { ...config, sub_agent_ids: team.filter((id) => !missing.includes(id)) } })}>
             Remove {missing.length === 1 ? "it" : "them"}
           </button>
         </p>
       )}
-      <p className="rounded-lg bg-zinc-50 p-2.5 text-[11px] leading-relaxed text-zinc-500">
+      <p className="rounded-lg bg-zinc-50 p-2.5 text-xs leading-relaxed text-zinc-500">
         A helper runs as the same person, with its own tools and knowledge, and can&apos;t hand tasks on again. It asks before data-changing tools by the stricter of the two agents&apos; rules.
       </p>
     </Category>

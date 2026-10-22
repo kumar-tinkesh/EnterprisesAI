@@ -93,7 +93,7 @@ export default function TenantDashboard() {
           <div className="flex items-center gap-2 text-zinc-500">
             <Building2 className="h-5 w-5 text-indigo-600" /> Workspaces
           </div>
-          <p className="mt-2 text-3xl font-bold text-zinc-900">
+          <p className="mt-2 text-3xl font-semibold text-zinc-900">
             {statsLoading ? "…" : stats?.workspace_count ?? 0}
           </p>
         </div>
@@ -101,7 +101,7 @@ export default function TenantDashboard() {
           <div className="flex items-center gap-2 text-zinc-500">
             <Users className="h-5 w-5 text-violet-600" /> Members
           </div>
-          <p className="mt-2 text-3xl font-bold text-zinc-900">
+          <p className="mt-2 text-3xl font-semibold text-zinc-900">
             {statsLoading ? "…" : stats?.member_count ?? 0}
           </p>
         </div>

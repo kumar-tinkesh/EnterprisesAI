@@ -178,7 +178,7 @@ function Preview({
       )}
 
       {draft && (
-        <ul className="pointer-events-none absolute left-3 top-3 flex flex-wrap gap-x-3 gap-y-1 rounded-lg bg-zinc-900/80 px-2.5 py-1.5 text-[11px] text-zinc-400" aria-label="Legend">
+        <ul className="pointer-events-none absolute left-3 top-3 flex flex-wrap gap-x-3 gap-y-1 rounded-lg bg-zinc-900/80 px-2.5 py-1.5 text-xs text-zinc-400" aria-label="Legend">
           <li className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-indigo-400" />Agent</li>
           <li className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-emerald-400" />Tool</li>
           <li className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-violet-400" />Documents</li>

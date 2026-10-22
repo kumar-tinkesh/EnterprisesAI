@@ -65,7 +65,7 @@ function PanelHeader({
       )}
       <div className="min-w-0 flex-1">
         <h2 className="truncate text-sm font-semibold text-zinc-900">{title}</h2>
-        {subtitle && <p className="truncate text-[11px] text-zinc-500">{subtitle}</p>}
+        {subtitle && <p className="truncate text-xs text-zinc-500">{subtitle}</p>}
       </div>
       {onDelete && (
         <button type="button" aria-label={deleteLabel} title={deleteLabel} onClick={onDelete} className="rounded-md p-1.5 text-zinc-400 hover:bg-red-50 hover:text-red-600 cursor-pointer">
@@ -87,7 +87,7 @@ function Fold({ title, summary, defaultOpen = false, children }: { title: string
       <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="flex w-full items-center gap-2 px-3.5 py-2.5 text-left cursor-pointer hover:bg-zinc-50">
         <span className="min-w-0 flex-1">
           <span className="block text-xs font-semibold text-zinc-900">{title}</span>
-          {!open && <span className="block truncate text-[11px] text-zinc-500">{summary}</span>}
+          {!open && <span className="block truncate text-xs text-zinc-500">{summary}</span>}
         </span>
         {open ? <ChevronDown className="h-4 w-4 text-zinc-400" /> : <ChevronRight className="h-4 w-4 text-zinc-400" />}
       </button>
@@ -297,7 +297,7 @@ function ToolStep({ node, token, onChange }: { node: WorkflowNode; token: string
             <div className="flex items-center gap-1.5">
               <span className="text-sm font-semibold text-zinc-900">{server.data ? `${server.data.server_name}.` : ""}{toolName(node.tool_id)}</span>
               {tool && <RiskBadge risk={tool.risk.risk} />}
-              {server.data && !server.data.connected && <span className="ml-auto text-[10px] text-amber-600">connect first</span>}
+              {server.data && !server.data.connected && <span className="ml-auto text-xs text-amber-600">connect first</span>}
             </div>
             {tool?.description && <p className="mt-1 text-xs text-zinc-500">{tool.description}</p>}
             <button type="button" className="mt-1 text-xs text-indigo-600 cursor-pointer" onClick={() => onChange({ tool_id: null, tool_args: null })}>

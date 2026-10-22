@@ -362,10 +362,10 @@ export function ChatPanel({
           {!embedded && (
             <p className="flex items-center gap-1.5">
               <span className="truncate text-sm font-semibold text-zinc-900">{name}</span>
-              <span className="hidden shrink-0 rounded-full bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium capitalize text-zinc-500 sm:inline">{kind}</span>
+              <span className="hidden shrink-0 rounded-full bg-zinc-100 px-1.5 py-0.5 text-xs font-medium capitalize text-zinc-500 sm:inline">{kind}</span>
             </p>
           )}
-          <p className={cn("truncate text-zinc-500", embedded ? "text-xs font-medium" : "text-[11px]")}>{chat ? chat.title : "New chat"}</p>
+          <p className={cn("truncate text-zinc-500", embedded ? "text-xs font-medium" : "text-xs")}>{chat ? chat.title : "New chat"}</p>
         </div>
         <button
           type="button"
@@ -475,7 +475,7 @@ export function ChatPanel({
                   {showDay && (
                     <div className="flex items-center gap-3" aria-hidden>
                       <span className="h-px flex-1 bg-zinc-200" />
-                      <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400">{dayLabel(run.created_at)}</span>
+                      <span className="text-xs font-semibold uppercase tracking-wider text-zinc-400">{dayLabel(run.created_at)}</span>
                       <span className="h-px flex-1 bg-zinc-200" />
                     </div>
                   )}
@@ -517,7 +517,7 @@ export function ChatPanel({
           <button
             type="button"
             onClick={() => end.current?.scrollIntoView({ behavior: "smooth", block: "end" })}
-            className="absolute bottom-3 left-1/2 z-10 inline-flex -translate-x-1/2 items-center gap-1 rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-[11px] font-medium text-zinc-700 shadow-lg hover:text-zinc-900 cursor-pointer"
+            className="absolute bottom-3 left-1/2 z-10 inline-flex -translate-x-1/2 items-center gap-1 rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-lg hover:text-zinc-900 cursor-pointer"
           >
             <ArrowDown className="h-3 w-3" /> Jump to latest
           </button>
@@ -555,7 +555,7 @@ export function ChatPanel({
                 className="flex w-full items-center gap-1.5 px-3 py-2 text-xs font-medium text-zinc-700 cursor-pointer"
               >
                 <SlidersHorizontal className="h-3.5 w-3.5 text-zinc-400" /> Inputs
-                {missingRequired.length > 0 && <span className="text-[11px] font-normal text-amber-700">· {missingRequired.length} required</span>}
+                {missingRequired.length > 0 && <span className="text-xs font-normal text-amber-700">· {missingRequired.length} required</span>}
                 <ChevronDown className={cn("ml-auto h-3.5 w-3.5 text-zinc-400 transition-transform", showInputs && "rotate-180")} />
               </button>
               {showInputs && (
@@ -597,8 +597,8 @@ export function ChatPanel({
               {files.map((f) => (
                 <FileChip key={f.id} file={f} onRemove={() => setFiles((cur) => cur.filter((x) => x.id !== f.id))} />
               ))}
-              {uploading > 0 && <span className="inline-flex items-center gap-1.5 text-[11px] text-zinc-500"><Spinner className="h-3 w-3" /> Reading {uploading} file{uploading === 1 ? "" : "s"}…</span>}
-              {fileError && <span className="text-[11px] text-red-600">{fileError}</span>}
+              {uploading > 0 && <span className="inline-flex items-center gap-1.5 text-xs text-zinc-500"><Spinner className="h-3 w-3" /> Reading {uploading} file{uploading === 1 ? "" : "s"}…</span>}
+              {fileError && <span className="text-xs text-red-600">{fileError}</span>}
             </div>
           )}
 
@@ -654,7 +654,7 @@ export function ChatPanel({
               onChange={(e) => setDepth(e.target.value as AnswerDepth)}
               aria-label="How long an answer"
               title="How long an answer"
-              className="mb-0.5 h-8 shrink-0 rounded-lg border border-zinc-200 bg-zinc-50 px-1.5 text-[11px] text-zinc-600"
+              className="mb-0.5 h-8 shrink-0 rounded-lg border border-zinc-200 bg-zinc-50 px-1.5 text-xs text-zinc-600"
             >
               {DEPTHS.map((d) => <option key={d.id} value={d.id}>{d.label}</option>)}
             </select>
@@ -680,7 +680,7 @@ export function ChatPanel({
               </button>
             )}
           </form>
-          <p className="text-center text-[10px] text-zinc-400">
+          <p className="text-center text-xs text-zinc-400">
             Runs with your connected accounts.{" "}
             {kind === "agent"
               ? remembers

@@ -122,7 +122,7 @@ function Chip({ children, tone = "zinc", title }: { children: React.ReactNode; t
     violet: "border-violet-400/30 bg-violet-500/10 text-violet-200",
     sky: "border-sky-400/30 bg-sky-500/10 text-sky-300",
   };
-  return <span title={title} className={cn("inline-flex max-w-full items-center gap-1 truncate rounded-md border px-1.5 py-0.5 text-[11px]", tones[tone])}>{children}</span>;
+  return <span title={title} className={cn("inline-flex max-w-full items-center gap-1 truncate rounded-md border px-1.5 py-0.5 text-xs", tones[tone])}>{children}</span>;
 }
 
 /** "N tools" on an agent step; click it for the list (in a layer of its own,
@@ -152,7 +152,7 @@ function ToolsChip({ toolIds, changed, token }: { toolIds: string[]; changed: bo
           setAt(at || !r ? null : { top: r.bottom + 4, left: r.left });
         }}
         className={cn(
-          "nodrag inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] cursor-pointer",
+          "nodrag inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-xs cursor-pointer",
           offline.size
             ? "border-red-400/40 bg-red-500/10 text-red-300 hover:bg-red-500/20"
             : changed ? "border-amber-400/30 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20" : "border-violet-400/30 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20",
@@ -167,18 +167,18 @@ function ToolsChip({ toolIds, changed, token }: { toolIds: string[]; changed: bo
           <>
             <div className="fixed inset-0 z-[999]" onClick={() => setAt(null)} />
             <div style={at} className="fixed z-[1000] max-h-72 w-64 overflow-y-auto rounded-lg border border-white/10 bg-zinc-900 p-1.5 shadow-2xl">
-              <p className="px-1.5 pb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Tools this step can call</p>
+              <p className="px-1.5 pb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">Tools this step can call</p>
               {toolIds.map((id) => (
-                <p key={id} title={id} className="flex items-center gap-1.5 truncate rounded px-1.5 py-1 text-[11px] text-zinc-200 hover:bg-white/5">
+                <p key={id} title={id} className="flex items-center gap-1.5 truncate rounded px-1.5 py-1 text-xs text-zinc-200 hover:bg-white/5">
                   {offline.has(id) ? <Unplug className="h-3 w-3 shrink-0 text-red-400" /> : <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-400" />}
                   <span className="truncate">{toolName(id)}</span>
-                  {offline.has(id) && <span className="ml-auto shrink-0 text-[10px] text-red-300">{removed.has(id) ? "system removed" : "not connected"}</span>}
+                  {offline.has(id) && <span className="ml-auto shrink-0 text-xs text-red-300">{removed.has(id) ? "system removed" : "not connected"}</span>}
                 </p>
               ))}
               {connectable.length > 0 && (
                 <div className="mt-1 space-y-1 border-t border-white/10 px-1.5 pt-1.5">
                   {connectable.map((m) => (
-                    <ConnectButton key={m.serverId} serverId={m.serverId} serverName={m.name} token={token} className="w-full justify-center px-2 py-1 text-[11px]" />
+                    <ConnectButton key={m.serverId} serverId={m.serverId} serverName={m.name} token={token} className="w-full justify-center px-2 py-1 text-xs" />
                   ))}
                 </div>
               )}
@@ -188,7 +188,7 @@ function ToolsChip({ toolIds, changed, token }: { toolIds: string[]; changed: bo
         )}
       {/* Right on the card too, so it's clear before pressing Run. */}
       {connectable.map((m) => (
-        <ConnectButton key={m.serverId} serverId={m.serverId} serverName={m.name} token={token} className="rounded-md px-1.5 py-0.5 text-[11px]" />
+        <ConnectButton key={m.serverId} serverId={m.serverId} serverName={m.name} token={token} className="rounded-md px-1.5 py-0.5 text-xs" />
       ))}
     </>
   );
@@ -217,7 +217,7 @@ function ToolBody({ node, ctx }: { node: WorkflowNode; ctx: CanvasCtx }) {
           server.data.connected ? (
             <Chip tone="emerald"><CheckCircle2 className="h-3 w-3" /> {server.data.server_name}</Chip>
           ) : (
-            <ConnectButton serverId={serverId!} serverName={server.data.server_name} token={ctx.token} className="rounded-full px-2 py-0.5 text-[11px]" />
+            <ConnectButton serverId={serverId!} serverName={server.data.server_name} token={ctx.token} className="rounded-full px-2 py-0.5 text-xs" />
           )
         ) : (
           <Chip>…</Chip>
@@ -234,7 +234,7 @@ function ToolBody({ node, ctx }: { node: WorkflowNode; ctx: CanvasCtx }) {
         {!server.data && <option>{toolName(node.tool_id)}</option>}
         {server.data?.tools.map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
       </select>
-      <div className="flex flex-wrap gap-x-3 text-[11px]">
+      <div className="flex flex-wrap gap-x-3 text-xs">
         <button type="button" className="nodrag text-indigo-300 hover:text-indigo-200 cursor-pointer" onClick={() => ctx.open(node.id)}>
           {pinned ? `${pinned} pinned value${pinned === 1 ? "" : "s"}` : "+ Pin a fixed value"}
         </button>
@@ -251,7 +251,7 @@ function Body({ node, ctx }: { node: WorkflowNode; ctx: CanvasCtx }) {
     case "input":
       return (
         <div>
-          <p className="mb-1.5 text-center text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Start trigger query</p>
+          <p className="mb-1.5 text-center text-xs font-semibold uppercase tracking-wider text-zinc-500">Start trigger query</p>
           <textarea
             aria-label="Start trigger query"
             className="nodrag nowheel h-16 w-full resize-none rounded-lg border border-white/10 bg-white/5 px-2.5 py-2 text-xs text-zinc-100 placeholder:text-zinc-500 focus:border-indigo-400 focus:outline-none"
@@ -331,7 +331,7 @@ function ToolButton({ label, danger, onClick, children }: { label: string; dange
         onClick();
       }}
       className={cn(
-        "nodrag flex h-7 items-center gap-1 rounded-md px-1.5 text-[11px] font-medium text-zinc-300 transition-colors cursor-pointer [&_svg]:h-3.5 [&_svg]:w-3.5",
+        "nodrag flex h-7 items-center gap-1 rounded-md px-1.5 text-xs font-medium text-zinc-300 transition-colors cursor-pointer [&_svg]:h-3.5 [&_svg]:w-3.5",
         danger ? "hover:bg-red-500/15 hover:text-red-300" : "hover:bg-white/10 hover:text-white",
       )}
     >
@@ -429,9 +429,9 @@ function FlowNodeView({ data, selected }: NodeProps<FlowNodeType>) {
           <p className="truncate text-[13px] font-semibold text-zinc-100">{data.title !== look.label ? data.title : look.label}</p>
           <p className="truncate text-[10.5px] text-zinc-400">{data.title !== look.label ? look.label : look.hint}</p>
         </div>
-        <span className={cn("shrink-0 rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider ring-1", look.tag)}>{look.badge}</span>
+        <span className={cn("shrink-0 rounded px-1.5 py-0.5 text-xs font-semibold uppercase tracking-wider ring-1", look.tag)}>{look.badge}</span>
         {hasProblems && (
-          <span className="flex items-center gap-0.5 rounded-full bg-red-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-red-300">
+          <span className="flex items-center gap-0.5 rounded-full bg-red-500/15 px-1.5 py-0.5 text-xs font-semibold text-red-300">
             <AlertTriangle className="h-3 w-3" /> {data.problems.length}
           </span>
         )}

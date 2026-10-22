@@ -60,7 +60,7 @@ export function DescribeStep({
           }}
           className="text-sm leading-relaxed"
         />
-        <div className="flex items-center justify-between gap-2 text-[11px] text-zinc-400">
+        <div className="flex items-center justify-between gap-2 text-xs text-zinc-400">
           <span>Say what it should do, which apps it works with, and anything it must never do.</span>
           <span className="shrink-0 tabular-nums">{description.length}/{MAX}</span>
         </div>
@@ -79,7 +79,7 @@ export function DescribeStep({
           </Button>
         </div>
         {hasDraft && !generating && (
-          <p className="text-[11px] text-amber-700">Designing again replaces the name, tools and settings you have now.</p>
+          <p className="text-xs text-amber-700">Designing again replaces the name, tools and settings you have now.</p>
         )}
       </form>
 
@@ -113,7 +113,7 @@ export function DescribeStep({
                     {ex.title}
                     <ArrowRight className="h-3.5 w-3.5 text-zinc-400 group-hover:text-indigo-600" />
                   </span>
-                  <span className="mt-1 block text-[11px] leading-snug text-zinc-500">{ex.text}</span>
+                  <span className="mt-1 block text-xs leading-snug text-zinc-500">{ex.text}</span>
                 </button>
               </li>
             ))}

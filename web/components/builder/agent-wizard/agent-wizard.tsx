@@ -223,7 +223,7 @@ function AgentWizard({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
         <Sparkles className="h-4 w-4 shrink-0 text-indigo-600" />
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-semibold text-zinc-900">{w.createdId ? "Agent saved" : "New agent"}{draft?.name ? ` · ${draft.name}` : ""}</p>
-          <p className="hidden truncate text-[11px] text-zinc-500 sm:block">{w.createdId ? "Test it here, or Configure it any time in the editor." : "Save any time; you can finish the setup later."}</p>
+          <p className="hidden truncate text-xs text-zinc-500 sm:block">{w.createdId ? "Test it here, or Configure it any time in the editor." : "Save any time; you can finish the setup later."}</p>
         </div>
         {/* Narrow screens show one side at a time. */}
         <div className="inline-flex shrink-0 rounded-lg border border-zinc-200 p-0.5 lg:hidden" role="tablist" aria-label="Show">
@@ -295,7 +295,7 @@ function AgentWizard({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
                 <div ref={panel} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
                   <div className="mx-auto max-w-2xl space-y-4 p-3 sm:p-5">
                     <div>
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-indigo-600">Step {at + 1} of {WIZARD_STEPS.length}</p>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-indigo-600">Step {at + 1} of {WIZARD_STEPS.length}</p>
                       <h2 className="mt-0.5 text-lg font-semibold text-zinc-900">{meta.title}</h2>
                       <p className="mt-1 text-xs leading-relaxed text-zinc-500">{meta.hint}</p>
                     </div>
@@ -329,7 +329,7 @@ function AgentWizard({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
                     <Button variant="outline" size="sm" onClick={goBack} disabled={create.isPending} aria-label="Back">
                       <ArrowLeft /> <span className="hidden min-[400px]:inline">Back</span>
                     </Button>
-                    <span className="flex-1 text-center text-[11px] text-zinc-400">
+                    <span className="flex-1 text-center text-xs text-zinc-400">
                       {!canSave ? "Give it a name to save it" : w.step === "review" && blocked ? "Saves now; finish the red items in the editor" : `${at + 1} / ${WIZARD_STEPS.length}`}
                     </span>
                     {w.step !== "review" && draft && (

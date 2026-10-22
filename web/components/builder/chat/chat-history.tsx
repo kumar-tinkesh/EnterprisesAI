@@ -77,7 +77,7 @@ export function ChatHistory({
       >
         <History className="h-3.5 w-3.5" />
         <span className="hidden sm:inline">History</span>
-        {chats.length > 0 && <span className="rounded-full bg-zinc-100 px-1.5 text-[10px] text-zinc-500">{chats.length}</span>}
+        {chats.length > 0 && <span className="rounded-full bg-zinc-100 px-1.5 text-xs text-zinc-500">{chats.length}</span>}
       </button>
 
       {open && (
@@ -90,12 +90,12 @@ export function ChatHistory({
                 onNew();
                 setOpen(false);
               }}
-              className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-medium text-indigo-600 hover:bg-indigo-50 cursor-pointer"
+              className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium text-indigo-600 hover:bg-indigo-50 cursor-pointer"
             >
               <Plus className="h-3 w-3" /> New chat
             </button>
           </div>
-          {error && <p className="border-b border-zinc-100 px-3 py-2 text-[11px] text-red-600" role="alert">{error}</p>}
+          {error && <p className="border-b border-zinc-100 px-3 py-2 text-xs text-red-600" role="alert">{error}</p>}
           <ul className="max-h-80 overflow-y-auto p-1.5">
             {loading ? (
               <li className="flex justify-center py-6"><Spinner className="h-4 w-4 text-zinc-400" /></li>
@@ -138,7 +138,7 @@ export function ChatHistory({
                         <MessageSquare className={cn("mt-0.5 h-3.5 w-3.5 shrink-0", c.id === currentId ? "text-indigo-500" : "text-zinc-400")} />
                         <span className="min-w-0">
                           <span className="block truncate text-xs font-medium text-zinc-900">{c.title}</span>
-                          <span className="text-[10px] text-zinc-400">
+                          <span className="text-xs text-zinc-400">
                             {c.turn_count} message{c.turn_count === 1 ? "" : "s"} · {ago(c.last_message_at ?? c.created_at)}
                           </span>
                         </span>

@@ -207,7 +207,7 @@ export function UserConnectModal({
                   <Spinner className="h-4 w-4 text-indigo-600" />
                   Connecting {server.name}...
                 </span>
-                <span className="text-[10px] font-mono text-indigo-600 uppercase">Connecting</span>
+                <span className="text-xs font-mono text-indigo-600 uppercase">Connecting</span>
               </div>
               <div className="h-2 w-full overflow-hidden rounded-full bg-indigo-200">
                 <div className="h-full bg-gradient-to-r from-indigo-500 via-sky-500 to-emerald-500 animate-pulse rounded-full w-full" />
@@ -405,7 +405,7 @@ export function WhatsAppBridgeModal({
                 scan this code.
               </p>
               <QrCanvas value={status.qr} />
-              <p className="text-[11px] text-zinc-400">Waiting for you to scan…</p>
+              <p className="text-xs text-zinc-400">Waiting for you to scan…</p>
             </>
           )}
 

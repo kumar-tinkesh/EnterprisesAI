@@ -155,7 +155,7 @@ function Connectors() {
             <div key={g.label}>
               <div className="mb-3 flex items-center gap-2">
                 <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">{g.label}</h2>
-                <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-medium text-zinc-500">{g.items.length}</span>
+                <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-500">{g.items.length}</span>
                 <span className="h-px flex-1 bg-zinc-100" />
               </div>
               <ul className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -180,7 +180,7 @@ function Connectors() {
                           </span>
                           {s.description && <span className="mt-1 line-clamp-2 block text-xs text-zinc-500">{s.description}</span>}
                           {s.connected && (
-                            <span className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-zinc-500">
+                            <span className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-500">
                                 <span className="font-medium text-zinc-600">{s.bound_tools.length} tool{s.bound_tools.length === 1 ? "" : "s"}</span>
                                 <span aria-hidden>•</span>
                                 <span className={uses ? "text-indigo-600" : ""}>{uses ? `Used by ${uses} agent${uses === 1 ? "" : "s"}` : "Not used by any agent yet"}</span>
@@ -276,7 +276,7 @@ function ToolsPanel({ server, uses, token, onConnect, onClose }: { server: MCPSe
               <h2 className="truncate text-base font-semibold text-zinc-900">{server.name}</h2>
             </div>
             {server.description && <p className="mt-0.5 line-clamp-2 text-xs text-zinc-500">{server.description}</p>}
-            <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+            <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
               {server.connected ? (
                 <span className="rounded-full bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700">connected</span>
               ) : (
@@ -330,7 +330,7 @@ function ToolsPanel({ server, uses, token, onConnect, onClose }: { server: MCPSe
                 />
               </div>
               {counts.edit + counts.delete > 0 && (
-                <p className="flex items-start gap-1.5 text-[11px] text-zinc-500">
+                <p className="flex items-start gap-1.5 text-xs text-zinc-500">
                   <ShieldAlert className="mt-px h-3.5 w-3.5 shrink-0 text-amber-600" />
                   Tools that edit or delete data ask you first before they run, unless an agent is set up otherwise.
                 </p>
@@ -367,7 +367,7 @@ function Chip({ on, onClick, title, children }: { on: boolean; onClick: () => vo
       title={title}
       aria-pressed={on}
       className={cn(
-        "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium cursor-pointer",
+        "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium cursor-pointer",
         on ? "border-indigo-400 bg-indigo-50 text-indigo-700" : "border-zinc-200 bg-white text-zinc-600 hover:text-zinc-900",
       )}
     >
@@ -402,11 +402,11 @@ function ToolCard({ tool }: { tool: Tool }) {
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="font-mono text-xs font-semibold text-zinc-900">{tool.name}</span>
-            <span className={cn("inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium", R.pill)} title={R.hint}>
+            <span className={cn("inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-xs font-medium", R.pill)} title={R.hint}>
               <R.Icon className="h-2.5 w-2.5" /> {R.label}
             </span>
           </div>
-          {tool.description && <p className={cn("mt-1 text-[11px] leading-relaxed text-zinc-600", !open && "line-clamp-3")}>{tool.description}</p>}
+          {tool.description && <p className={cn("mt-1 text-xs leading-relaxed text-zinc-600", !open && "line-clamp-3")}>{tool.description}</p>}
         </div>
         <button
           type="button"
@@ -423,7 +423,7 @@ function ToolCard({ tool }: { tool: Tool }) {
         </button>
       </div>
       {(params.length > 0 || long) && (
-        <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="mt-2 inline-flex items-center gap-1 text-[11px] font-medium text-indigo-600 hover:text-indigo-800 cursor-pointer">
+        <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-800 cursor-pointer">
           <ChevronDown className={cn("h-3 w-3 transition-transform", open && "rotate-180")} />
           {open ? "Less" : params.length ? `${params.length} input${params.length === 1 ? "" : "s"}` : "More"}
         </button>
@@ -432,12 +432,12 @@ function ToolCard({ tool }: { tool: Tool }) {
         <ul className="mt-2 divide-y divide-zinc-100 rounded-lg border border-zinc-200 bg-white">
           {params.map((p) => (
             <li key={p.name} className="px-2.5 py-1.5">
-              <p className="flex flex-wrap items-center gap-1.5 text-[11px]">
+              <p className="flex flex-wrap items-center gap-1.5 text-xs">
                 <span className="font-mono font-medium text-zinc-900">{p.name}</span>
                 <span className="text-zinc-500">{p.type}</span>
-                {p.required && <span className="rounded bg-zinc-100 px-1 text-[10px] font-medium text-zinc-600">required</span>}
+                {p.required && <span className="rounded bg-zinc-100 px-1 text-xs font-medium text-zinc-600">required</span>}
               </p>
-              {p.description && <p className="mt-0.5 text-[11px] text-zinc-500">{p.description}</p>}
+              {p.description && <p className="mt-0.5 text-xs text-zinc-500">{p.description}</p>}
             </li>
           ))}
         </ul>

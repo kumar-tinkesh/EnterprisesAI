@@ -14,7 +14,7 @@ function CopyField({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <div className="flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-white p-1.5">
-      <code className="min-w-0 flex-1 break-all text-[11px] text-zinc-800">{value}</code>
+      <code className="min-w-0 flex-1 break-all text-xs text-zinc-800">{value}</code>
       <button
         type="button"
         aria-label="Copy URL"
@@ -83,13 +83,13 @@ export function AgentWebhooks({ agentId, token }: { agentId: string; token: stri
             <WebhookIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-500" />
             <div className="min-w-0 flex-1">
               <p className="text-sm font-medium text-zinc-900">
-                {h.name} {!h.enabled && <span className="ml-1 rounded-full bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-500">Off</span>}
+                {h.name} {!h.enabled && <span className="ml-1 rounded-full bg-zinc-100 px-1.5 py-0.5 text-xs font-medium text-zinc-500">Off</span>}
               </p>
-              <p className="truncate font-mono text-[11px] text-zinc-500">…/public/hooks/{h.token_prefix}…</p>
-              <p className="text-[11px] text-zinc-400">
+              <p className="truncate font-mono text-xs text-zinc-500">…/public/hooks/{h.token_prefix}…</p>
+              <p className="text-xs text-zinc-400">
                 {h.last_used_at ? `Last called ${new Date(h.last_used_at).toLocaleString()}` : "Never called yet"} · {h.requests_per_minute}/min
               </p>
-              {h.instruction && <p className="mt-1 line-clamp-2 text-[11px] text-zinc-600">“{h.instruction}”</p>}
+              {h.instruction && <p className="mt-1 line-clamp-2 text-xs text-zinc-600">“{h.instruction}”</p>}
             </div>
             <div className="flex shrink-0 gap-1">
               <button type="button" title={h.enabled ? "Turn off" : "Turn on"} aria-label={h.enabled ? "Turn off" : "Turn on"} onClick={() => toggle.mutate(h)} className="rounded p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-800 cursor-pointer">
@@ -110,7 +110,7 @@ export function AgentWebhooks({ agentId, token }: { agentId: string; token: stri
             <div className="space-y-1.5 rounded-lg border border-emerald-200 bg-emerald-50 p-2.5">
               <p className="text-xs font-medium text-emerald-800">Copy this URL now — it won&apos;t be shown again.</p>
               <CopyField value={created.url} />
-              <p className="text-[11px] text-emerald-800">
+              <p className="text-xs text-emerald-800">
                 Try it: <code className="break-all">curl -X POST -H &quot;Content-Type: application/json&quot; -d &apos;{`{"text":"hello"}`}&apos; &lt;url&gt;</code>
               </p>
             </div>
@@ -140,7 +140,7 @@ export function AgentWebhooks({ agentId, token }: { agentId: string; token: stri
             </button>
             <button type="button" onClick={() => setAdding(false)} className="h-8 rounded-md px-3 text-xs text-zinc-600 hover:bg-zinc-100 cursor-pointer">Cancel</button>
           </div>
-          <p className="text-[11px] text-zinc-500">It runs as you, with your connected accounts, and asks you before data-changing tools as usual. Results land in the agent&apos;s run history.</p>
+          <p className="text-xs text-zinc-500">It runs as you, with your connected accounts, and asks you before data-changing tools as usual. Results land in the agent&apos;s run history.</p>
         </form>
       )}
     </Section>

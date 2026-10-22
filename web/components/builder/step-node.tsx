@@ -113,17 +113,17 @@ function StepNodeView({ data, selected }: NodeProps<StepNodeType>) {
         </span>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-semibold text-zinc-900">{data.title}</p>
-          <p className="truncate text-[11px] text-zinc-500">{data.subtitle}</p>
+          <p className="truncate text-xs text-zinc-500">{data.subtitle}</p>
         </div>
         <StateIcon state={data.state} />
         {hasProblems && (
-          <span className="flex items-center gap-0.5 rounded-full bg-red-50 px-1.5 py-0.5 text-[10px] font-semibold text-red-600">
+          <span className="flex items-center gap-0.5 rounded-full bg-red-50 px-1.5 py-0.5 text-xs font-semibold text-red-600">
             <AlertTriangle className="h-3 w-3" />
             {data.problems.length}
           </span>
         )}
       </div>
-      {data.detail && <p className="mt-1.5 truncate rounded bg-sky-50 px-1.5 py-0.5 text-[10px] text-sky-700">{data.detail}</p>}
+      {data.detail && <p className="mt-1.5 truncate rounded bg-sky-50 px-1.5 py-0.5 text-xs text-sky-700">{data.detail}</p>}
       {data.connect && (
         <ConnectButton
           serverId={data.connect.serverId}

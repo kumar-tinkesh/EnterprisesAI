@@ -200,7 +200,7 @@ export function WorkflowScheduleFields({
       </Field>
       <div className="rounded-lg border border-zinc-200 p-3">
         {current ? <ScheduleStatus schedule={current} /> : <p className="text-xs text-zinc-500">Not scheduled yet — save the workflow to turn it on.</p>}
-        <p className="mt-1.5 text-[11px] text-zinc-400">Runs as the workflow&apos;s creator, with their connected tools. Changes apply when you save.</p>
+        <p className="mt-1.5 text-xs text-zinc-400">Runs as the workflow&apos;s creator, with their connected tools. Changes apply when you save.</p>
       </div>
     </Section>
   );
@@ -289,7 +289,7 @@ export function AgentSchedules({ agentId, token }: { agentId: string; token: str
             )}
           </div>
           <ScheduleStatus schedule={s} />
-          {!s.is_mine && <p className="text-[11px] text-zinc-400">Set by a teammate; runs with their connected tools.</p>}
+          {!s.is_mine && <p className="text-xs text-zinc-400">Set by a teammate; runs with their connected tools.</p>}
         </div>
       ))}
       {list.data?.length === 0 && !adding && <p className="text-xs text-zinc-400">Not scheduled. Add one to run this agent automatically.</p>}
@@ -299,7 +299,7 @@ export function AgentSchedules({ agentId, token }: { agentId: string; token: str
           <Field label="Each run asks the agent">
             <Textarea rows={2} value={draft.input} placeholder="Check my inbox and draft replies to anything urgent" onChange={(e) => setDraft({ ...draft, input: e.target.value })} />
           </Field>
-          <p className="text-[11px] text-zinc-500">Runs as you, with your connected tools. Tools that change data still wait for your approval.</p>
+          <p className="text-xs text-zinc-500">Runs as you, with your connected tools. Tools that change data still wait for your approval.</p>
           <div className="flex gap-2">
             <Button type="button" size="sm" disabled={create.isPending || !draft.input.trim()} onClick={() => create.mutate()}>
               {create.isPending ? <Spinner className="h-4 w-4" /> : <CalendarClock />} Schedule it

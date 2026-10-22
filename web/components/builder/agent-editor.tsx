@@ -299,7 +299,7 @@ function Editor({ id, onBack, onOpen, onExit }: EditorProps) {
                   className={cn("flex w-full flex-col rounded-lg px-2.5 py-2 text-left text-xs hover:bg-zinc-100 cursor-pointer", a.id === id ? "text-indigo-600" : "text-zinc-700")}
                 >
                   <span className="w-full truncate font-medium">{a.name}</span>
-                  {a.goal && <span className="w-full truncate text-[10px] text-zinc-400">{a.goal}</span>}
+                  {a.goal && <span className="w-full truncate text-xs text-zinc-400">{a.goal}</span>}
                 </button>
               ))}
             </div>

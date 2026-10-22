@@ -142,10 +142,10 @@ export default function ProtectedDashboard({
     return (
       <UserShell fullBleed={fullBleed}>
         {fullBleed ? children : (
-          <div className="mx-auto max-w-6xl p-4 sm:p-6">
+          <div className="mx-auto max-w-6xl px-4 py-6 sm:px-8 sm:py-8">
             <header>
-              <h1 className="text-xl font-semibold tracking-tight text-zinc-900">{title}</h1>
-              <p className="mt-0.5 text-[13px] text-zinc-500">{description}</p>
+              <h1 className="text-xl font-semibold text-zinc-900">{title}</h1>
+              <p className="mt-1 text-sm text-zinc-500">{description}</p>
             </header>
             {children}
           </div>
@@ -162,7 +162,7 @@ export default function ProtectedDashboard({
     <div className="mx-auto max-w-6xl p-6">
       <header className="flex items-center justify-between border-b border-zinc-200 pb-4">
         <div>
-          <h1 className="text-2xl font-bold text-zinc-900">{title}</h1>
+          <h1 className="text-xl font-semibold text-zinc-900">{title}</h1>
           <p className="text-sm text-zinc-500">{description}</p>
         </div>
         <button

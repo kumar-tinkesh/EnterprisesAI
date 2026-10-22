@@ -275,7 +275,7 @@ export default function ExecutionsPage() {
             aria-selected={filter === f}
             onClick={() => setFilter(f)}
             className={cn(
-              "inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium cursor-pointer",
+              "inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium cursor-pointer",
               filter === f ? "border-indigo-400 bg-indigo-50 text-indigo-700" : "border-zinc-200 text-zinc-600 hover:text-zinc-900",
             )}
           >
@@ -342,7 +342,7 @@ export default function ExecutionsPage() {
           <section className={cn("min-w-0 flex-col gap-3 p-4 lg:p-6", chat ? "hidden md:flex md:w-2/5 lg:w-1/3" : "mx-auto flex w-full max-w-6xl flex-1")}>
             <div className="flex flex-wrap items-center gap-3">
               <div className="min-w-0">
-                <h1 className="text-lg font-bold text-zinc-900">Executions</h1>
+                <h1 className="text-lg font-semibold text-zinc-900">Executions</h1>
                 {!chat && <p className="text-xs text-zinc-500">Every agent and workflow, how it&apos;s doing, and a chat with it.</p>}
               </div>
               <div className="ml-auto">{actions}</div>
@@ -439,7 +439,7 @@ function Row({
         <span className="min-w-0 flex-1">
           <span className={cn("block truncate text-sm font-medium", active ? "text-indigo-700" : "text-zinc-900")}>{item.name}</span>
           <span className="hidden truncate text-xs text-zinc-500 @xl:block">{item.sub}</span>
-          <span className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-zinc-500">
+          <span className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-zinc-500">
             {meta.map((m, i) => (
               <span key={i} className="inline-flex items-center gap-1.5">
                 {i > 0 && <span className="text-zinc-300" aria-hidden>·</span>}

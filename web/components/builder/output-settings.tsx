@@ -142,7 +142,7 @@ export function OutputSettings({
             <div className="space-y-2">
               <div className="flex flex-wrap gap-1">
                 {LAYOUTS.map((l) => (
-                  <button key={l.label} type="button" onClick={() => setCustom(l.sections)} className="rounded-full border border-zinc-200 px-2 py-0.5 text-[11px] text-zinc-600 hover:border-emerald-400 hover:text-emerald-700 cursor-pointer">
+                  <button key={l.label} type="button" onClick={() => setCustom(l.sections)} className="rounded-full border border-zinc-200 px-2 py-0.5 text-xs text-zinc-600 hover:border-emerald-400 hover:text-emerald-700 cursor-pointer">
                     Use “{l.label}”
                   </button>
                 ))}
@@ -150,7 +150,7 @@ export function OutputSettings({
               {custom.map((c, i) => (
                 <div key={i} className="rounded-lg border border-zinc-200 p-2">
                   <div className="flex items-center gap-1">
-                    <span className="w-5 text-center text-[11px] font-semibold text-zinc-400">{i + 1}</span>
+                    <span className="w-5 text-center text-xs font-semibold text-zinc-400">{i + 1}</span>
                     <Input
                       className="h-8 flex-1 text-xs"
                       placeholder="Heading"
@@ -208,7 +208,7 @@ export function OutputSettings({
       </Section>
 
       <Section title="Preview">
-        <p className="text-[11px] text-zinc-500">
+        <p className="text-xs text-zinc-500">
           These settings on what reached this step in the last run — nothing else runs again (one AI call for Report, JSON or instructions).
         </p>
         <button

@@ -167,7 +167,7 @@ export function ProjectDetail({
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="grid gap-1 border-b border-zinc-100 py-3 last:border-0 sm:grid-cols-[150px_1fr] sm:gap-4">
-      <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">{label}</span>
+      <span className="text-xs font-semibold uppercase tracking-wider text-zinc-500">{label}</span>
       <div className="min-w-0 text-[13px] text-zinc-800">{children}</div>
     </div>
   );
@@ -214,7 +214,7 @@ function RunStats({ runs }: { runs: Run[] }) {
     <dl className="flex flex-wrap gap-x-6 gap-y-2">
       {cells.map((c) => (
         <div key={c.label}>
-          <dt className="text-[11px] text-zinc-500">{c.label}</dt>
+          <dt className="text-xs text-zinc-500">{c.label}</dt>
           <dd className="text-base font-semibold tabular-nums text-zinc-900">{c.value}</dd>
         </div>
       ))}
@@ -234,14 +234,14 @@ function RecentRuns({ runs, loading }: { runs: Run[]; loading: boolean }) {
           <li key={r.id} className="flex items-center gap-3 py-2.5">
             <span className="min-w-0 flex-1">
               <span className="block truncate text-[13px] text-zinc-900">{r.input?.text || "—"}</span>
-              {r.status === "failed" && r.error && <span className="block truncate text-[11px] text-red-600">{r.error}</span>}
+              {r.status === "failed" && r.error && <span className="block truncate text-xs text-red-600">{r.error}</span>}
             </span>
-            <span className={cn("inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium", st.pill)}>
+            <span className={cn("inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium", st.pill)}>
               <st.Icon className={cn("h-3 w-3", r.status === "running" && "animate-spin")} /> {st.label}
             </span>
-            <span className="hidden w-12 shrink-0 text-right text-[11px] tabular-nums text-zinc-500 sm:block">{t !== null ? ms(t) : "—"}</span>
-            <span className="w-16 shrink-0 text-right text-[11px] text-zinc-500">{ago(r.created_at)}</span>
-            {r.definition_version ? <span className="hidden w-7 shrink-0 text-right text-[10px] text-zinc-500 md:block">v{r.definition_version}</span> : null}
+            <span className="hidden w-12 shrink-0 text-right text-xs tabular-nums text-zinc-500 sm:block">{t !== null ? ms(t) : "—"}</span>
+            <span className="w-16 shrink-0 text-right text-xs text-zinc-500">{ago(r.created_at)}</span>
+            {r.definition_version ? <span className="hidden w-7 shrink-0 text-right text-xs text-zinc-500 md:block">v{r.definition_version}</span> : null}
           </li>
         );
       })}
@@ -255,7 +255,7 @@ function ToolChips({ toolIds, token }: { toolIds: string[]; token: string }) {
   if (!toolIds.length) return <None />;
   return (
     <div className="space-y-2">
-      <p className="text-[11px] text-zinc-500">{toolIds.length} tool{toolIds.length === 1 ? "" : "s"} from {groups.length} connector{groups.length === 1 ? "" : "s"}</p>
+      <p className="text-xs text-zinc-500">{toolIds.length} tool{toolIds.length === 1 ? "" : "s"} from {groups.length} connector{groups.length === 1 ? "" : "s"}</p>
       {groups.map((g) => {
         const s = servers[g.serverId];
         const name = s && !s.loading ? s.name : "Connector";
@@ -266,7 +266,7 @@ function ToolChips({ toolIds, token }: { toolIds: string[]; token: string }) {
             <div className="min-w-0 flex-1">
               <p className="flex items-center gap-1.5 text-xs font-medium text-zinc-800">
                 {name}
-                {s && !s.loading && !s.missing && !s.connected && <span className="rounded bg-amber-50 px-1 text-[10px] font-medium text-amber-700">not connected</span>}
+                {s && !s.loading && !s.missing && !s.connected && <span className="rounded bg-amber-50 px-1 text-xs font-medium text-amber-700">not connected</span>}
               </p>
               <div className="mt-1 flex flex-wrap gap-1">
                 {g.toolIds.map((tid) => {
@@ -277,7 +277,7 @@ function ToolChips({ toolIds, token }: { toolIds: string[]; token: string }) {
                       key={tid}
                       title={risk ? `${risk}: ${risk === "read" ? "only looks things up" : risk === "edit" ? "creates or changes data" : "removes data"}` : undefined}
                       className={cn(
-                        "rounded px-1.5 py-0.5 font-mono text-[10px]",
+                        "rounded px-1.5 py-0.5 font-mono text-xs",
                         risk === "delete" ? "bg-red-50 text-red-700" : risk === "edit" ? "bg-amber-50 text-amber-700" : "bg-zinc-100 text-zinc-600",
                       )}
                     >
@@ -355,7 +355,7 @@ function AgentOverview({ agent, token, onOpenCanvas }: { agent: Agent; token: st
             {(g.custom_rules ?? []).length > 0 && (
               <ul className="mt-2 space-y-1">{(g.custom_rules ?? []).map((rule) => <li key={rule} className="rounded bg-zinc-100 px-2 py-1 text-xs text-zinc-700">{rule}</li>)}</ul>
             )}
-            {(guards.length > 0 || (g.custom_rules ?? []).length > 0) && <p className="mt-1 text-[11px] text-zinc-500">When a check trips: {g.on_violation === "block" ? "block the answer" : "flag it"}</p>}
+            {(guards.length > 0 || (g.custom_rules ?? []).length > 0) && <p className="mt-1 text-xs text-zinc-500">When a check trips: {g.on_violation === "block" ? "block the answer" : "flag it"}</p>}
           </Row>
           <Row label="Tool limits">
             {cfg.tools?.max_calls ?? 8} calls a run · {cfg.tools?.timeout_seconds ?? 30}s each · on failure {cfg.tools?.on_failure ?? "continue"}
@@ -421,17 +421,17 @@ function WorkflowOverview({ workflow, token, onOpenCanvas }: { workflow: Workflo
                 const a = n.type === "agent" ? n.draft_agent ?? (n.agent_id ? agents[n.agent_id] : undefined) : undefined;
                 return (
                   <li key={n.id} className="flex items-start gap-3 py-2.5">
-                    <span className="mt-0.5 w-5 shrink-0 text-right text-[11px] tabular-nums text-zinc-500">{i + 1}</span>
+                    <span className="mt-0.5 w-5 shrink-0 text-right text-xs tabular-nums text-zinc-500">{i + 1}</span>
                     <span className="min-w-0 flex-1">
                       <span className="flex items-center gap-1.5 text-[13px] font-medium text-zinc-900">
                         {stepTitle(n, agents)}
-                        <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-normal text-zinc-500">{NODE_META[n.type].title}</span>
+                        <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-xs font-normal text-zinc-500">{NODE_META[n.type].title}</span>
                       </span>
-                      {a?.goal && <span className="block truncate text-[11px] text-zinc-500">{a.goal}</span>}
-                      {n.type === "tool" && n.tool_id && <span className="block font-mono text-[11px] text-zinc-500">{toolName(n.tool_id)}</span>}
-                      {n.type === "condition" && <span className="block text-[11px] text-zinc-500">{n.condition_config?.mode === "rule" ? "Chooses by rules" : "The AI chooses the branch"}</span>}
-                      {n.type === "join" && <span className="block text-[11px] text-zinc-500">Waits for {n.join_policy?.mode === "any" ? "any branch" : n.join_policy?.mode === "count" ? `${n.join_policy.min_required} branches` : "every branch"}</span>}
-                      {n.type === "human_approval" && n.approval_message && <span className="block truncate text-[11px] text-zinc-500">“{n.approval_message}”</span>}
+                      {a?.goal && <span className="block truncate text-xs text-zinc-500">{a.goal}</span>}
+                      {n.type === "tool" && n.tool_id && <span className="block font-mono text-xs text-zinc-500">{toolName(n.tool_id)}</span>}
+                      {n.type === "condition" && <span className="block text-xs text-zinc-500">{n.condition_config?.mode === "rule" ? "Chooses by rules" : "The AI chooses the branch"}</span>}
+                      {n.type === "join" && <span className="block text-xs text-zinc-500">Waits for {n.join_policy?.mode === "any" ? "any branch" : n.join_policy?.mode === "count" ? `${n.join_policy.min_required} branches` : "every branch"}</span>}
+                      {n.type === "human_approval" && n.approval_message && <span className="block truncate text-xs text-zinc-500">“{n.approval_message}”</span>}
                     </span>
                   </li>
                 );
@@ -484,7 +484,7 @@ function Ring({ score }: { score: number | null }) {
       </svg>
       <span className="absolute text-center">
         <span className="block text-xl font-semibold leading-none tabular-nums text-zinc-900">{score ?? "—"}</span>
-        {score != null && <span className="block text-[10px] text-zinc-500">/ 100</span>}
+        {score != null && <span className="block text-xs text-zinc-500">/ 100</span>}
       </span>
     </span>
   );
@@ -533,7 +533,7 @@ function HealthView({
                     ? `${critical.length} thing${critical.length === 1 ? "" : "s"} below would embarrass it in front of a real user.`
                     : "Getting there. Run it more and test it to turn the unmeasured parts into evidence."}
             </p>
-            <p className="mt-1 text-[11px] text-zinc-500">
+            <p className="mt-1 text-xs text-zinc-500">
               Based on {health.runs_counted} finished run{health.runs_counted === 1 ? "" : "s"}. Parts not measured yet don&apos;t count against it.
             </p>
           </div>
@@ -596,7 +596,7 @@ function Dimension({ d }: { d: Health["dimensions"][number] }) {
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-2">
             <span className="text-[13px] font-medium text-zinc-900">{d.label}</span>
-            <span className="text-[10px] text-zinc-500">weight {d.weight}</span>
+            <span className="text-xs text-zinc-500">weight {d.weight}</span>
           </span>
           <span className="block truncate text-xs text-zinc-500">{d.summary}</span>
         </span>
@@ -608,7 +608,7 @@ function Dimension({ d }: { d: Health["dimensions"][number] }) {
         <span className="w-14 shrink-0 text-right text-xs tabular-nums text-zinc-600">{d.measured ? `${d.score}%` : "not measured"}</span>
       </button>
       {open && d.detail.length > 0 && (
-        <ul className="ml-7 mt-2 space-y-0.5 text-[11px] text-zinc-500">
+        <ul className="ml-7 mt-2 space-y-0.5 text-xs text-zinc-500">
           {d.detail.map((x) => <li key={x}>• {x}</li>)}
         </ul>
       )}

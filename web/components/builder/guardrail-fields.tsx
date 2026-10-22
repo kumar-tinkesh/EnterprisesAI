@@ -76,10 +76,10 @@ export function GuardrailFields({
 
       <BoolParam k="guardrails.injection" label="Refuse requests that try to override its instructions" checked={!!value.injection} onChange={(v) => set({ injection: v })} />
       <BoolParam k="guardrails.tool_injection" label="Treat instructions inside tool results as data" checked={!!value.tool_injection} onChange={(v) => set({ tool_injection: v })} />
-      {!inStep && <p className="-mt-1.5 pl-6 text-[11px] text-zinc-400">For tools that read emails, web pages or documents other people wrote.</p>}
+      {!inStep && <p className="-mt-1.5 pl-6 text-xs text-zinc-400">For tools that read emails, web pages or documents other people wrote.</p>}
       <BoolParam k="guardrails.pii_input" label="Hide personal data from the model" checked={!!value.pii_input} onChange={(v) => set({ pii_input: v })} />
       <BoolParam k="guardrails.pii_output" label="Hide personal data in answers" checked={!!value.pii_output} onChange={(v) => set({ pii_output: v })} />
-      {!inStep && <p className="-mt-1.5 pl-6 text-[11px] text-zinc-400">Emails, phone numbers, cards, Aadhaar, PAN, API keys.</p>}
+      {!inStep && <p className="-mt-1.5 pl-6 text-xs text-zinc-400">Emails, phone numbers, cards, Aadhaar, PAN, API keys.</p>}
 
       <BoolParam
         k="guardrails.groundedness"
@@ -87,7 +87,7 @@ export function GuardrailFields({
         checked={!!value.groundedness}
         onChange={(v) => set({ groundedness: v })}
       />
-      {!hasKnowledge && value.groundedness && <p className="-mt-1.5 pl-6 text-[11px] text-amber-700">Pick a knowledge base above — there's nothing to check against yet.</p>}
+      {!hasKnowledge && value.groundedness && <p className="-mt-1.5 pl-6 text-xs text-amber-700">Pick a knowledge base above — there's nothing to check against yet.</p>}
       {value.groundedness && (
         <Param k="guardrails.groundedness_mode" label="How it checks">
           <Select value={value.groundedness_mode ?? "fast"} onChange={(e) => set({ groundedness_mode: e.target.value as "fast" | "llm" })}>
@@ -98,7 +98,7 @@ export function GuardrailFields({
       )}
       {value.groundedness && (value.groundedness_mode ?? "fast") === "fast" && (
         <Param k="guardrails.groundedness_min" label="How close to the documents">
-        <label className="flex items-center gap-2 text-[11px] text-zinc-600">
+        <label className="flex items-center gap-2 text-xs text-zinc-600">
           <input
             type="range"
             min={0.2}

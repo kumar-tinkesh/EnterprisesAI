@@ -70,7 +70,7 @@ export function AbilitiesStep(props: StepProps) {
                     <span className="font-normal text-zinc-400">{t.server_name}</span>
                     {isConnected(t.server_id, t.connected) && <CheckCircle2 className="h-3 w-3 text-emerald-600" aria-label="Connected" />}
                   </p>
-                  {t.description && <p className="mt-0.5 line-clamp-2 text-[11px] text-zinc-500">{t.description}</p>}
+                  {t.description && <p className="mt-0.5 line-clamp-2 text-xs text-zinc-500">{t.description}</p>}
                 </div>
                 {!isConnected(t.server_id, t.connected) && <ConnectButton serverId={t.server_id} token={token} className="py-1.5" />}
                 <button
@@ -131,14 +131,14 @@ function ServerCard({
         {info.loading ? (
           <Spinner className="h-3.5 w-3.5 text-zinc-400" />
         ) : info.connected ? (
-          <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700">
+          <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700">
             <CheckCircle2 className="h-3.5 w-3.5" /> Connected
           </span>
         ) : (
           <button
             type="button"
             onClick={onConnect}
-            className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-800 hover:bg-amber-100 cursor-pointer"
+            className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-800 hover:bg-amber-100 cursor-pointer"
           >
             <Link2 className="h-3 w-3" /> Connect
           </button>
@@ -154,9 +154,9 @@ function ServerCard({
         </button>
       </div>
       {!info.connected && !info.loading && (
-        <p className="mt-1.5 text-[11px] text-amber-700">Not connected yet. You can still create the agent; these tools run once you connect.</p>
+        <p className="mt-1.5 text-xs text-amber-700">Not connected yet. You can still create the agent; these tools run once you connect.</p>
       )}
-      {info.missing && <p className="mt-1.5 text-[11px] text-red-600">This app is no longer available to you.</p>}
+      {info.missing && <p className="mt-1.5 text-xs text-red-600">This app is no longer available to you.</p>}
 
       {info.tools.length > 0 && (
         <div className="mt-3 grid grid-cols-3 gap-1 rounded-lg bg-zinc-100 p-1" role="radiogroup" aria-label={`What it may do in ${info.name}`}>
@@ -171,7 +171,7 @@ function ServerCard({
                 title={a.hint}
                 onClick={() => (a.id === "custom" ? setShowAll(true) : onChange(presetToolIds(info.serverId, info.tools, a.id)))}
                 className={cn(
-                  "rounded-md px-1.5 py-1.5 text-[11px] font-medium leading-tight cursor-pointer",
+                  "rounded-md px-1.5 py-1.5 text-xs font-medium leading-tight cursor-pointer",
                   on ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-900",
                 )}
               >
@@ -194,7 +194,7 @@ function ServerCard({
                   <span className="break-all">{name}</span>
                   {(tool?.risk ?? meta[id]?.risk) && <RiskBadge risk={(tool?.risk ?? meta[id]?.risk)!} />}
                 </p>
-                {why && <p className="mt-0.5 text-[11px] text-indigo-700">Why: {why}</p>}
+                {why && <p className="mt-0.5 text-xs text-indigo-700">Why: {why}</p>}
               </div>
               <button type="button" aria-label={`Remove ${name}`} onClick={() => onChange(selected.filter((x) => x !== id))} className="rounded p-0.5 text-zinc-400 hover:text-red-600 cursor-pointer">
                 <X className="h-3.5 w-3.5" />
@@ -228,7 +228,7 @@ function ServerCard({
                       <span className="break-all">{t.name}</span>
                       <RiskBadge risk={t.risk} />
                     </span>
-                    {t.description && <span className="mt-0.5 block line-clamp-2 text-[11px] text-zinc-500">{t.description}</span>}
+                    {t.description && <span className="mt-0.5 block line-clamp-2 text-xs text-zinc-500">{t.description}</span>}
                   </span>
                 </label>
               </li>
@@ -313,7 +313,7 @@ function KnowledgeCategory({ token, draft, update, insights }: StepProps) {
                   />
                   <span className="min-w-0">
                     <span className="block truncate text-xs font-medium text-zinc-900">{kb.name}</span>
-                    <span className={cn("block text-[11px]", kb.document_count ? "text-zinc-500" : "text-amber-700")}>
+                    <span className={cn("block text-xs", kb.document_count ? "text-zinc-500" : "text-amber-700")}>
                       {kb.document_count ? `${kb.document_count} document${kb.document_count === 1 ? "" : "s"}` : "Empty — add a file"}
                     </span>
                   </span>
@@ -326,7 +326,7 @@ function KnowledgeCategory({ token, draft, update, insights }: StepProps) {
                       fileFor.current = kb.id;
                       fileInput.current?.click();
                     }}
-                    className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1.5 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-40 cursor-pointer"
+                    className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-40 cursor-pointer"
                   >
                     {uploading === kb.id ? <Spinner className="h-3 w-3" /> : <FileUp className="h-3 w-3" />} Add files
                   </button>
@@ -353,7 +353,7 @@ function KnowledgeCategory({ token, draft, update, insights }: StepProps) {
           {create.isPending ? <Spinner className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />} Create
         </button>
       </form>
-      {message && <p className={cn("text-[11px]", message.tone === "ok" ? "text-emerald-700" : "text-red-600")} role="status">{message.text}</p>}
+      {message && <p className={cn("text-xs", message.tone === "ok" ? "text-emerald-700" : "text-red-600")} role="status">{message.text}</p>}
     </Category>
   );
 }

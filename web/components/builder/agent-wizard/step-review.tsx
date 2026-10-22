@@ -101,10 +101,10 @@ export function ReviewStep({
             <div key={row.label} className="flex gap-3 p-3">
               <row.icon className="mt-0.5 h-4 w-4 shrink-0 text-zinc-400" />
               <div className="min-w-0 flex-1">
-                <dt className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">{row.label}</dt>
+                <dt className="text-xs font-semibold uppercase tracking-wide text-zinc-500">{row.label}</dt>
                 <dd className="mt-0.5 break-words text-xs leading-relaxed text-zinc-700">{row.value}</dd>
               </div>
-              <button type="button" onClick={() => goTo(row.step)} className="self-start text-[11px] font-medium text-indigo-600 hover:text-indigo-800 cursor-pointer">
+              <button type="button" onClick={() => goTo(row.step)} className="self-start text-xs font-medium text-indigo-600 hover:text-indigo-800 cursor-pointer">
                 Edit
               </button>
             </div>
@@ -113,14 +113,14 @@ export function ReviewStep({
       </section>
 
       <section className="rounded-xl border border-zinc-200 bg-white p-3" aria-label="How a run goes">
-        <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-zinc-500">Every time it runs</h3>
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">Every time it runs</h3>
         <ol className="space-y-2">
           {flow.map((f, i) => (
             <li key={f.t} className="flex gap-3">
-              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-indigo-50 text-[10px] font-semibold text-indigo-700">{i + 1}</span>
+              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-indigo-50 text-xs font-semibold text-indigo-700">{i + 1}</span>
               <span className="min-w-0">
                 <span className="block text-xs font-medium text-zinc-900">{f.t}</span>
-                <span className="block break-words text-[11px] text-zinc-500">{f.d}</span>
+                <span className="block break-words text-xs text-zinc-500">{f.d}</span>
               </span>
             </li>
           ))}

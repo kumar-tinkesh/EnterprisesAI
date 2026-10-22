@@ -2,32 +2,44 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Check, Copy, Globe, KeyRound, Link2, Pause, Play, Send, Trash2, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Check, ChevronRight, Code2, Copy, ExternalLink, Link2, MessageSquare, Send, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Menu } from "@/components/ui/menu";
 import { Spinner } from "@/components/ui/spinner";
-import { Field, Select, Textarea, Toggle } from "@/components/builder/fields";
+import { Field, Select, Textarea } from "@/components/builder/fields";
 import { timeAgo } from "@/components/builder/version-history";
 import { ApiError } from "@/lib/api";
 import { PUBLIC_API_URL, builderApi, shareUrl } from "@/lib/builder/api";
 import type { PublicKey, PublicKeyCreated, ToolMode, ToolNeedStatus } from "@/lib/builder/types";
 import { cn } from "@/lib/utils";
 
-function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
+/** The three ways to publish. Each one is a public key underneath; they differ in what's switched on. */
+export type Way = "link" | "website" | "api";
+
+export const WAYS: { way: Way; Icon: typeof Link2; title: string; hint: string; defaultName: string; action: string }[] = [
+  { way: "link", Icon: Link2, title: "Share link", hint: "Send people a link. They sign in and use it.", defaultName: "Share link", action: "Publish link" },
+  { way: "website", Icon: MessageSquare, title: "Website chat", hint: "A chat bubble on your own website.", defaultName: "Website", action: "Get website code" },
+  { way: "api", Icon: Code2, title: "API", hint: "Call it from your app or server.", defaultName: "API", action: "Create API key" },
+];
+
+export const wayOf = (k: PublicKey): Way => (k.share_enabled ? "link" : k.allowed_origins.length ? "website" : "api");
+
+function CopyButton({ text, label = "Copy", primary }: { text: string; label?: string; primary?: boolean }) {
   const [done, setDone] = useState(false);
   return (
-    <button
-      type="button"
+    <Button
+      size="sm"
+      variant={primary ? "default" : "outline"}
       onClick={() => {
         void navigator.clipboard?.writeText(text);
         setDone(true);
         setTimeout(() => setDone(false), 1500);
       }}
-      className="inline-flex items-center gap-1 rounded border border-zinc-200 bg-white px-1.5 py-0.5 text-[11px] text-zinc-600 hover:text-zinc-900 cursor-pointer"
     >
-      {done ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />} {done ? "Copied" : label}
-    </button>
+      {done ? <Check /> : <Copy />} {done ? "Copied" : label}
+    </Button>
   );
 }
 
@@ -39,7 +51,20 @@ function snippets(key: string, title: string) {
   };
 }
 
-/** Publish an agent/workflow: publishable keys for apps and websites, with a chat widget. */
+function Code({ text }: { text: string }) {
+  return (
+    <div className="relative">
+      <pre className="overflow-x-auto rounded-md border border-zinc-200 bg-[var(--bg)] p-3 pr-24 font-mono text-xs leading-relaxed text-zinc-700">{text}</pre>
+      <div className="absolute right-2 top-2"><CopyButton text={text} /></div>
+    </div>
+  );
+}
+
+/**
+ * Publish an agent/workflow. Three steps: pick how (share link, website chat,
+ * API), set the one or two things that way needs (the rest under Advanced),
+ * then copy what you got. What's already published is listed on the first screen.
+ */
 export function PublishPanel({
   kind,
   targetId,
@@ -59,18 +84,17 @@ export function PublishPanel({
 }) {
   const queryClient = useQueryClient();
   const keysKey = ["builder-public-keys", kind, targetId];
+  const [way, setWay] = useState<Way | null>(null);
   const [pin, setPin] = useState<"latest" | number>("latest");
-  const [keyName, setKeyName] = useState("Website");
+  const [keyName, setKeyName] = useState("");
   const [origins, setOrigins] = useState("");
   const [rpm, setRpm] = useState(20);
   const [quota, setQuota] = useState("");
   const [ack, setAck] = useState(false);
-  const [share, setShare] = useState(true);
   const [perUser, setPerUser] = useState("");
   const [toolMode, setToolMode] = useState<ToolMode>("publisher");
   const [keepMine, setKeepMine] = useState<string[]>([]);
-  const [created, setCreated] = useState<PublicKeyCreated | null>(null);
-  const [tab, setTab] = useState<"website" | "curl" | "javascript">("website");
+  const [created, setCreated] = useState<{ key: PublicKeyCreated; way: Way } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const versions = useQuery({ queryKey: ["builder-versions", kind, targetId], queryFn: () => builderApi.listVersions(token, kind, targetId), enabled: !!token });
@@ -86,23 +110,36 @@ export function PublishPanel({
     setError(typeof detail === "object" && detail?.message ? detail.message : err instanceof Error ? err.message : "Something went wrong.");
   };
 
+  const start = (w: Way) => {
+    setWay(w);
+    setKeyName(WAYS.find((x) => x.way === w)!.defaultName);
+    setOrigins("");
+    setAck(false);
+    setError(null);
+  };
+  const reset = () => {
+    setWay(null);
+    setCreated(null);
+    setError(null);
+  };
+
   const writeTools = check.data?.write_tools ?? [];
   const create = useMutation({
-    mutationFn: () =>
+    mutationFn: (w: Way) =>
       builderApi.createPublicKey(token, kind, targetId, {
-        name: keyName.trim() || "Public key",
+        name: keyName.trim() || WAYS.find((x) => x.way === w)!.defaultName,
         version: pin === "latest" ? null : pin,
         allowed_origins: origins.split(/[\s,]+/).map((o) => o.trim()).filter(Boolean),
         requests_per_minute: rpm,
         daily_quota: quota.trim() ? Number(quota) : null,
         acknowledge_write_tools: ack,
-        share,
-        per_user_daily_limit: share && perUser.trim() ? Number(perUser) : null,
+        share: w === "link",
+        per_user_daily_limit: w === "link" && perUser.trim() ? Number(perUser) : null,
         tool_mode: toolMode,
         publisher_server_ids: toolMode === "mixed" ? keepMine : [],
       }),
-    onSuccess: (k) => {
-      setCreated(k);
+    onSuccess: (k, w) => {
+      setCreated({ key: k, way: w });
       setError(null);
       void refresh();
     },
@@ -117,204 +154,295 @@ export function PublishPanel({
   const revoke = useMutation({ mutationFn: (id: string) => builderApi.revokePublicKey(token, id), onSuccess: () => void refresh(), onError: fail });
 
   const live = (keys.data ?? []).filter((k) => k.status !== "revoked");
+  const problems = check.data?.problems ?? [];
+  const current = WAYS.find((x) => x.way === way);
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-start justify-between border-b border-zinc-200 px-4 py-3">
-        <div>
-          <h2 className="flex items-center gap-1.5 text-sm font-semibold text-zinc-900"><Globe className="h-4 w-4" /> Publish</h2>
-          <p className="text-xs text-zinc-500">Send a link anyone can use after signing in, or let apps and websites call it with a key.</p>
+      <div className="flex items-center gap-2 border-b border-zinc-200 px-4 py-3">
+        {way && !created && (
+          <button type="button" aria-label="Back" onClick={reset} className="-ml-1 rounded-md p-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer">
+            <ArrowLeft className="h-4 w-4" />
+          </button>
+        )}
+        <div className="min-w-0 flex-1">
+          <h2 className="text-base font-semibold text-zinc-900">{created ? "You're live" : current ? current.title : "Publish"}</h2>
+          {!way && <p className="text-sm text-zinc-500">Let people or apps use this {kind}.</p>}
         </div>
-        <button type="button" aria-label="Close" onClick={onClose} className="text-zinc-400 hover:text-zinc-700 cursor-pointer"><X className="h-4 w-4" /></button>
+        <button type="button" aria-label="Close" onClick={onClose} className="rounded-md p-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer"><X className="h-4 w-4" /></button>
       </div>
 
-      <div className="flex-1 space-y-4 overflow-y-auto p-4">
+      <div className="flex-1 space-y-5 overflow-y-auto p-4">
+        {/* One banner for "it won't work yet", shown before anything else. */}
+        {!created && problems.length > 0 && (
+          <Notice tone="danger" title="Fix this first — it can't run right now">
+            {problems.map((p) => <p key={p}>{p}</p>)}
+          </Notice>
+        )}
+        {dirty && !created && <Notice tone="warning" title="You have unsaved changes">Publishing uses the last saved version. Save first to include them.</Notice>}
+
         {created ? (
-          <div className="space-y-3 rounded-lg border border-emerald-200 bg-emerald-50/50 p-3">
-            {created.share_enabled && created.share_slug && <ShareLink slug={created.share_slug} />}
-            <p className="text-sm font-semibold text-emerald-900">Published — copy the key now</p>
-            <p className="text-xs text-emerald-900">It won&apos;t be shown again. It only runs this {kind}, so it can sit in a web page.</p>
-            <div className="flex items-center gap-2 rounded bg-white p-2 font-mono text-xs break-all">
-              <span className="flex-1">{created.key}</span>
-              <CopyButton text={created.key} />
-            </div>
-            <div className="flex gap-1 text-xs" role="tablist">
-              {(["website", "curl", "javascript"] as const).map((t) => (
-                <button key={t} role="tab" aria-selected={tab === t} onClick={() => setTab(t)} className={cn("rounded px-2 py-1 capitalize cursor-pointer", tab === t ? "bg-zinc-900 text-white" : "text-zinc-600 hover:bg-zinc-100")}>
-                  {t === "website" ? "Website chat" : t === "curl" ? "API (curl)" : "JavaScript"}
+          <Done created={created.key} way={created.way} name={name} onDone={reset} />
+        ) : !way ? (
+          <>
+            <div className="space-y-2">
+              {WAYS.map(({ way: w, Icon, title, hint }) => (
+                <button
+                  key={w}
+                  type="button"
+                  onClick={() => start(w)}
+                  className="flex w-full items-center gap-3 rounded-lg border border-zinc-200 p-3 text-left transition-colors hover:border-zinc-300 hover:bg-zinc-50 cursor-pointer"
+                >
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-zinc-100 text-zinc-700"><Icon className="h-4 w-4" /></span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-medium text-zinc-900">{title}</span>
+                    <span className="block text-xs text-zinc-500">{hint}</span>
+                  </span>
+                  <ChevronRight className="h-4 w-4 text-zinc-400" />
                 </button>
               ))}
             </div>
-            <div className="relative">
-              <pre className="overflow-x-auto rounded bg-zinc-900 p-2.5 pt-8 text-[11px] leading-relaxed text-zinc-100">{snippets(created.key, name)[tab]}</pre>
-              <div className="absolute right-1.5 top-1.5"><CopyButton text={snippets(created.key, name)[tab]} /></div>
-            </div>
-            {tab === "website" && <p className="text-[11px] text-zinc-600">Paste before &lt;/body&gt;: a chat bubble appears in the corner. Each message is answered on its own.</p>}
-            <TryIt apiKey={created.key} />
-            <Button size="sm" variant="outline" onClick={() => setCreated(null)}>Done</Button>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {dirty && <p className="rounded bg-amber-50 p-2 text-xs text-amber-900">You have unsaved changes — publishing uses saved versions.</p>}
-            <Field label="Which version">
-              <Select value={pin} onChange={(e) => setPin(e.target.value === "latest" ? "latest" : Number(e.target.value))}>
-                <option value="latest">Always the latest saved (now v{currentVersion})</option>
-                {(versions.data ?? []).map((v) => (
-                  <option key={v.id} value={v.version}>Pin v{v.version} — {v.note.toLowerCase()} {timeAgo(v.created_at)}</option>
-                ))}
-              </Select>
-            </Field>
 
-            {check.isLoading && <Spinner className="h-4 w-4 text-zinc-400" />}
-            {(check.data?.problems ?? []).length > 0 && (
-              <div className="space-y-1 rounded-lg border border-red-200 bg-red-50 p-2.5 text-xs text-red-800">
-                <p className="font-semibold">It can&apos;t run right now — callers will get an error until this is fixed:</p>
-                {check.data!.problems.map((p) => <p key={p}>• {p}</p>)}
-              </div>
-            )}
-            {(check.data?.advice ?? []).map((a) => (
-              <p key={a} className="flex gap-1.5 rounded-lg bg-amber-50 p-2.5 text-xs text-amber-900"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />{a}</p>
-            ))}
-            {writeTools.length > 0 && (
-              <div className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-950">
-                <p className="font-semibold">
-                  Anyone with the key could make it use tools that change data — with your accounts{share && toolMode !== "publisher" ? " (through the API and website chat; the share link uses each person's own, except apps you keep)" : ""}:
-                </p>
-                <p className="font-mono">{writeTools.join(", ")}</p>
-                <p>Calls that need your approval still wait for you (you&apos;ll see them in your approvals).</p>
-                <label className="flex cursor-pointer items-start gap-2">
-                  <input type="checkbox" className="mt-0.5 h-4 w-4 accent-indigo-600" checked={ack} onChange={(e) => setAck(e.target.checked)} />
-                  <span>I understand — publish anyway.</span>
-                </label>
-              </div>
-            )}
-
-            <div className="space-y-2 rounded-lg border border-zinc-200 p-2.5">
-              <Toggle checked={share} onChange={setShare} label="Share link — anyone can use it after signing in" />
-              {share && (
-                <>
-                  <ShareModePicker
-                    name="new-key"
-                    mode={toolMode}
-                    mine={keepMine}
+            <section className="space-y-2">
+              <h3 className="text-sm font-semibold text-zinc-900">Published {live.length > 0 && <span className="font-normal text-zinc-500">· {live.length}</span>}</h3>
+              {keys.isLoading && <Spinner className="h-4 w-4 text-zinc-400" />}
+              {!keys.isLoading && live.length === 0 && <p className="text-sm text-zinc-500">Nothing yet. Pick a way above.</p>}
+              <ul className="space-y-2">
+                {live.map((k) => (
+                  <PublishedItem
+                    key={k.id}
+                    item={k}
                     systems={check.data?.systems ?? []}
-                    onChange={(c) => {
-                      if (c.tool_mode) setToolMode(c.tool_mode);
-                      if (c.publisher_server_ids) setKeepMine(c.publisher_server_ids);
-                    }}
+                    onUpdate={(body) => update.mutate({ id: k.id, ...body })}
+                    onRevoke={() => window.confirm(`Delete "${k.name}"? Anyone using it stops at once.`) && revoke.mutate(k.id)}
                   />
-                  <Field label="Runs a day per person">
-                    <Input className="h-9" type="number" min={1} placeholder="No limit" value={perUser} onChange={(e) => setPerUser(e.target.value)} />
+                ))}
+              </ul>
+              {error && <p className="text-sm text-red-600">{error}</p>}
+            </section>
+          </>
+        ) : (
+          <div className="space-y-4">
+            {way === "link" && (
+              <ShareModePicker name="new-key" mode={toolMode} mine={keepMine} systems={check.data?.systems ?? []} onChange={(c) => {
+                if (c.tool_mode) setToolMode(c.tool_mode);
+                if (c.publisher_server_ids) setKeepMine(c.publisher_server_ids);
+              }} />
+            )}
+            {way === "website" && (
+              <Field label="Your website" hint="Only these sites can show the chat. One per line. Leave empty to allow any site.">
+                <Textarea rows={2} value={origins} placeholder="https://acme.com" onChange={(e) => setOrigins(e.target.value)} />
+              </Field>
+            )}
+            {way === "api" && <p className="text-sm text-zinc-500">You&apos;ll get a secret key and ready-to-paste code.</p>}
+
+            {(check.data?.advice ?? []).map((a) => <Notice key={a} tone="warning">{a}</Notice>)}
+
+            {writeTools.length > 0 && (
+              <Notice tone="warning" title="It can change data in your apps">
+                <p>People using it can trigger: <span className="font-mono">{writeTools.join(", ")}</span>. Steps that need your approval still wait for you.</p>
+                <label className="mt-2 flex cursor-pointer items-center gap-2 text-zinc-900">
+                  <input type="checkbox" className="h-4 w-4 accent-[var(--accent)]" checked={ack} onChange={(e) => setAck(e.target.checked)} />
+                  I understand
+                </label>
+              </Notice>
+            )}
+
+            <details className="group rounded-lg border border-zinc-200">
+              <summary className="flex cursor-pointer select-none items-center gap-1.5 px-3 py-2.5 text-sm font-medium text-zinc-700 [&::-webkit-details-marker]:hidden">
+                <ChevronRight className="h-4 w-4 text-zinc-400 transition-transform group-open:rotate-90" /> Advanced
+              </summary>
+              <div className="space-y-3 border-t border-zinc-200 p-3">
+                <Field label="Name" hint="Only you see this.">
+                  <Input value={keyName} maxLength={120} onChange={(e) => setKeyName(e.target.value)} />
+                </Field>
+                <Field label="Version">
+                  <Select value={pin} onChange={(e) => setPin(e.target.value === "latest" ? "latest" : Number(e.target.value))}>
+                    <option value="latest">Always the latest saved (v{currentVersion})</option>
+                    {(versions.data ?? []).map((v) => (
+                      <option key={v.id} value={v.version}>Stay on v{v.version} — {v.note.toLowerCase()} {timeAgo(v.created_at)}</option>
+                    ))}
+                  </Select>
+                </Field>
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="Runs a day">
+                    <Input type="number" min={1} placeholder="No limit" value={quota} onChange={(e) => setQuota(e.target.value)} />
                   </Field>
-                </>
-              )}
-            </div>
-            <Field label="Key name">
-              <Input className="h-9" value={keyName} maxLength={120} onChange={(e) => setKeyName(e.target.value)} />
-            </Field>
-            <Field label="Websites allowed to use it" hint="One per line, like https://acme.com. Empty = any site, and servers.">
-              <Textarea rows={2} value={origins} placeholder="https://acme.com" onChange={(e) => setOrigins(e.target.value)} />
-            </Field>
-            <div className="grid grid-cols-2 gap-2">
-              <Field label="Requests a minute">
-                <Input className="h-9" type="number" min={1} max={600} value={rpm} onChange={(e) => setRpm(Math.max(1, Number(e.target.value) || 1))} />
-              </Field>
-              <Field label="Runs a day">
-                <Input className="h-9" type="number" min={1} placeholder="No limit" value={quota} onChange={(e) => setQuota(e.target.value)} />
-              </Field>
-            </div>
-            {error && <p className="text-xs text-red-600">{error}</p>}
-            <Button size="sm" disabled={create.isPending || (writeTools.length > 0 && !ack)} onClick={() => create.mutate()}>
-              {create.isPending ? <Spinner className="h-4 w-4" /> : <KeyRound />} Create key
+                  {way === "link" ? (
+                    <Field label="Runs a day per person">
+                      <Input type="number" min={1} placeholder="No limit" value={perUser} onChange={(e) => setPerUser(e.target.value)} />
+                    </Field>
+                  ) : (
+                    <Field label="Requests a minute">
+                      <Input type="number" min={1} max={600} value={rpm} onChange={(e) => setRpm(Math.max(1, Number(e.target.value) || 1))} />
+                    </Field>
+                  )}
+                </div>
+                {way === "api" && (
+                  <Field label="Allowed websites" hint="Leave empty for servers and any site.">
+                    <Textarea rows={2} value={origins} placeholder="https://acme.com" onChange={(e) => setOrigins(e.target.value)} />
+                  </Field>
+                )}
+              </div>
+            </details>
+
+            {error && <p className="text-sm text-red-600">{error}</p>}
+            <Button className="w-full" disabled={create.isPending || (writeTools.length > 0 && !ack)} onClick={() => create.mutate(way)}>
+              {create.isPending && <Spinner className="h-4 w-4" />} {current!.action}
             </Button>
           </div>
         )}
-
-        <div>
-          <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-zinc-500">Keys ({live.length})</p>
-          {live.length === 0 && <p className="text-xs text-zinc-400">Not published yet.</p>}
-          <ul className="space-y-2">
-            {live.map((k: PublicKey) => (
-              <li key={k.id} className="rounded-lg border border-zinc-200 p-2.5">
-                <div className="flex items-start gap-2">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium text-zinc-900">
-                      {k.name} <span className={cn("ml-1 rounded px-1.5 py-0.5 text-[10px] font-semibold", k.status === "active" ? "bg-emerald-100 text-emerald-800" : "bg-zinc-100 text-zinc-600")}>{k.status}</span>
-                    </p>
-                    <p className="font-mono text-[11px] text-zinc-500">{k.key_prefix}…</p>
-                    <p className="text-[11px] text-zinc-500">
-                      {k.version ? `Pinned v${k.version}` : "Latest version"} · {k.runs_today} run{k.runs_today === 1 ? "" : "s"} today
-                      {k.daily_quota ? ` / ${k.daily_quota}` : ""} · {k.requests_per_minute}/min
-                      {k.last_used_at ? ` · used ${timeAgo(k.last_used_at)}` : ""}
-                    </p>
-                    {k.allowed_origins.length > 0 && <p className="truncate text-[11px] text-zinc-500">Sites: {k.allowed_origins.join(", ")}</p>}
-                    {k.share_enabled && k.share_slug && (
-                      <div className="mt-1.5 space-y-1">
-                        <ShareLink slug={k.share_slug} compact />
-                        <details className="text-[11px] text-zinc-500">
-                          <summary className="cursor-pointer select-none">
-                            Uses {k.tool_mode === "visitor" ? "each person's own apps" : k.tool_mode === "mixed" ? `their apps, except ${k.publisher_server_ids.length} of yours` : "your apps"} · change
-                          </summary>
-                          <div className="mt-1.5">
-                            <ShareModePicker
-                              name={`key-${k.id}`}
-                              mode={k.tool_mode}
-                              mine={k.publisher_server_ids}
-                              systems={check.data?.systems ?? []}
-                              onChange={(c) => update.mutate({ id: k.id, ...c })}
-                            />
-                          </div>
-                        </details>
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex shrink-0 gap-1">
-                    <button
-                      type="button"
-                      title={k.share_enabled ? "Turn the share link off" : "Make a share link"}
-                      aria-label={k.share_enabled ? `Turn off the share link of ${k.name}` : `Make a share link for ${k.name}`}
-                      aria-pressed={k.share_enabled}
-                      onClick={() => update.mutate({ id: k.id, share: !k.share_enabled })}
-                      className={cn("rounded p-1 hover:bg-zinc-100 cursor-pointer", k.share_enabled ? "text-indigo-500 hover:text-indigo-400" : "text-zinc-400 hover:text-zinc-800")}
-                    >
-                      <Link2 className="h-3.5 w-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      title={k.status === "active" ? "Pause" : "Resume"}
-                      aria-label={k.status === "active" ? `Pause ${k.name}` : `Resume ${k.name}`}
-                      onClick={() => update.mutate({ id: k.id, status: k.status === "active" ? "paused" : "active" })}
-                      className="rounded p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-800 cursor-pointer"
-                    >
-                      {k.status === "active" ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
-                    </button>
-                    <button
-                      type="button"
-                      title="Revoke"
-                      aria-label={`Revoke ${k.name}`}
-                      onClick={() => window.confirm(`Revoke "${k.name}"? Apps and sites using it stop working at once.`) && revoke.mutate(k.id)}
-                      className="rounded p-1 text-zinc-400 hover:bg-zinc-100 hover:text-red-600 cursor-pointer"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
       </div>
     </div>
   );
 }
 
+/** A coloured note: danger for "won't work", warning for "careful". */
+function Notice({ tone, title, children }: { tone: "danger" | "warning"; title?: string; children: React.ReactNode }) {
+  return (
+    <div className={cn("flex gap-2.5 rounded-lg border p-3 text-sm", tone === "danger" ? "border-red-200 bg-red-50" : "border-amber-200 bg-amber-50")}>
+      <AlertTriangle className={cn("mt-0.5 h-4 w-4 shrink-0", tone === "danger" ? "text-red-600" : "text-amber-700")} />
+      <div className="min-w-0 space-y-1 text-zinc-700">
+        {title && <p className="font-medium text-zinc-900">{title}</p>}
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/** After publishing: the one thing to copy, big, and a way to try it. */
+function Done({ created, way, name, onDone }: { created: PublicKeyCreated; way: Way; name: string; onDone: () => void }) {
+  const [tab, setTab] = useState<"curl" | "javascript">("curl");
+  const code = snippets(created.key, name);
+  return (
+    <div className="space-y-5">
+      {way === "link" && created.share_slug && (
+        <section className="space-y-2">
+          <p className="text-sm text-zinc-500">Send this link. Whoever opens it signs in and can use it.</p>
+          <div className="truncate rounded-md border border-zinc-200 bg-[var(--bg)] px-3 py-2.5 font-mono text-sm text-zinc-900">{shareUrl(created.share_slug)}</div>
+          <div className="flex gap-2">
+            <CopyButton text={shareUrl(created.share_slug)} label="Copy link" primary />
+            <a href={shareUrl(created.share_slug)} target="_blank" rel="noopener noreferrer" className="inline-flex h-8 items-center gap-2 rounded-md border border-[var(--border-strong)] px-3 text-sm font-medium text-zinc-900 hover:bg-zinc-50">
+              <ExternalLink className="h-4 w-4" /> Open
+            </a>
+          </div>
+        </section>
+      )}
+
+      {way === "website" && (
+        <section className="space-y-2">
+          <p className="text-sm text-zinc-500">Paste this just before <span className="font-mono">&lt;/body&gt;</span> on your site. A chat bubble appears in the corner.</p>
+          <Code text={code.website} />
+        </section>
+      )}
+
+      {way === "api" && (
+        <section className="space-y-3">
+          <div className="space-y-2">
+            <p className="text-sm text-zinc-500">Your secret key. Copy it now — it won&apos;t be shown again.</p>
+            <div className="break-all rounded-md border border-zinc-200 bg-[var(--bg)] px-3 py-2.5 font-mono text-sm text-zinc-900">{created.key}</div>
+            <CopyButton text={created.key} label="Copy key" primary />
+          </div>
+          <div className="flex gap-1 border-b border-zinc-200" role="tablist">
+            {(["curl", "javascript"] as const).map((t) => (
+              <button key={t} role="tab" aria-selected={tab === t} onClick={() => setTab(t)} className={cn("-mb-px border-b-2 px-3 py-2 text-sm cursor-pointer", tab === t ? "border-[var(--accent-hover)] text-zinc-900" : "border-transparent text-zinc-500 hover:text-zinc-900")}>
+                {t === "curl" ? "curl" : "JavaScript"}
+              </button>
+            ))}
+          </div>
+          <Code text={code[tab]} />
+        </section>
+      )}
+
+      {way !== "link" && <TryIt apiKey={created.key} />}
+      <Button variant="outline" className="w-full" onClick={onDone}>Done</Button>
+    </div>
+  );
+}
+
+/** One published way in the list: what it is, whether it's on, and a ⋯ menu for the rest. */
+function PublishedItem({
+  item: k, systems, onUpdate, onRevoke,
+}: {
+  item: PublicKey;
+  systems: ToolNeedStatus[];
+  onUpdate: (body: { status?: "active" | "paused"; share?: boolean; tool_mode?: ToolMode; publisher_server_ids?: string[] }) => void;
+  onRevoke: () => void;
+}) {
+  const [accounts, setAccounts] = useState(false);
+  const w = wayOf(k);
+  const { Icon } = WAYS.find((x) => x.way === w)!;
+  const active = k.status === "active";
+  const url = k.share_enabled && k.share_slug ? shareUrl(k.share_slug) : null;
+
+  return (
+    <li className="rounded-lg border border-zinc-200 p-3">
+      <div className="flex items-start gap-3">
+        <Icon className="mt-0.5 h-4 w-4 shrink-0 text-zinc-500" />
+        <div className="min-w-0 flex-1">
+          <p className="flex items-center gap-2 text-sm font-medium text-zinc-900">
+            <span className="truncate">{k.name}</span>
+            <span className={cn("rounded-full px-2 py-0.5 text-xs font-medium", active ? "bg-emerald-50 text-emerald-700" : "bg-zinc-100 text-zinc-500")}>{active ? "Live" : "Paused"}</span>
+          </p>
+          {url ? (
+            <a href={url} target="_blank" rel="noopener noreferrer" className="block truncate font-mono text-xs text-[var(--link)] hover:underline">{url}</a>
+          ) : (
+            <p className="font-mono text-xs text-zinc-500">{k.key_prefix}…</p>
+          )}
+          <p className="mt-0.5 text-xs text-zinc-500">
+            {k.runs_today} run{k.runs_today === 1 ? "" : "s"} today{k.daily_quota ? ` of ${k.daily_quota}` : ""}
+            {k.last_used_at ? ` · used ${timeAgo(k.last_used_at)}` : ""}
+            {k.version ? ` · v${k.version}` : ""}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          {url && <IconCopy text={url} />}
+          <Menu
+            label={`More for ${k.name}`}
+            items={[
+              { label: active ? "Pause" : "Resume", onClick: () => onUpdate({ status: active ? "paused" : "active" }) },
+              ...(k.share_enabled ? [{ label: "Whose accounts it uses", onClick: () => setAccounts((v) => !v) }] : []),
+              { label: k.share_enabled ? "Turn off share link" : "Turn on share link", onClick: () => onUpdate({ share: !k.share_enabled }) },
+              { label: "Delete", onClick: onRevoke, danger: true },
+            ]}
+          />
+        </div>
+      </div>
+      {accounts && k.share_enabled && (
+        <div className="mt-3 border-t border-zinc-200 pt-3">
+          <ShareModePicker name={`key-${k.id}`} mode={k.tool_mode} mine={k.publisher_server_ids} systems={systems} onChange={onUpdate} />
+        </div>
+      )}
+    </li>
+  );
+}
+
+export function IconCopy({ text }: { text: string }) {
+  const [done, setDone] = useState(false);
+  return (
+    <button
+      type="button"
+      title="Copy link"
+      aria-label="Copy link"
+      onClick={() => {
+        void navigator.clipboard?.writeText(text);
+        setDone(true);
+        setTimeout(() => setDone(false), 1500);
+      }}
+      className="rounded-md p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer"
+    >
+      {done ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+    </button>
+  );
+}
+
 const MODES: [ToolMode, string, string][] = [
-  ["publisher", "Mine", "Everyone uses your accounts. Anything that would change data waits for your approval."],
-  ["visitor", "Each person's own", "They connect their own accounts on the link page and approve their own runs. You see who used it, not what was in it."],
-  ["mixed", "Some mine, some theirs", "Pick the apps that stay yours (your account, your approval). They connect the rest and approve those themselves."],
+  ["publisher", "Mine", "Everyone uses your connected accounts. Changes wait for your approval."],
+  ["visitor", "Each person's own", "People connect their own accounts and approve their own runs."],
+  ["mixed", "Some mine, some theirs", "Pick the apps that use your account. People connect the rest."],
 ];
 
-/** Whose apps a share link uses — and on a mixed one, which apps stay yours. */
+/** Whose connected apps a share link uses — and on a mixed one, which apps stay yours. */
 function ShareModePicker({
   name, mode, mine, systems, onChange,
 }: {
@@ -324,52 +452,41 @@ function ShareModePicker({
   systems: ToolNeedStatus[];
   onChange: (change: { tool_mode?: ToolMode; publisher_server_ids?: string[] }) => void;
 }) {
+  // The mixed choice only matters when it uses connected apps.
+  const modes = systems.length > 0 || mode === "mixed" ? MODES : MODES.slice(0, 2);
   return (
-    <fieldset className="space-y-1.5">
-      <legend className="mb-1 text-xs font-medium text-zinc-700">Whose connected apps it uses</legend>
-      {MODES.map(([value, label, hint]) => (
-        <label key={value} className="flex cursor-pointer items-start gap-2">
-          <input type="radio" name={`tool-mode-${name}`} className="mt-0.5 h-4 w-4 accent-indigo-600" checked={mode === value} onChange={() => onChange({ tool_mode: value })} />
+    <fieldset className="space-y-2">
+      <legend className="mb-2 text-sm font-medium text-zinc-700">Whose accounts does it use?</legend>
+      {modes.map(([value, label, hint]) => (
+        <label
+          key={value}
+          className={cn("flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors", mode === value ? "border-[var(--accent-border)] bg-[var(--accent-wash)]" : "border-zinc-200 hover:bg-zinc-50")}
+        >
+          <input type="radio" name={`tool-mode-${name}`} className="mt-0.5 h-4 w-4 accent-[var(--accent)]" checked={mode === value} onChange={() => onChange({ tool_mode: value })} />
           <span>
-            <span className="block text-sm text-zinc-800">{label}</span>
-            <span className="block text-[11px] text-zinc-500">{hint}</span>
+            <span className="block text-sm font-medium text-zinc-900">{label}</span>
+            <span className="block text-xs text-zinc-500">{hint}</span>
           </span>
         </label>
       ))}
       {mode === "mixed" && (
-        <div className="ml-6 space-y-1 rounded-md bg-zinc-50 p-2">
-          <p className="text-[11px] font-medium text-zinc-700">Use my account for:</p>
-          {systems.length === 0 && <p className="text-[11px] text-zinc-500">It doesn&apos;t use any connected apps.</p>}
+        <div className="space-y-2 rounded-lg bg-zinc-50 p-3">
+          <p className="text-xs font-medium text-zinc-700">Use my account for:</p>
           {systems.map((sys) => (
-            <label key={sys.server_id!} className="flex cursor-pointer items-center gap-2 text-xs text-zinc-800">
+            <label key={sys.server_id!} className="flex cursor-pointer items-center gap-2 text-sm text-zinc-900">
               <input
                 type="checkbox"
-                className="h-3.5 w-3.5 accent-indigo-600"
+                className="h-4 w-4 accent-[var(--accent)]"
                 checked={mine.includes(sys.server_id!)}
                 onChange={(e) => onChange({ publisher_server_ids: e.target.checked ? [...mine, sys.server_id!] : mine.filter((x) => x !== sys.server_id) })}
               />
               {sys.server_name || sys.system}
-              {sys.status !== "ready" && <span className="text-[10px] text-amber-600">you haven&apos;t connected it</span>}
+              {sys.status !== "ready" && <span className="text-xs text-amber-700">not connected</span>}
             </label>
           ))}
         </div>
       )}
     </fieldset>
-  );
-}
-
-/** The /r/{slug} link to send people; the same link comes back if sharing is turned off and on. */
-function ShareLink({ slug, compact }: { slug: string; compact?: boolean }) {
-  const url = shareUrl(slug);
-  return (
-    <div className={cn("space-y-1", !compact && "rounded bg-white p-2")}>
-      {!compact && <p className="text-xs font-semibold text-zinc-900">Share link</p>}
-      <div className="flex items-center gap-2">
-        <a href={url} target="_blank" rel="noopener noreferrer" className="min-w-0 flex-1 truncate font-mono text-[11px] text-indigo-500 hover:text-indigo-400">{url}</a>
-        <CopyButton text={url} label="Copy link" />
-      </div>
-      {!compact && <p className="text-[11px] text-zinc-500">Whoever opens it signs in (or signs up) and runs it.</p>}
-    </div>
   );
 }
 
@@ -400,15 +517,15 @@ function TryIt({ apiKey }: { apiKey: string }) {
   };
 
   return (
-    <div className="space-y-1.5 rounded border border-zinc-200 bg-white p-2.5">
-      <p className="text-xs font-medium text-zinc-700">Try it as a caller</p>
-      <div className="flex gap-1.5">
-        <Input className="h-8 text-xs" value={text} placeholder="Ask something" onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && text.trim() && !busy && void ask()} />
-        <Button size="sm" className="h-8" disabled={busy || !text.trim()} onClick={() => void ask()} aria-label="Send test message">
-          {busy ? <Spinner className="h-3.5 w-3.5" /> : <Send />}
+    <section className="space-y-2">
+      <h3 className="text-sm font-semibold text-zinc-900">Try it</h3>
+      <div className="flex gap-2">
+        <Input value={text} placeholder="Ask something" onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && text.trim() && !busy && void ask()} />
+        <Button size="default" disabled={busy || !text.trim()} onClick={() => void ask()} aria-label="Send test message">
+          {busy ? <Spinner className="h-4 w-4" /> : <Send />}
         </Button>
       </div>
-      {answer !== null && <p className="whitespace-pre-wrap text-xs text-zinc-800">{answer}</p>}
-    </div>
+      {answer !== null && <p className="whitespace-pre-wrap rounded-md bg-zinc-50 p-3 text-sm text-zinc-700">{answer}</p>}
+    </section>
   );
 }
