@@ -101,7 +101,7 @@ export function OutputSettings({
               <span className="flex items-center gap-1.5 text-xs font-semibold text-zinc-900">
                 <f.Icon className={cn("h-3.5 w-3.5", fmt === f.id ? "text-emerald-600" : "text-zinc-400")} /> {f.label}
               </span>
-              <span className="mt-0.5 block text-[10.5px] leading-snug text-zinc-500">{f.hint}</span>
+              <span className="mt-0.5 block text-xs leading-snug text-zinc-500">{f.hint}</span>
             </button>
           ))}
         </div>

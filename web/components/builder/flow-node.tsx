@@ -54,51 +54,43 @@ export type FlowNodeType = Node<FlowNodeData, "flow">;
 
 /** Each kind of step has its own colour on the canvas — the card's tint, border, header and badge —
  *  so an agent, a tool call or an approval can be told apart at a glance. */
-type Look = { label: string; badge: string; hint: string; Icon: typeof Bot; head: string; card: string; tag: string };
-// One hue per kind, far enough apart to tell at a glance: triggers in blues/teal, agent violet,
-// tool orange, condition yellow, join neutral slate, approval rose, output green.
+type Look = { label: string; badge: string; hint: string; Icon: typeof Bot; head: string };
+// One hue per kind, on its icon only (the cards are all the same quiet surface), far enough apart
+// to tell at a glance: triggers in blues/teal, agent violet, tool orange, condition yellow,
+// join slate, approval rose, output green.
 const LOOK: Record<NodeType, Look> = {
   input: {
     label: "Input", badge: "Trigger", hint: "Entry point for workflow run", Icon: LogIn, head: "from-sky-400 to-sky-600",
-    card: "border-sky-500/45 bg-gradient-to-b from-sky-500/[0.14] to-[#141418]", tag: "bg-sky-500/15 text-sky-200 ring-sky-400/30",
   },
   manual_trigger: {
     label: "Manual Trigger", badge: "Trigger", hint: "Starts when Run is clicked", Icon: PlayCircle, head: "from-blue-500 to-indigo-600",
-    card: "border-blue-500/45 bg-gradient-to-b from-blue-500/[0.14] to-[#141418]", tag: "bg-blue-500/15 text-blue-200 ring-blue-400/30",
   },
   schedule_trigger: {
     label: "Schedule Trigger", badge: "Trigger", hint: "Starts on a schedule", Icon: CalendarClock, head: "from-teal-400 to-teal-600",
-    card: "border-teal-500/45 bg-gradient-to-b from-teal-500/[0.14] to-[#141418]", tag: "bg-teal-500/15 text-teal-200 ring-teal-400/30",
   },
   agent: {
     label: "Agent", badge: "Agent", hint: "AI agent performs processing", Icon: Bot, head: "from-violet-500 to-purple-600",
-    card: "border-violet-500/45 bg-gradient-to-b from-violet-500/[0.14] to-[#141418]", tag: "bg-violet-500/15 text-violet-200 ring-violet-400/30",
   },
   tool: {
     label: "Tool Call", badge: "Tool", hint: "Calls one tool of a connector", Icon: Wrench, head: "from-orange-400 to-orange-600",
-    card: "border-orange-500/45 bg-gradient-to-b from-orange-500/[0.14] to-[#141418]", tag: "bg-orange-500/15 text-orange-200 ring-orange-400/30",
   },
   condition: {
     label: "Condition", badge: "Condition", hint: "Branches logic", Icon: GitBranch, head: "from-yellow-400 to-amber-500",
-    card: "border-yellow-500/45 bg-gradient-to-b from-yellow-500/[0.14] to-[#141418]", tag: "bg-yellow-500/15 text-yellow-200 ring-yellow-400/30",
   },
   join: {
     label: "Join", badge: "Join", hint: "Waits for parallel branches", Icon: Merge, head: "from-slate-400 to-slate-600",
-    card: "border-slate-500/45 bg-gradient-to-b from-slate-500/[0.14] to-[#141418]", tag: "bg-slate-500/15 text-slate-200 ring-slate-400/30",
   },
   human_approval: {
     label: "Human Approval", badge: "Approval", hint: "Pauses for a person to approve", Icon: Hand, head: "from-rose-500 to-red-600",
-    card: "border-rose-500/45 bg-gradient-to-b from-rose-500/[0.14] to-[#141418]", tag: "bg-rose-500/15 text-rose-200 ring-rose-400/30",
   },
   output: {
     label: "Output", badge: "Output", hint: "Final answer", Icon: Send, head: "from-emerald-400 to-green-600",
-    card: "border-emerald-500/45 bg-gradient-to-b from-emerald-500/[0.14] to-[#141418]", tag: "bg-emerald-500/15 text-emerald-200 ring-emerald-400/30",
   },
 };
 export const NODE_LOOK = LOOK;
 
 const RING: Record<StepState, string> = {
-  running: "ring-2 ring-sky-400 shadow-[0_0_24px_rgba(56,189,248,0.35)]",
+  running: "ring-2 ring-[var(--accent-hover)] shadow-[0_0_24px_rgba(99,102,241,0.35)]",
   succeeded: "ring-2 ring-emerald-400",
   failed: "ring-2 ring-red-500",
   waiting: "ring-2 ring-amber-400 animate-pulse",
@@ -107,7 +99,7 @@ const RING: Record<StepState, string> = {
 const NO_INPUT: NodeType[] = ["input", "manual_trigger", "schedule_trigger"];
 
 function StateIcon({ state }: { state?: StepState }) {
-  if (state === "running") return <Loader2 className="h-4 w-4 animate-spin text-sky-400" aria-label="Running" />;
+  if (state === "running") return <Loader2 className="h-4 w-4 animate-spin text-[var(--link)]" aria-label="Running" />;
   if (state === "succeeded") return <CheckCircle2 className="h-4 w-4 text-emerald-400" aria-label="Done" />;
   if (state === "failed") return <XCircle className="h-4 w-4 text-red-400" aria-label="Failed" />;
   if (state === "waiting") return <CircleDot className="h-4 w-4 text-amber-400" aria-label="Waiting for you" />;
@@ -167,7 +159,7 @@ function ToolsChip({ toolIds, changed, token }: { toolIds: string[]; changed: bo
           <>
             <div className="fixed inset-0 z-[999]" onClick={() => setAt(null)} />
             <div style={at} className="fixed z-[1000] max-h-72 w-64 overflow-y-auto rounded-lg border border-white/10 bg-zinc-900 p-1.5 shadow-2xl">
-              <p className="px-1.5 pb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">Tools this step can call</p>
+              <p className="px-1.5 pb-1 text-xs font-medium text-zinc-500">Tools this step can call</p>
               {toolIds.map((id) => (
                 <p key={id} title={id} className="flex items-center gap-1.5 truncate rounded px-1.5 py-1 text-xs text-zinc-200 hover:bg-white/5">
                   {offline.has(id) ? <Unplug className="h-3 w-3 shrink-0 text-red-400" /> : <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-400" />}
@@ -251,7 +243,7 @@ function Body({ node, ctx }: { node: WorkflowNode; ctx: CanvasCtx }) {
     case "input":
       return (
         <div>
-          <p className="mb-1.5 text-center text-xs font-semibold uppercase tracking-wider text-zinc-500">Start trigger query</p>
+          <p className="mb-1.5 text-xs font-medium text-zinc-400">What should it work on?</p>
           <textarea
             aria-label="Start trigger query"
             className="nodrag nowheel h-16 w-full resize-none rounded-lg border border-white/10 bg-white/5 px-2.5 py-2 text-xs text-zinc-100 placeholder:text-zinc-500 focus:border-indigo-400 focus:outline-none"
@@ -259,7 +251,7 @@ function Body({ node, ctx }: { node: WorkflowNode; ctx: CanvasCtx }) {
             value={ctx.inputText}
             onChange={(e) => ctx.setInputText(e.target.value)}
           />
-          {(node.variables ?? []).length > 0 && <p className="mt-1 text-[10.5px] text-zinc-500">+ {(node.variables ?? []).length} input field(s)</p>}
+          {(node.variables ?? []).length > 0 && <p className="mt-1 text-xs text-zinc-500">+ {(node.variables ?? []).length} input field(s)</p>}
         </div>
       );
     case "manual_trigger":
@@ -411,25 +403,23 @@ function FlowNodeView({ data, selected }: NodeProps<FlowNodeType>) {
   return (
     <div
       className={cn(
-        "w-[270px] overflow-hidden rounded-xl border text-left shadow-lg shadow-black/30 transition-shadow",
-        // The kind's own border stays; a problem turns it red, selection adds an outline around it.
-        hasProblems ? "border-red-500/70 bg-[#141418]" : look.card,
-        selected && "outline outline-2 outline-offset-2 outline-indigo-400",
+        "w-[270px] overflow-hidden rounded-xl border bg-[var(--surface)] text-left shadow-lg shadow-black/30 transition-shadow",
+        // A problem turns the border red; selection adds an outline around it.
+        hasProblems ? "border-red-500/70" : "border-[var(--border-strong)]",
+        selected && "outline outline-2 outline-offset-2 outline-[var(--accent-hover)]",
         data.state && RING[data.state],
       )}
       title={hasProblems ? data.problems.map((p) => p.message).join("\n") : undefined}
     >
       <StepToolbar node={node} ctx={ctx} hasResult={!!data.output} />
       {!NO_INPUT.includes(node.type) && <Handle type="target" position={Position.Left} className="!h-3 !w-3 !border-2 !border-[#141418] !bg-indigo-400" />}
-      {/* The step's colour: a bar on top, its icon and its kind's badge. */}
-      <div className={cn("h-1 bg-gradient-to-r", look.head)} />
-      <div className="flex items-center gap-2.5 px-3 pt-2.5">
-        <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br text-white shadow-md shadow-black/30", look.head)}><look.Icon className="h-4 w-4" /></span>
+      {/* The step's kind: its coloured icon and, under its name, what kind it is. */}
+      <div className="flex items-center gap-2.5 px-3 pt-3">
+        <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br text-white", look.head)}><look.Icon className="h-4 w-4" /></span>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-[13px] font-semibold text-zinc-100">{data.title !== look.label ? data.title : look.label}</p>
-          <p className="truncate text-[10.5px] text-zinc-400">{data.title !== look.label ? look.label : look.hint}</p>
+          <p className="truncate text-sm font-semibold text-zinc-100">{data.title !== look.label ? data.title : look.label}</p>
+          <p className="truncate text-xs text-zinc-400">{data.title !== look.label ? look.label : look.hint}</p>
         </div>
-        <span className={cn("shrink-0 rounded px-1.5 py-0.5 text-xs font-semibold uppercase tracking-wider ring-1", look.tag)}>{look.badge}</span>
         {hasProblems && (
           <span className="flex items-center gap-0.5 rounded-full bg-red-500/15 px-1.5 py-0.5 text-xs font-semibold text-red-300">
             <AlertTriangle className="h-3 w-3" /> {data.problems.length}
@@ -439,7 +429,7 @@ function FlowNodeView({ data, selected }: NodeProps<FlowNodeType>) {
       </div>
       <div className="px-3 py-2.5">
         <Body node={node} ctx={ctx} />
-        {data.detail && <p className="mt-2 truncate rounded-md bg-sky-500/10 px-2 py-1 text-[10.5px] text-sky-300">{data.detail}</p>}
+        {data.detail && <p className="mt-2 truncate rounded-md bg-[var(--accent-wash)] px-2 py-1 text-xs text-zinc-200">{data.detail}</p>}
         {data.output && !data.detail && (
           <button
             type="button"
@@ -447,7 +437,7 @@ function FlowNodeView({ data, selected }: NodeProps<FlowNodeType>) {
               e.stopPropagation();
               ctx.showResult(node.id);
             }}
-            className="nodrag mt-2 line-clamp-2 w-full rounded-md bg-white/5 px-2 py-1 text-left text-[10.5px] text-zinc-400 hover:bg-white/10 hover:text-zinc-200 cursor-pointer"
+            className="nodrag mt-2 line-clamp-2 w-full rounded-md bg-white/5 px-2 py-1 text-left text-xs text-zinc-400 hover:bg-white/10 hover:text-zinc-200 cursor-pointer"
             title="See the whole answer"
           >
             {data.output}

@@ -104,13 +104,13 @@ export function WorkflowSettings({
               {config.on_node_failure === "retry" && (
                 <div className="grid grid-cols-2 gap-2 rounded-xl border border-zinc-200 bg-zinc-50 p-2.5">
                   <label className="block">
-                    <span className="mb-1 block text-[10.5px] font-medium text-zinc-500">Attempts</span>
+                    <span className="mb-1 block text-xs font-medium text-zinc-500">Attempts</span>
                     <select className={selectCls} value={config.node_retry_count || 2} onChange={(e) => set({ node_retry_count: Number(e.target.value) })}>
                       {[1, 2, 3, 5].map((n) => <option key={n} value={n}>{n} {n === 1 ? "time" : "times"}</option>)}
                     </select>
                   </label>
                   <label className="block">
-                    <span className="mb-1 block text-[10.5px] font-medium text-zinc-500">If still failing</span>
+                    <span className="mb-1 block text-xs font-medium text-zinc-500">If still failing</span>
                     <select className={selectCls} value={config.node_retry_fallback ?? "abort"} onChange={(e) => set({ node_retry_fallback: e.target.value as "abort" | "skip" })}>
                       <option value="abort">Stop run</option>
                       <option value="skip">Skip step</option>
@@ -128,13 +128,13 @@ export function WorkflowSettings({
                   value={config.max_steps ?? 50}
                   onChange={(e) => set({ max_steps: Math.min(500, Math.max(1, Number(e.target.value) || 50)) })}
                 />
-                <span className="mt-1 block text-[10.5px] text-zinc-500">Stops a loop that never ends (a condition that keeps going back).</span>
+                <span className="mt-1 block text-xs text-zinc-500">Stops a loop that never ends (a condition that keeps going back).</span>
               </label>
               <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-zinc-200 bg-zinc-50 p-2.5">
                 <input type="checkbox" className="mt-0.5 h-4 w-4 accent-indigo-600" checked={!!config.include_step_summary} onChange={(e) => set({ include_step_summary: e.target.checked })} />
                 <span>
                   <span className="block text-xs font-medium text-zinc-900">Include step-by-step summary</span>
-                  <span className="block text-[10.5px] text-zinc-500">Appends individual step outputs to final answer.</span>
+                  <span className="block text-xs text-zinc-500">Appends individual step outputs to final answer.</span>
                 </span>
               </label>
             </div>
@@ -157,7 +157,7 @@ function Governance({ config, token, set }: { config: WorkflowConfig; token: str
     <div className="space-y-3">
       <div>
         <span className="mb-1 block text-xs font-medium text-zinc-600">Default Knowledge Base</span>
-        <p className="mb-1.5 text-[10.5px] text-zinc-500">Every agent step searches these, on top of its own.</p>
+        <p className="mb-1.5 text-xs text-zinc-500">Every agent step searches these, on top of its own.</p>
         {kbs.isLoading ? (
           <Spinner className="h-4 w-4 text-zinc-400" />
         ) : shared.length === 0 ? (
@@ -179,11 +179,11 @@ function Governance({ config, token, set }: { config: WorkflowConfig; token: str
       </div>
       <div>
         <span className="mb-1 block text-xs font-medium text-zinc-600">Approval Overrides (this workflow)</span>
-        <p className="mb-1.5 text-[10.5px] text-zinc-500">Ask before tools run — Default leaves it to each step&apos;s agent.</p>
+        <p className="mb-1.5 text-xs text-zinc-500">Ask before tools run — Default leaves it to each step&apos;s agent.</p>
         <div className="grid grid-cols-3 gap-2">
           {([["read", "Reads", Eye], ["edit", "Writes", Edit3], ["delete", "Deletes", Trash2]] as const).map(([kind, label, Icon]) => (
             <label key={kind} className="flex flex-col gap-1 rounded-xl border border-zinc-200 bg-zinc-50 p-2">
-              <span className="flex items-center gap-1 text-[10.5px] font-medium text-zinc-500"><Icon className="h-3 w-3" /> {label}</span>
+              <span className="flex items-center gap-1 text-xs font-medium text-zinc-500"><Icon className="h-3 w-3" /> {label}</span>
               <select
                 className={selectCls}
                 aria-label={`Approval for ${label}`}

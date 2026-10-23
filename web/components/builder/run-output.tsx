@@ -166,7 +166,7 @@ export function StepRunPanel({
                   {c.duration_ms != null && <span className="ml-auto font-normal text-zinc-400">{(c.duration_ms / 1000).toFixed(1)}s</span>}
                 </p>
                 {Object.keys(c.arguments ?? {}).length > 0 && (
-                  <pre className="mt-1.5 overflow-x-auto rounded bg-zinc-50 p-1.5 font-mono text-[10.5px] text-zinc-600">{JSON.stringify(c.arguments, null, 2)}</pre>
+                  <pre className="mt-1.5 overflow-x-auto rounded bg-zinc-50 p-1.5 font-mono text-xs text-zinc-600">{JSON.stringify(c.arguments, null, 2)}</pre>
                 )}
                 {c.result_preview && <p className="mt-1.5 line-clamp-6 whitespace-pre-wrap text-xs text-zinc-600">{c.result_preview}</p>}
               </li>

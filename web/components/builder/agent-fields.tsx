@@ -115,7 +115,7 @@ export function AgentFields({
         type="button"
         disabled={improve.isPending || !(value[field] ?? "").trim()}
         onClick={() => improve.mutate({ field, text: value[field] ?? "" })}
-        className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-800 disabled:opacity-40 cursor-pointer"
+        className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-40 cursor-pointer"
       >
         {improve.isPending && improve.variables?.field === field ? <Spinner className="h-3 w-3" /> : <Sparkles className="h-3 w-3" />}
         Improve

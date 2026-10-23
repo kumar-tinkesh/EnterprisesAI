@@ -275,7 +275,7 @@ export function RunTimeline({ view, stepName = (id) => id }: { view: RunView; st
               )}
               {t.text}
               {t.detail && (
-                <span className="mt-0.5 block line-clamp-2 break-all rounded bg-zinc-50 px-1.5 py-0.5 font-mono text-[10.5px] text-zinc-500" title={t.detail}>
+                <span className="mt-0.5 block line-clamp-2 break-all rounded bg-zinc-50 px-1.5 py-0.5 font-mono text-xs text-zinc-500" title={t.detail}>
                   {t.detail}
                 </span>
               )}

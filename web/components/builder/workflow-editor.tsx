@@ -17,15 +17,15 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import {
-  AlertTriangle, AlignLeft, ArrowLeft, Check, ChevronDown, Eye, FlaskConical, Globe, History, Layers, LayoutGrid, MessageSquare,
-  Play, Plus, Redo2, RotateCcw, Save, Send, Settings2, ShieldCheck, Undo2, Wand2, X,
+  AlertTriangle, ArrowLeft, Check, ChevronDown, Eye, MessageSquare,
+  Play, Plus, Redo2, RotateCcw, Save, Sparkles, Square, Undo2, Wand2, X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Menu } from "@/components/ui/menu";
 import { Spinner } from "@/components/ui/spinner";
 import { ApprovalCard } from "@/components/builder/approval-card";
-import { BuildBar, barButton, barInput } from "@/components/builder/build-bar";
 import { flowEdgeTypes, type FlowEdgeType } from "@/components/builder/flow-edge";
 import { CanvasContext, NODE_LOOK, flowNodeTypes, type CanvasCtx, type FlowNodeType } from "@/components/builder/flow-node";
 import { EdgeInspector, StepInspector } from "@/components/builder/inspector";
@@ -37,6 +37,7 @@ import { AnswerActions, AnswerView, StepRunPanel } from "@/components/builder/ru
 import { useNodeSizes } from "@/components/builder/step-node";
 import { TestsPanel } from "@/components/builder/tests-panel";
 import { VersionHistory, timeAgo } from "@/components/builder/version-history";
+import { TypeIcon } from "@/components/builder/type-icon";
 import { WorkflowSettings } from "@/components/builder/workflow-settings";
 import { ApiError } from "@/lib/api";
 import { builderApi } from "@/lib/builder/api";
@@ -83,8 +84,8 @@ type EditorProps = {
   id: string;
   onBack: () => void;
   onSwitch?: (workflowId: string) => void;
+  /** Kept for callers; the editor has no build bar any more, so it opens and leaves nothing through these. */
   onOpen: (target: BuildTarget) => void;
-  /** Where the bar's Agent tab goes (the empty canvas); without it the tab only switches what the bar describes. */
   onExit?: () => void;
 };
 
@@ -109,7 +110,7 @@ function readStored<T extends string>(key: string, allowed: readonly T[], fallba
 /** How many editors have each workflow open (a page can swap one for another). */
 const openEditors = new Map<string, number>();
 
-function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
+function Editor({ id, onBack, onSwitch }: EditorProps) {
   const token = useAuthStore((s) => s.accessToken) || "";
   const queryClient = useQueryClient();
   const flow = useReactFlow();
@@ -128,7 +129,6 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
   const [previewVersion, setPreviewVersion] = useState<number | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [switchOpen, setSwitchOpen] = useState(false);
-  const [depthOpen, setDepthOpen] = useState(false);
   const [depth, setDepthState] = useState<AnswerDepth>("auto");
   const [streamOn] = useStreamPref();
   const [inputText, setInputTextState] = useState("");
@@ -462,12 +462,6 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
   });
   const stopRun = useMutation({ mutationFn: () => builderApi.cancelRun(token, canvasRunId!) });
   const running = !!canvasRunId && !isFinished(canvasRun.view.status);
-  const runFromBar = () => {
-    const text = instruction.trim() || inputText;
-    if (instruction.trim()) setInstruction("");
-    startRun.mutate(text);
-  };
-
   // ── canvas ──
   const { sizes, track } = useNodeSizes();
   const flowNodes: FlowNodeType[] = useMemo(
@@ -691,18 +685,18 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
 
   return (
     <CanvasContext.Provider value={ctx}>
-      <div className="builder-dark flex h-screen w-full flex-col overflow-hidden bg-zinc-950">
-        {/* ── header ── */}
-        <header className="flex items-center gap-2 border-b border-zinc-200 bg-white px-3 py-2">
-          <button type="button" onClick={onBack} className="rounded-md p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer" aria-label="Back">
+      <div className="builder-dark flex h-full w-full flex-col overflow-hidden bg-[var(--bg)]">
+        {/* ── header: what it is, then Add step, undo/redo, Test, Run, Save; the rest under ⋯ ── */}
+        <header className="flex items-center gap-1.5 border-b border-zinc-200 px-2 py-2 sm:gap-2 sm:px-3">
+          <button type="button" onClick={onBack} className="shrink-0 rounded-md p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer" aria-label="Back">
             <ArrowLeft className="h-4 w-4" />
           </button>
-          <div className="relative">
-            <button type="button" className="flex h-8 items-center gap-1 rounded-md px-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer" onClick={() => { setSwitchOpen((o) => !o); setAddOpen(false); }} aria-label="Switch workflow" aria-expanded={switchOpen} title="Switch workflow">
-              <Layers className="h-4 w-4 text-indigo-400" /> <ChevronDown className="h-3.5 w-3.5" />
+          <div className="relative shrink-0">
+            <button type="button" className="flex h-8 items-center gap-1 rounded-md pl-0.5 pr-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer" onClick={() => { setSwitchOpen((o) => !o); setAddOpen(false); }} aria-label="Switch workflow" aria-expanded={switchOpen} title="Switch workflow">
+              <TypeIcon kind="workflow" size="sm" /> <ChevronDown className="h-3.5 w-3.5" />
             </button>
             {switchOpen && (
-              <div className="absolute left-0 top-10 z-40 max-h-80 w-72 overflow-y-auto rounded-xl border border-zinc-200 bg-white p-1.5 shadow-lg">
+              <div className="absolute left-0 top-10 z-40 max-h-80 w-72 overflow-y-auto rounded-lg border border-zinc-200 bg-[var(--surface-raised)] p-1 shadow-lg">
                 {workflows.isLoading && <div className="flex justify-center p-3"><Spinner className="h-4 w-4 text-zinc-400" /></div>}
                 {(workflows.data ?? []).map((w) => (
                   <button
@@ -714,55 +708,78 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
                       if (dirty && !window.confirm("You have unsaved changes here. Leave anyway?")) return;
                       onSwitch?.(w.id);
                     }}
-                    className={cn("flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs hover:bg-zinc-100 cursor-pointer", w.id === id ? "text-indigo-600" : "text-zinc-700")}
+                    className={cn("flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm hover:bg-zinc-100 cursor-pointer", w.id === id ? "text-zinc-900" : "text-zinc-700")}
                   >
                     <span className="min-w-0 flex-1 truncate">{w.name}</span>
-                    <span className="text-xs text-zinc-400">{w.node_count} steps</span>
+                    {w.id === id ? <Check className="h-4 w-4 shrink-0" /> : <span className="shrink-0 text-xs text-zinc-500">{w.node_count} steps</span>}
                   </button>
                 ))}
               </div>
             )}
           </div>
-          <Input aria-label="Workflow name" className="h-8 w-full min-w-0 max-w-56 border-transparent font-semibold hover:border-zinc-200" value={doc.name} disabled={!canManage || previewing} onChange={(e) => change((d) => ({ ...d, name: e.target.value }))} />
-          <span className={cn("shrink-0 text-xs", dirty ? "text-amber-600" : "text-zinc-400")}>{!canManage ? "View only — shared by a teammate" : dirty ? "Unsaved changes" : "Saved"}</span>
+          <Input aria-label="Workflow name" className="h-8 min-w-0 flex-1 border-transparent bg-transparent px-2 font-semibold hover:border-zinc-200 sm:max-w-64" value={doc.name} disabled={!canManage || previewing} onChange={(e) => change((d) => ({ ...d, name: e.target.value }))} />
+          <span className={cn("hidden shrink-0 text-xs md:inline", dirty ? "text-amber-700" : "text-zinc-500")}>{!canManage ? "View only — shared by a teammate" : dirty ? "Unsaved changes" : "Saved"}</span>
           {problems.length > 0 && (
             <span className="flex shrink-0 items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700" title={problems.map((p) => p.message).join("\n")}>
               <AlertTriangle className="h-3 w-3" /> {problems.length}
             </span>
           )}
-          <div className="ml-auto flex min-w-0 gap-2 overflow-x-auto">
+          <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-1.5">
             {canManage && (
-              <Button size="sm" variant="outline" className={cn("h-8", addOpen && "bg-indigo-50")} disabled={previewing} onClick={() => { setAddOpen((o) => !o); setSwitchOpen(false); }} aria-expanded={addOpen}>
-                <Plus /> Add Step
+              <Button size="sm" variant="outline" className={cn("px-2 lg:px-3", addOpen && "bg-zinc-100")} disabled={previewing} onClick={() => { setAddOpen((o) => !o); setSwitchOpen(false); }} aria-expanded={addOpen} aria-label="Add step">
+                <Plus /> <span className="hidden lg:inline">Add step</span>
               </Button>
             )}
-            <Button size="sm" variant="outline" className={cn("h-8", playOpen && "bg-indigo-50")} onClick={() => setPlayOpen((o) => !o)}>
-              <MessageSquare /> Test
+            {canManage && (
+              <div className="hidden items-center sm:flex">
+                <IconTool label="Undo (Ctrl+Z)" disabled={previewing || !historySize.past} onClick={undo}><Undo2 /></IconTool>
+                <IconTool label="Redo (Ctrl+Shift+Z)" disabled={previewing || !historySize.future} onClick={redo}><Redo2 /></IconTool>
+              </div>
+            )}
+            <Button size="sm" variant="outline" className={cn("hidden px-2 sm:inline-flex lg:px-3", playOpen && "bg-zinc-100")} onClick={() => setPlayOpen((o) => !o)} aria-label="Test in a chat" aria-pressed={playOpen}>
+              <MessageSquare /> <span className="hidden lg:inline">Test</span>
             </Button>
-            {/* The occasional ones, as one quiet row of icons. */}
-            <div className="flex shrink-0 items-center rounded-lg border border-zinc-200 p-0.5">
-              {canManage && (
-                <>
-                  <IconTool label="Undo (Ctrl+Z)" disabled={previewing || !historySize.past} onClick={undo}><Undo2 /></IconTool>
-                  <IconTool label="Redo (Ctrl+Shift+Z)" disabled={previewing || !historySize.future} onClick={redo}><Redo2 /></IconTool>
-                </>
-              )}
-              {canManage && (
-                <IconTool label={approvalOn ? "Approval on: asks before tools that change or delete data" : "Approval off: tools run without asking"} pressed={approvalOn} disabled={previewing} onClick={toggleApproval}>
-                  <ShieldCheck className={approvalOn ? "text-emerald-500" : undefined} />
-                </IconTool>
-              )}
-              {canManage && <IconTool label="Arrange the steps" disabled={previewing} onClick={tidy}><LayoutGrid /></IconTool>}
-              <IconTool label="Tests" pressed={selection?.kind === "tests"} disabled={previewing} onClick={() => setSelection(selection?.kind === "tests" ? null : { kind: "tests" })}><FlaskConical /></IconTool>
-              <IconTool label="History" pressed={selection?.kind === "history"} onClick={() => setSelection(selection?.kind === "history" ? null : { kind: "history" })}><History /></IconTool>
-              {canManage && <IconTool label="Publish" pressed={selection?.kind === "publish"} disabled={previewing} onClick={() => setSelection(selection?.kind === "publish" ? null : { kind: "publish" })}><Globe /></IconTool>}
-              <IconTool label="Whole-run settings" pressed={selection?.kind === "settings"} disabled={previewing} onClick={() => setSelection(selection?.kind === "settings" ? null : { kind: "settings" })}><Settings2 /></IconTool>
-            </div>
-            {canManage && (
-              <Button size="sm" className="h-8" disabled={!dirty || save.isPending || previewing} onClick={() => save.mutate()}>
-                {save.isPending ? <Spinner className="h-4 w-4" /> : <Save />} Save
+            {running ? (
+              <Button size="sm" variant="outline" className="px-2 lg:px-3" onClick={() => stopRun.mutate()} aria-label="Stop the run">
+                <Square className="h-3 w-3 fill-current" /> <span className="hidden lg:inline">Stop</span>
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                className="px-2 lg:px-3"
+                onClick={() => startRun.mutate(inputText)}
+                disabled={startRun.isPending || previewing || (trigger?.type === "input" && !inputText.trim())}
+                aria-label="Run on the canvas"
+                title={trigger?.type === "input" && !inputText.trim() ? "Type what it should work on in the Input step first" : "Run it here on the canvas, step by step"}
+              >
+                {startRun.isPending ? <Spinner className="h-4 w-4" /> : <Play />} <span className="hidden lg:inline">Run</span>
               </Button>
             )}
+            {canManage && (
+              <Button size="sm" className="px-2 sm:px-3" disabled={!dirty || save.isPending || previewing} onClick={() => save.mutate()} aria-label="Save">
+                {save.isPending ? <Spinner className="h-4 w-4" /> : <Save />} <span className="hidden sm:inline">Save</span>
+              </Button>
+            )}
+            <Menu
+              label="More actions"
+              items={[
+                { label: "Test in a chat", checked: playOpen || undefined, onClick: () => setPlayOpen((o) => !o) },
+                ...(canManage
+                  ? [
+                      { label: "Undo", onClick: undo },
+                      { label: "Redo", onClick: redo },
+                      { label: "Arrange the steps", onClick: tidy, divided: true },
+                      { label: "Ask before changing data", checked: approvalOn, onClick: toggleApproval },
+                    ]
+                  : []),
+                { label: "Run settings", divided: true, onClick: () => setSelection(selection?.kind === "settings" ? null : { kind: "settings" }) },
+                { label: "Tests", onClick: () => setSelection(selection?.kind === "tests" ? null : { kind: "tests" }) },
+                { label: "Version history", onClick: () => setSelection(selection?.kind === "history" ? null : { kind: "history" }) },
+                ...(canManage ? [{ label: "Publish", onClick: () => setSelection(selection?.kind === "publish" ? null : { kind: "publish" }) }] : []),
+                ...DEPTHS.map((d, i) => ({ label: `Answer: ${d.label}`, checked: depth === d.value, divided: i === 0, onClick: () => setDepth(d.value) })),
+              ]}
+            />
           </div>
         </header>
 
@@ -861,10 +878,10 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
 
                 {/* ── Add Step palette ── */}
                 {addOpen && canManage && (
-                  <div className="absolute inset-y-0 left-0 z-30 w-72 overflow-y-auto border-r border-zinc-200 bg-white shadow-lg">
-                    <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3">
-                      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-zinc-900"><Layers className="h-4 w-4" /> Add Step</h2>
-                      <button type="button" aria-label="Close" onClick={() => setAddOpen(false)} className="text-zinc-400 hover:text-zinc-700 cursor-pointer"><X className="h-4 w-4" /></button>
+                  <div className="absolute inset-y-0 left-0 z-30 w-full overflow-y-auto border-r border-zinc-200 bg-[var(--surface)] shadow-lg sm:w-72">
+                    <div className="flex items-center justify-between px-4 pb-2 pt-3">
+                      <h2 className="text-base font-semibold text-zinc-900">Add a step</h2>
+                      <button type="button" aria-label="Close" onClick={() => setAddOpen(false)} className="rounded-md p-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer"><X className="h-4 w-4" /></button>
                     </div>
                     <div className="space-y-1 p-2">
                       {ADDABLE.map((type) => {
@@ -878,18 +895,18 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
                             onDragStart={(e) => { e.dataTransfer.setData(DRAG_TYPE, type); e.dataTransfer.effectAllowed = "copy"; }}
                             onClick={() => addStep(type)}
                             onKeyDown={(e) => e.key === "Enter" && addStep(type)}
-                            className="flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-100 p-2 hover:bg-zinc-50"
+                            className="flex cursor-pointer items-center gap-3 rounded-lg p-2 hover:bg-zinc-50"
                           >
-                            <span className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-gradient-to-br text-white", look.head)}><look.Icon className="h-3.5 w-3.5" /></span>
+                            <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br text-white", look.head)}><look.Icon className="h-4 w-4" /></span>
                             <span className="min-w-0">
-                              <span className="block text-xs font-semibold text-zinc-900">{look.label}</span>
+                              <span className="block text-sm font-medium text-zinc-900">{look.label}</span>
                               <span className="block truncate text-xs text-zinc-500">{look.hint}</span>
                             </span>
                           </div>
                         );
                       })}
                     </div>
-                    <p className="pb-3 text-center text-xs text-zinc-400">Click or drag onto the canvas</p>
+                    <p className="pb-3 text-center text-xs text-zinc-500">Click, or drag onto the canvas</p>
                   </div>
                 )}
 
@@ -897,7 +914,7 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
                 {panelOpen && (
                   <div
                     className={cn(
-                      "absolute z-30 bg-white shadow-xl",
+                      "absolute z-30 bg-[var(--surface)] shadow-xl",
                       selection?.kind === "settings"
                         ? "inset-y-0 right-0 w-full overflow-y-auto border-l border-zinc-200 p-4 sm:w-[410px]"
                         // A step or a line: a popup over the canvas, as tall as it needs.
@@ -966,7 +983,7 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
 
                 {/* ── history / tests / publish drawer ── */}
                 {drawer && (
-                  <div className="absolute inset-y-0 right-0 z-30 w-full overflow-hidden border-l border-zinc-200 bg-white shadow-lg sm:w-96">
+                  <div className="absolute inset-y-0 right-0 z-30 w-full overflow-hidden border-l border-zinc-200 bg-[var(--surface)] shadow-lg sm:w-96">
                     {selection?.kind === "history" && (
                       <VersionHistory
                         kind="workflow" targetId={id} token={token} canRestore={canManage} dirty={dirty}
@@ -985,10 +1002,10 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
 
                 {/* ── the canvas run ── */}
                 {canvasRunId && runCardOpen && !playOpen && !panelOpen && (
-                  <div className="absolute bottom-3 right-3 z-20 w-96 max-w-[calc(100%-1.5rem)] rounded-xl border border-zinc-200 bg-white p-3 shadow-lg">
+                  <div className="absolute bottom-3 right-3 z-20 w-96 max-w-[calc(100%-1.5rem)] rounded-xl border border-zinc-200 bg-[var(--surface-raised)] p-3 shadow-lg">
                     <div className="mb-2 flex items-center gap-2">
-                      <span className={cn("rounded-full px-2 py-0.5 text-xs font-semibold",
-                        canvasRun.view.status === "succeeded" ? "bg-emerald-100 text-emerald-700" : canvasRun.view.status === "failed" ? "bg-red-100 text-red-700" : canvasRun.view.status === "waiting" ? "bg-amber-100 text-amber-800" : "bg-sky-100 text-sky-700")}>
+                      <span className={cn("rounded-full px-2 py-0.5 text-xs font-medium capitalize",
+                        canvasRun.view.status === "succeeded" ? "bg-emerald-100 text-emerald-700" : canvasRun.view.status === "failed" ? "bg-red-100 text-red-700" : canvasRun.view.status === "waiting" ? "bg-amber-100 text-amber-800" : "bg-zinc-100 text-zinc-700")}>
                         {canvasRun.view.status ?? "starting"}
                       </span>
                       <span className="flex-1 text-xs text-zinc-500">{running ? "Running on the canvas…" : "Last run"}</span>
@@ -1041,88 +1058,51 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
           />
         </div>
 
-        {/* ── the one bottom bar: change / run this workflow, or describe a new one ── */}
-        <BuildBar
-          current="workflow"
-          onOpen={onOpen}
-          onExit={onExit ? () => {
-            if (dirty && !window.confirm("You have unsaved changes here. Leave anyway?")) return false;
-            onExit();
-            return true;
-          } : undefined}
-          above={
-            !aiEdit.isPending && !instruction.trim() && canManage && !previewing ? (
-              <div className="flex flex-wrap gap-1.5">
-                {CHIPS.map((chip) => (
-                  <button key={chip} type="button" onClick={() => setInstruction(chip)} className="rounded-full border border-white/10 bg-zinc-900/90 px-3 py-1 text-xs font-medium text-zinc-400 hover:border-indigo-400/40 hover:bg-indigo-500/10 hover:text-zinc-100 cursor-pointer">
-                    ✨ {chip}
-                  </button>
-                ))}
-              </div>
-            ) : null
-          }
-          edit={
-            <form
-              className="flex min-w-0 flex-1 items-center gap-2"
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (instruction.trim() && !aiEdit.isPending && canManage) aiEdit.mutate(instruction);
-              }}
-            >
-              <input
-                aria-label="Tell AI what to change"
-                className={barInput}
-                placeholder={canManage ? 'Tell AI what to change in this workflow (e.g. "add a human approval before the Slack step")' : "Type a request and press Run"}
-                value={instruction}
-                disabled={aiEdit.isPending || improve.isPending || previewing}
-                onChange={(e) => setInstruction(e.target.value)}
-              />
-              {canManage && (
-                <button type="button" onClick={() => improve.mutate()} disabled={improve.isPending || aiEdit.isPending || !instruction.trim()} title="Polish your instruction with AI"
-                  className={cn(barButton, "border border-white/10 px-3 text-zinc-200 hover:bg-zinc-800")}>
-                  {improve.isPending ? <Spinner className="h-3.5 w-3.5" /> : <Wand2 className="h-3.5 w-3.5 text-amber-400" />} Improve
-                </button>
+        {/* ── the bottom bar: tell AI what to change ── */}
+        {canManage && !previewing && (
+          <div className="shrink-0 border-t border-zinc-200 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 sm:px-4">
+            <div className="mx-auto max-w-3xl space-y-2">
+              {!aiEdit.isPending && !instruction.trim() && (
+                <div className="no-scrollbar flex gap-1.5 overflow-x-auto">
+                  {CHIPS.map((chip) => (
+                    <button key={chip} type="button" onClick={() => setInstruction(chip)} className="shrink-0 rounded-full border border-zinc-200 px-3 py-1 text-xs text-zinc-500 hover:border-zinc-300 hover:bg-zinc-50 hover:text-zinc-900 cursor-pointer">
+                      {chip}
+                    </button>
+                  ))}
+                </div>
               )}
-              {canManage && (
-                <button type="submit" disabled={aiEdit.isPending || improve.isPending || !instruction.trim() || previewing} title="Apply this change with AI"
-                  className={cn(barButton, "bg-indigo-600 text-white hover:bg-indigo-500")}>
-                  {aiEdit.isPending ? <><Spinner className="h-3.5 w-3.5" /> Editing…</> : <>Edit <Send className="h-3.5 w-3.5" /></>}
+              <form
+                className="flex items-center gap-1 rounded-xl border border-[var(--border-strong)] bg-[var(--surface)] p-1.5 pl-3 transition focus-within:border-[var(--accent-hover)]"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (instruction.trim() && !aiEdit.isPending) aiEdit.mutate(instruction);
+                }}
+              >
+                <Sparkles className="h-4 w-4 shrink-0 text-zinc-500" />
+                <input
+                  aria-label="Tell AI what to change"
+                  className="min-w-0 flex-1 bg-transparent px-2 py-1.5 text-sm text-zinc-900 outline-none placeholder:text-zinc-500"
+                  placeholder="Tell AI what to change in this workflow…"
+                  value={instruction}
+                  disabled={aiEdit.isPending || improve.isPending}
+                  onChange={(e) => setInstruction(e.target.value)}
+                />
+                <button
+                  type="button"
+                  onClick={() => improve.mutate()}
+                  disabled={improve.isPending || aiEdit.isPending || !instruction.trim()}
+                  title="Rewrite the instruction more clearly with AI"
+                  className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-sm text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-40 cursor-pointer disabled:cursor-default"
+                >
+                  {improve.isPending ? <Spinner className="h-4 w-4" /> : <Wand2 className="h-4 w-4" />} <span className="hidden sm:inline">Improve</span>
                 </button>
-              )}
-              <div className="relative">
-                <button type="button" onClick={() => setDepthOpen((o) => !o)} aria-label="Answer length" aria-expanded={depthOpen}
-                  className={cn(barButton, "border border-white/10 px-3 text-zinc-200 hover:bg-zinc-800")}>
-                  <AlignLeft className="h-3.5 w-3.5" /> {DEPTHS.find((d) => d.value === depth)?.label} <ChevronDown className="h-3 w-3" />
-                </button>
-                {depthOpen && (
-                  <div className="absolute bottom-11 right-0 z-30 w-52 rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-2xl">
-                    {DEPTHS.map((d) => (
-                      <button key={d.value} type="button" onClick={() => { setDepth(d.value); setDepthOpen(false); }}
-                        className={cn("flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left hover:bg-zinc-800 cursor-pointer", depth === d.value && "bg-zinc-800")}>
-                        <span className="flex-1">
-                          <span className="block text-xs font-semibold text-zinc-100">{d.label}</span>
-                          <span className="block text-[10.5px] text-zinc-500">{d.hint}</span>
-                        </span>
-                        {depth === d.value && <Check className="h-3.5 w-3.5 text-indigo-400" />}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-              {running ? (
-                <button type="button" onClick={() => stopRun.mutate()} className={cn(barButton, "border border-white/10 text-zinc-100 hover:bg-zinc-800")}>
-                  <span className="h-2 w-2 rounded-[2px] bg-current" /> Stop
-                </button>
-              ) : (
-                <button type="button" onClick={runFromBar} disabled={startRun.isPending || previewing || (trigger?.type === "input" && !instruction.trim() && !inputText.trim())}
-                  title={instruction.trim() ? "Run the workflow on this text" : "Run the workflow on the Input step's text"}
-                  className={cn(barButton, "bg-emerald-600 text-white hover:bg-emerald-500")}>
-                  {startRun.isPending ? <Spinner className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5 fill-current" />} Run
-                </button>
-              )}
-            </form>
-          }
-        />
+                <Button type="submit" size="sm" disabled={aiEdit.isPending || improve.isPending || !instruction.trim()} title="Make this change with AI">
+                  {aiEdit.isPending ? <><Spinner className="h-4 w-4" /> Changing…</> : "Change"}
+                </Button>
+              </form>
+            </div>
+          </div>
+        )}
       </div>
     </CanvasContext.Provider>
   );
@@ -1130,7 +1110,7 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
 
 function Centered({ text, spinner }: { text?: string; spinner?: boolean }) {
   return (
-    <div className="builder-dark flex h-screen items-center justify-center bg-zinc-950 text-sm text-zinc-400">
+    <div className="builder-dark flex h-full items-center justify-center bg-[var(--bg)] text-sm text-zinc-500">
       {spinner ? <Spinner className="h-6 w-6" /> : text}
     </div>
   );

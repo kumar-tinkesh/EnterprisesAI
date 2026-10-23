@@ -33,7 +33,7 @@ function FlowEdgeView({ id, sourceX, sourceY, targetX, targetY, sourcePosition, 
             onMouseLeave={() => setHover(false)}
           >
             {data?.branch && (
-              <span className="rounded-full border border-amber-400/30 bg-zinc-900 px-2 py-0.5 text-[10.5px] font-semibold text-amber-200">{data.branch}</span>
+              <span className="rounded-full border border-amber-400/30 bg-zinc-900 px-2 py-0.5 text-xs font-semibold text-amber-200">{data.branch}</span>
             )}
             {removable && (
               <button

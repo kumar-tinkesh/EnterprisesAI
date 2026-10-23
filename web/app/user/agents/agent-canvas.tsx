@@ -1,179 +1,252 @@
 "use client";
 
-import { useState } from "react";
-import { Background, BackgroundVariant, Controls, ReactFlow, ReactFlowProvider } from "@xyflow/react";
-import "@xyflow/react/dist/style.css";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, LayoutTemplate, Link2, ListChecks, Network, Plus, Server, Sparkles } from "lucide-react";
+import { ArrowUp, Bot, ChevronDown, ListChecks, Network, Plus, Plug, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { builderApi } from "@/lib/builder/api";
 import { useBuilderActions } from "@/lib/builder/use-builder-actions";
 import { useAuthStore } from "@/stores/auth-store";
-import { BuildBar } from "@/components/builder/build-bar";
 import { ImportAgentButton } from "@/components/builder/import-agent";
 import { NeedsList, needsSummary } from "@/components/builder/tool-needs";
+import { TypeIcon } from "@/components/builder/type-icon";
+import { timeAgo } from "@/components/builder/version-history";
 import type { BuildMode, BuildTarget } from "@/lib/builder/use-builder-actions";
 import { useAgentWizard } from "@/stores/agent-wizard-store";
 import { cn } from "@/lib/utils";
 
-/**
- * The AI Compiler's empty canvas: describe an agent or workflow in the bar
- * at the bottom and it opens right here (only the URL changes).
- */
-export default function BuilderHome({
-  hasAnyConnectedServer,
-  onConnections,
-  onOpen,
-}: {
-  hasAnyConnectedServer: boolean;
-  onConnections: () => void;
-  onOpen: (target: BuildTarget) => void;
-}) {
-  // The step-by-step setup is for agents; it's hidden while the bar is on Workflow.
-  const [mode, setMode] = useState<BuildMode>("agent");
-  return (
-    <div className="builder-dark flex h-screen flex-col bg-zinc-950">
-      <header className="flex items-center gap-2 border-b border-zinc-200 bg-white px-3 py-2">
-        <Sparkles className="h-4 w-4 text-indigo-600" />
-        <span className="text-sm font-semibold text-zinc-900">AI Compiler</span>
-        <span className="hidden text-xs text-zinc-400 sm:inline">Describe an agent or workflow below</span>
-        <div className="ml-auto flex gap-2">
-          <Button size="sm" variant="outline" className="h-8" onClick={onConnections} aria-label="Connections">
-            <Server /> <span className="hidden sm:inline">Connections</span>
-          </Button>
-        </div>
-      </header>
+const MODE_KEY = "compiler.mode"; // shared with the build bar in the editors
+const MODES: { id: BuildMode; label: string; Icon: typeof Bot; placeholder: string; hint: string }[] = [
+  {
+    id: "agent",
+    label: "Agent",
+    Icon: Bot,
+    placeholder: "e.g. An inbox assistant that reads my Gmail and drafts replies",
+    hint: "You'll check and adjust it step by step before it's saved.",
+  },
+  {
+    id: "workflow",
+    label: "Workflow",
+    Icon: Network,
+    placeholder: "e.g. Every morning, summarise my unread Gmail and post it to Slack #team",
+    hint: "It's designed, matched to your tools and opened on the canvas.",
+  },
+];
 
+const CHIP = "inline-flex items-center gap-1.5 rounded-full border border-zinc-200 px-3 py-1.5 text-sm text-zinc-700 transition-colors hover:border-zinc-300 hover:bg-zinc-50 hover:text-zinc-900 disabled:opacity-50 cursor-pointer";
+
+/**
+ * The AI Compiler's start: say what to build (an agent or a workflow) in one
+ * box, or take another way in — step by step, a file, a blank workflow, a
+ * template — or reopen something recent.
+ */
+export default function BuilderHome({ hasAnyConnectedServer, onOpen }: { hasAnyConnectedServer: boolean; onOpen: (target: BuildTarget) => void }) {
+  const token = useAuthStore((s) => s.accessToken) || "";
+  const builder = useBuilderActions({ open: onOpen });
+  const [mode, setMode] = useState<BuildMode>("agent");
+  const [text, setText] = useState("");
+  const box = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(MODE_KEY);
+      if (saved === "agent" || saved === "workflow") setMode(saved);
+    } catch {
+      /* default */
+    }
+  }, []);
+  const pick = (m: BuildMode) => {
+    setMode(m);
+    builder.setError(null);
+    try {
+      window.localStorage.setItem(MODE_KEY, m);
+    } catch {
+      /* not remembered */
+    }
+    box.current?.focus();
+  };
+
+  // The box grows with what's typed.
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(Math.max(el.scrollHeight, 72), 200)}px`;
+  }, [text]);
+
+  // Polish the rough description before building from it.
+  const improve = useMutation({
+    mutationFn: () => builderApi.improveText(token, "prompt", text, `A description of a new ${mode} to build in an AI agent builder.`),
+    onSuccess: (r) => setText(r.text),
+    onError: (err) => builder.setError(err instanceof Error ? err.message : "Couldn't improve it."),
+  });
+
+  const pending = builder.createWithAi.isPending;
+  const busy = pending || improve.isPending;
+  const current = MODES.find((m) => m.id === mode)!;
+  const submit = () => {
+    const q = text.trim();
+    if (q.length < 3 || busy) return;
+    builder.createWithAi.mutate({ mode, description: q }, { onSuccess: () => setText("") });
+  };
+
+  return (
+    <div className="mx-auto mt-8 max-w-2xl space-y-10 pb-10 sm:mt-12">
       {!hasAnyConnectedServer && (
-        <div className="flex items-center gap-3 border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
-          <p className="flex-1">You haven&apos;t connected any MCP server yet — agents and workflows need one to call tools.</p>
-          <button type="button" onClick={onConnections} className="inline-flex items-center gap-1 font-medium underline cursor-pointer">
-            <Link2 className="h-3 w-3" /> Connect a server
-          </button>
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
+          <Plug className="h-4 w-4 shrink-0 text-amber-700" />
+          <p className="min-w-0 flex-1 text-zinc-700">Connect an app first — agents and workflows work through them.</p>
+          <Link href="/user/connectors" className="shrink-0 font-medium text-zinc-900 underline-offset-2 hover:underline">
+            Open Connectors
+          </Link>
         </div>
       )}
 
-      <div className="relative min-h-0 flex-1">
-        <ReactFlowProvider>
-          <ReactFlow nodes={[]} edges={[]} colorMode="dark" proOptions={{ hideAttribution: true }}>
-            <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} color="#3f3f46" />
-            <Controls showInteractive={false} />
-          </ReactFlow>
-        </ReactFlowProvider>
-        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 p-6 text-center">
-          <div className="flex gap-2 text-indigo-400">
-            <Bot className="h-6 w-6" />
-            <Network className="h-6 w-6" />
+      <section className="space-y-4">
+        <h2 className="text-center text-2xl font-semibold text-zinc-900">What do you want to build?</h2>
+
+        <div className="flex justify-center">
+          <div className="inline-flex rounded-lg border border-zinc-200 p-1" role="tablist" aria-label="What to build">
+            {MODES.map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                role="tab"
+                aria-selected={mode === m.id}
+                disabled={pending}
+                onClick={() => pick(m.id)}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-md px-4 py-1.5 text-sm font-medium transition-colors cursor-pointer disabled:cursor-not-allowed",
+                  mode === m.id ? "bg-zinc-100 text-zinc-900" : "text-zinc-500 hover:text-zinc-900",
+                )}
+              >
+                <m.Icon className="h-4 w-4" /> {m.label}
+              </button>
+            ))}
           </div>
-          <p className="text-sm font-medium text-zinc-300">What do you want to build?</p>
-          <p className="max-w-sm text-xs text-zinc-500">
-            Pick Agent or Workflow below and describe it. It&apos;s designed, matched to your tools and opened on this canvas.
-          </p>
+        </div>
+
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            submit();
+          }}
+          className="rounded-2xl border border-[var(--border-strong)] bg-[var(--surface)] p-3 transition focus-within:border-[var(--accent-hover)]"
+        >
+          <label htmlFor="compiler-describe" className="sr-only">Describe a new {mode}</label>
+          <textarea
+            id="compiler-describe"
+            ref={box}
+            value={text}
+            disabled={busy}
+            placeholder={current.placeholder}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                submit();
+              }
+            }}
+            className="block w-full resize-none bg-transparent px-1 text-base text-zinc-900 outline-none placeholder:text-zinc-500 disabled:opacity-60"
+          />
+          <div className="mt-2 flex items-center gap-3">
+            <p className="min-w-0 flex-1 text-xs text-zinc-500">
+              {improve.isPending
+                ? "Improving your description…"
+                : pending
+                  ? mode === "workflow" ? "Designing the workflow and matching tools… this can take a few seconds." : "Opening the setup…"
+                  : current.hint}
+            </p>
+            <button
+              type="button"
+              onClick={() => improve.mutate()}
+              disabled={busy || text.trim().length < 3}
+              title="Rewrite the description more clearly with AI"
+              className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full px-3 text-sm text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-40 cursor-pointer disabled:cursor-default"
+            >
+              {improve.isPending ? <Spinner className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />} Improve
+            </button>
+            <button
+              type="submit"
+              aria-label={`Create ${mode}`}
+              title="Create (Enter)"
+              disabled={busy || text.trim().length < 3}
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)] disabled:bg-zinc-200 disabled:text-zinc-500 cursor-pointer disabled:cursor-default"
+            >
+              {pending ? <Spinner className="h-4 w-4" /> : <ArrowUp className="h-4 w-4" />}
+            </button>
+          </div>
+        </form>
+        {builder.error && <p className="text-center text-sm text-red-600">{builder.error}</p>}
+
+        {/* The other ways in, for the kind picked above. */}
+        <div className="flex flex-wrap justify-center gap-2">
           {mode === "agent" ? (
-            <AgentStart onOpen={onOpen} />
+            <>
+              <button type="button" onClick={() => useAgentWizard.getState().start({})} className={CHIP}>
+                <ListChecks className="h-4 w-4" /> Set up step by step
+              </button>
+              <ImportAgentButton token={token} onImported={(a) => onOpen({ kind: "agent", id: a.id })} className={cn(CHIP, "border-zinc-200 py-1.5 text-sm font-normal")} />
+            </>
           ) : (
-            <WorkflowStart onOpen={onOpen} />
+            <button type="button" disabled={builder.createBlank.isPending} onClick={() => builder.createBlank.mutate("workflow")} className={CHIP}>
+              {builder.createBlank.isPending ? <Spinner className="h-4 w-4" /> : <Plus className="h-4 w-4" />} Start a blank workflow
+            </button>
           )}
         </div>
-      </div>
+      </section>
 
-      <BuildBar current={null} onOpen={onOpen} onModeChange={setMode} />
+      {mode === "workflow" && <Templates onOpen={onOpen} />}
+      <Recent onOpen={onOpen} />
     </div>
   );
 }
 
-/**
- * Agent mode's own way in: the step-by-step setup, or an agent already made.
- */
-function AgentStart({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
+/** Agents and workflows together, the most recently changed first. */
+function Recent({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
   const token = useAuthStore((s) => s.accessToken) || "";
+  const [all, setAll] = useState(false);
   const agents = useQuery({ queryKey: ["builder-agents"], queryFn: () => builderApi.listAgents(token), enabled: !!token });
-  const recent = [...(agents.data ?? [])].sort((a, b) => b.updated_at.localeCompare(a.updated_at));
-
-  return (
-    <div className="pointer-events-auto mt-1 flex w-full max-w-sm flex-col items-center gap-3">
-      <div className="flex flex-wrap items-start justify-center gap-2">
-        <button
-          type="button"
-          onClick={() => useAgentWizard.getState().start({})}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 px-3 py-2 text-xs font-medium text-zinc-200 hover:bg-white/5 cursor-pointer"
-        >
-          <ListChecks className="h-3.5 w-3.5" /> Set up an agent step by step
-        </button>
-        <ImportAgentButton token={token} onImported={(a) => onOpen({ kind: "agent", id: a.id })} className="border-white/15 text-zinc-200 hover:bg-white/5" />
-      </div>
-      {recent.length > 0 && (
-        <ListPanel title="Open an agent">
-          {recent.map((a) => (
-            <button
-              key={a.id}
-              type="button"
-              onClick={() => onOpen({ kind: "agent", id: a.id })}
-              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-zinc-200 hover:bg-white/5 cursor-pointer"
-            >
-              <Bot className="h-3.5 w-3.5 shrink-0 text-indigo-400" />
-              <span className="min-w-0 flex-1 truncate">{a.name}</span>
-              {a.role && <span className="max-w-[40%] shrink-0 truncate text-xs text-zinc-500">{a.role}</span>}
-            </button>
-          ))}
-        </ListPanel>
-      )}
-    </div>
-  );
-}
-
-/** The scrollable list of things already made, under the empty canvas's start button. */
-function ListPanel({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="w-full rounded-xl border border-white/10 bg-white/5 p-1.5 text-left">
-      <p className="px-2.5 pb-1 pt-1.5 text-xs font-semibold uppercase tracking-wider text-zinc-500">{title}</p>
-      <div className="max-h-56 overflow-y-auto">{children}</div>
-    </div>
-  );
-}
-
-/**
- * Workflow mode's own way in: an empty workflow to wire agents together by
- * hand (Add Step → Agent, then drag the lines), or one already made.
- */
-function WorkflowStart({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
-  const token = useAuthStore((s) => s.accessToken) || "";
-  const { createBlank, error } = useBuilderActions({ open: onOpen });
   const workflows = useQuery({ queryKey: ["builder-workflows"], queryFn: () => builderApi.listWorkflows(token), enabled: !!token });
-  const recent = [...(workflows.data ?? [])].sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+  const items = [
+    ...(agents.data ?? []).map((a) => ({ kind: "agent" as const, id: a.id, name: a.name, updated: a.updated_at })),
+    ...(workflows.data ?? []).map((w) => ({ kind: "workflow" as const, id: w.id, name: w.name, updated: w.updated_at, steps: w.node_count })),
+  ].sort((a, b) => b.updated.localeCompare(a.updated));
+  if (!items.length) return null;
+  const shown = all ? items : items.slice(0, 6);
 
   return (
-    <div className="pointer-events-auto mt-1 flex w-full max-w-sm flex-col items-center gap-3">
-      <button
-        type="button"
-        onClick={() => createBlank.mutate("workflow")}
-        disabled={createBlank.isPending}
-        className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 px-3 py-2 text-xs font-medium text-zinc-200 hover:bg-white/5 disabled:opacity-60 cursor-pointer"
-      >
-        {createBlank.isPending ? <Spinner className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />} Start a blank workflow
-      </button>
-      <p className="text-xs text-zinc-500">Then Add Step → Agent to use the agents you&apos;ve made, and drag lines to run them one after another or side by side.</p>
-      {error && <p className="text-xs text-red-400">{error}</p>}
-      <TemplatePanel onOpen={onOpen} />
-      {recent.length > 0 && (
-        <ListPanel title="Open a workflow">
-          {recent.map((w) => (
+    <section className="space-y-3" aria-labelledby="recent-heading">
+      <h2 id="recent-heading" className="text-base font-semibold text-zinc-900">Recent</h2>
+      <ul className="divide-y divide-zinc-100 overflow-hidden rounded-lg border border-zinc-200">
+        {shown.map((it) => (
+          <li key={`${it.kind}:${it.id}`}>
             <button
-              key={w.id}
               type="button"
-              onClick={() => onOpen({ kind: "workflow", id: w.id })}
-              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-zinc-200 hover:bg-white/5 cursor-pointer"
+              onClick={() => onOpen({ kind: it.kind, id: it.id })}
+              className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-zinc-50 cursor-pointer"
             >
-              <Network className="h-3.5 w-3.5 shrink-0 text-indigo-400" />
-              <span className="min-w-0 flex-1 truncate">{w.name}</span>
-              <span className="shrink-0 text-xs text-zinc-500">{w.node_count} steps</span>
+              <TypeIcon kind={it.kind} />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium text-zinc-900">{it.name}</span>
+                <span className="block text-xs text-zinc-500">
+                  {it.kind === "agent" ? "Agent" : `Workflow · ${"steps" in it ? it.steps : 0} steps`}
+                </span>
+              </span>
+              <span className="shrink-0 text-xs text-zinc-500">Edited {timeAgo(it.updated)}</span>
             </button>
-          ))}
-        </ListPanel>
+          </li>
+        ))}
+      </ul>
+      {items.length > shown.length && (
+        <button type="button" onClick={() => setAll(true)} className="text-sm font-medium text-zinc-700 hover:text-zinc-900 cursor-pointer">
+          Show all {items.length}
+        </button>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -182,7 +255,7 @@ function WorkflowStart({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
  * steps use and where they stand for this person; it can be created before
  * they're connected — its steps pick each system's tools up once it is.
  */
-function TemplatePanel({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
+function Templates({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
   const token = useAuthStore((s) => s.accessToken) || "";
   const queryClient = useQueryClient();
   const [shown, setShown] = useState<string | null>(null);
@@ -202,43 +275,44 @@ function TemplatePanel({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
     },
   });
   if (!templates.data?.length) return null;
+
   return (
-    <ListPanel title="Start from a template">
-      {templates.data.map((t) => {
-        const sum = needsSummary(t.systems);
-        return (
-          <div key={t.key} className="rounded-lg px-2.5 py-2 hover:bg-white/5">
-            <div className="flex items-center gap-2">
-              <LayoutTemplate className="h-3.5 w-3.5 shrink-0 text-indigo-400" />
-              <span className="min-w-0 flex-1 truncate text-xs font-medium text-zinc-200">{t.name}</span>
-              <button
-                type="button"
-                onClick={() => setShown(shown === t.key ? null : t.key)}
-                className={cn("shrink-0 text-xs cursor-pointer", sum.blocked ? "text-amber-400" : "text-emerald-400")}
-                aria-expanded={shown === t.key}
-              >
-                {sum.ready}/{sum.total} systems
-              </button>
-              <button
-                type="button"
-                disabled={create.isPending}
-                onClick={() => use(t.key, t.name)}
-                className="inline-flex shrink-0 items-center gap-1 rounded-md bg-indigo-600 px-2 py-1 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-60 cursor-pointer"
-              >
-                {create.isPending && create.variables === t.key ? <Spinner className="h-3 w-3" /> : <Plus className="h-3 w-3" />} Use
-              </button>
-            </div>
-            <p className="mt-0.5 pl-5 text-xs text-zinc-500">{t.summary}</p>
-            {shown === t.key && (
-              <div className="mt-1.5 pl-3">
-                <p className="mb-1 px-1.5 text-[10.5px] text-zinc-400">{t.description}</p>
-                <NeedsList token={token} statuses={t.systems} />
+    <section className="space-y-3" aria-labelledby="templates-heading">
+      <h2 id="templates-heading" className="text-base font-semibold text-zinc-900">Start from a template</h2>
+      <ul className="divide-y divide-zinc-100 overflow-hidden rounded-lg border border-zinc-200">
+        {templates.data.map((t) => {
+          const sum = needsSummary(t.systems);
+          const open = shown === t.key;
+          return (
+            <li key={t.key} className="px-4 py-3">
+              <div className="flex items-start gap-3">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-zinc-900">{t.name}</p>
+                  <p className="mt-0.5 text-xs text-zinc-500">{t.summary}</p>
+                  <button
+                    type="button"
+                    onClick={() => setShown(open ? null : t.key)}
+                    aria-expanded={open}
+                    className={cn("mt-1 inline-flex items-center gap-1 text-xs cursor-pointer", sum.blocked ? "text-amber-700" : "text-zinc-500 hover:text-zinc-900")}
+                  >
+                    {sum.ready} of {sum.total} app{sum.total === 1 ? "" : "s"} connected <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", open && "rotate-180")} />
+                  </button>
+                </div>
+                <Button size="sm" variant="outline" disabled={create.isPending} onClick={() => use(t.key, t.name)}>
+                  {create.isPending && create.variables === t.key ? <Spinner className="h-4 w-4" /> : null} Use
+                </Button>
               </div>
-            )}
-          </div>
-        );
-      })}
-      {create.error && <p className="px-2.5 pb-1 text-xs text-red-400">{create.error instanceof Error ? create.error.message : "Couldn't create it."}</p>}
-    </ListPanel>
+              {open && (
+                <div className="mt-2 space-y-2">
+                  <p className="text-xs text-zinc-500">{t.description}</p>
+                  <NeedsList token={token} statuses={t.systems} light />
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      {create.error && <p className="text-sm text-red-600">{create.error instanceof Error ? create.error.message : "Couldn't create it."}</p>}
+    </section>
   );
 }

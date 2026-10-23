@@ -270,7 +270,7 @@ function Runner({
                 <div className="space-y-1 border-t border-zinc-100 pt-2">
                   <p className="text-xs font-medium text-zinc-700">With the sharer&apos;s account (they approve what it changes there):</p>
                   {needs.data!.systems.filter((x) => x.owner === "publisher").map((x) => (
-                    <p key={x.system} className="flex items-center gap-1.5 text-[11.5px] text-zinc-700">
+                    <p key={x.system} className="flex items-center gap-1.5 text-xs text-zinc-700">
                       {x.status === "ready" ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> : <CircleDashed className="h-3.5 w-3.5 text-zinc-400" />}
                       {x.server_name || x.system}
                     </p>

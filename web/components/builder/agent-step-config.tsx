@@ -319,7 +319,7 @@ function Accordion({
         <Icon className="h-4 w-4 shrink-0 text-zinc-400" />
         <span className="min-w-0 flex-1">
           <span className="block text-xs font-semibold text-zinc-900">{title}</span>
-          <span className="block truncate text-[10.5px] text-zinc-500">{sub}</span>
+          <span className="block truncate text-xs text-zinc-500">{sub}</span>
         </span>
         {action}
         {open ? <ChevronDown className="h-4 w-4 text-zinc-400" /> : <ChevronRight className="h-4 w-4 text-zinc-400" />}

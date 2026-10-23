@@ -55,7 +55,7 @@ export function NeedsList({
           <li key={s.system} className={cn("rounded-md px-1.5 py-1", light ? "hover:bg-zinc-50" : "hover:bg-white/5")}>
             <div className="flex items-center gap-1.5">
               <st.Icon className={cn("h-3.5 w-3.5 shrink-0", st.tone)} />
-              <span className={cn("min-w-0 flex-1 truncate text-[11.5px] font-medium", light ? "text-zinc-800" : "text-zinc-100")}>
+              <span className={cn("min-w-0 flex-1 truncate text-xs font-medium", light ? "text-zinc-800" : "text-zinc-100")}>
                 {s.system}
                 {s.required && <span className="ml-1 text-xs font-normal text-amber-500">required</span>}
               </span>
@@ -66,15 +66,15 @@ export function NeedsList({
                     e.stopPropagation();
                     onConnect(s);
                   }}
-                  className="nodrag nopan inline-flex shrink-0 items-center gap-1 rounded-full bg-sky-600 px-2 py-0.5 text-[10.5px] font-medium text-white hover:bg-sky-500 cursor-pointer"
+                  className="nodrag nopan inline-flex shrink-0 items-center gap-1 rounded-full bg-[var(--accent)] px-2 py-0.5 text-xs font-medium text-white hover:bg-[var(--accent-hover)] cursor-pointer"
                 >
                   <Plug className="h-3 w-3" /> Connect
                 </button>
               ) : (
-                <ConnectButton serverId={s.server_id} serverName={s.server_name ?? undefined} token={token} className="rounded-full px-2 py-0.5 text-[10.5px]" />
+                <ConnectButton serverId={s.server_id} serverName={s.server_name ?? undefined} token={token} className="rounded-full px-2 py-0.5 text-xs" />
               ))}
             </div>
-            <p className="pl-5 text-[10.5px] text-zinc-500" title={s.match.join(", ")}>
+            <p className="pl-5 text-xs text-zinc-500" title={s.match.join(", ")}>
               {s.status === "ready" ? `${s.server_name} · ${s.tools.join(", ")}` : s.status === "missing" ? `${st.label}${s.match[0] ? ` — ${s.match[0]}` : ""}` : `${s.server_name} · ${st.label}`}
             </p>
           </li>

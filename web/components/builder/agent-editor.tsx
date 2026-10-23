@@ -4,13 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Background, BackgroundVariant, Controls, ReactFlow, ReactFlowProvider, useReactFlow, type Edge, type NodeChange } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { AlertTriangle, ArrowLeft, Bot, Check, ChevronDown, Coins, Download, FlaskConical, Globe, History, Play, Save, Settings2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Check, ChevronDown, Play, Save, Settings2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Menu } from "@/components/ui/menu";
 import { Spinner } from "@/components/ui/spinner";
 import { AgentConfigPanel, type ConfigTab } from "@/components/builder/agent-wizard/agent-config-panel";
-import { BuildBar, barButton, barInput } from "@/components/builder/build-bar";
 import { Playground } from "@/components/builder/playground";
 import { SplitPane } from "@/components/builder/split-pane";
 import { PublishPanel } from "@/components/builder/publish-panel";
@@ -20,6 +20,7 @@ import { TestsPanel } from "@/components/builder/tests-panel";
 import { VersionHistory } from "@/components/builder/version-history";
 import { nodeTypes, useNodeSizes, type StepNodeType } from "@/components/builder/step-node";
 import { toolGraph } from "@/components/builder/tool-graph";
+import { TypeIcon } from "@/components/builder/type-icon";
 import { ApiError, knowledgeApi } from "@/lib/api";
 import { builderApi } from "@/lib/builder/api";
 import { useServers } from "@/components/builder/agent-wizard/wizard-ui";
@@ -40,7 +41,7 @@ type EditorProps = {
   id: string;
   onBack: () => void;
   onOpen: (target: BuildTarget) => void;
-  /** Where the bar's Workflow tab goes (the empty canvas); without it the tab only switches what the bar describes. */
+  /** Kept for callers; the agent editor has no build bar, so nothing leaves through it. */
   onExit?: () => void;
 };
 
@@ -52,7 +53,7 @@ export function AgentEditor(props: EditorProps) {
   );
 }
 
-function Editor({ id, onBack, onOpen, onExit }: EditorProps) {
+function Editor({ id, onBack, onOpen }: EditorProps) {
   const token = useAuthStore((s) => s.accessToken) || "";
   const queryClient = useQueryClient();
 
@@ -66,18 +67,18 @@ function Editor({ id, onBack, onOpen, onExit }: EditorProps) {
   const [notice, setNotice] = useState<Notice>(null);
   const [playOpen, setPlayOpen] = useState(false);
   const [runView, setRunView] = useState<RunView>(emptyRunView);
-  const [ask, setAsk] = useState("");
-  const [request, setRequest] = useState<{ text: string; at: number } | null>(null);
   const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({});
   const loaded = useRef(false);
   const flow = useReactFlow();
   const [switchOpen, setSwitchOpen] = useState(false);
   const agents = useQuery({ queryKey: ["builder-agents"], queryFn: () => builderApi.listAgents(token), enabled: !!token && (switchOpen || (form?.config.sub_agent_ids?.length ?? 0) > 0) });
 
+  // The canvas changes size when the test panel or a docked drawer opens: keep everything in view.
+  const drawerOpen = selected !== null;
   useEffect(() => {
     const t = setTimeout(() => flow.fitView({ padding: 0.3, maxZoom: 1, duration: 200 }), 60);
     return () => clearTimeout(t);
-  }, [playOpen, flow]);
+  }, [playOpen, drawerOpen, flow]);
 
   useEffect(() => {
     const a = agentQuery.data;
@@ -266,25 +267,60 @@ function Editor({ id, onBack, onOpen, onExit }: EditorProps) {
   }, [track]);
 
   if (agentQuery.isError) {
-    return <div className="builder-dark flex h-screen items-center justify-center bg-zinc-950 text-sm text-zinc-500">{agentQuery.error instanceof Error ? agentQuery.error.message : "Couldn't load this agent."}</div>;
+    return <div className="builder-dark flex h-full items-center justify-center bg-[var(--bg)] text-sm text-zinc-500">{agentQuery.error instanceof Error ? agentQuery.error.message : "Couldn't load this agent."}</div>;
   }
   if (!form) {
-    return <div className="builder-dark flex h-screen items-center justify-center bg-zinc-950"><Spinner className="h-6 w-6 text-zinc-400" /></div>;
+    return <div className="builder-dark flex h-full items-center justify-center bg-[var(--bg)]"><Spinner className="h-6 w-6 text-zinc-400" /></div>;
   }
   const readOnly = agentQuery.data ? !agentQuery.data.can_manage : false;
 
+  // The drawer on the right: settings or one of the occasional panels. Docked beside the
+  // canvas from md (so the canvas stays in view), over it on a phone.
+  const drawer = (() => {
+    switch (selected?.kind) {
+      case "agent":
+        return (
+          <AgentConfigPanel
+            agentId={id}
+            value={form}
+            token={token}
+            readOnly={readOnly}
+            onChange={update}
+            tab={selected.tab}
+            onTab={(tab) => setSelected({ kind: "agent", tab })}
+            onClose={() => setSelected(null)}
+          />
+        );
+      case "publish":
+        return <PublishPanel kind="agent" targetId={id} name={form.name} token={token} currentVersion={version} dirty={dirty} onClose={() => setSelected(null)} />;
+      case "usage":
+        return <UsagePanel kind="agent" targetId={id} token={token} onClose={() => setSelected(null)} />;
+      case "export":
+        return agentQuery.data ? <ExportPanel agent={agentQuery.data} token={token} onClose={() => setSelected(null)} /> : null;
+      case "tests":
+        return <TestsPanel kind="agent" targetId={id} token={token} canManage={!readOnly} beforeRun={readOnly ? undefined : ensureSaved} onClose={() => setSelected(null)} />;
+      case "history":
+        return (
+          <VersionHistory kind="agent" targetId={id} token={token} canRestore={!readOnly} dirty={dirty} restoring={restore.isPending} onRestore={(v) => restore.mutate(v)} onClose={() => setSelected(null)} />
+        );
+      default:
+        return null;
+    }
+  })();
+  const open = (kind: "publish" | "tests" | "usage" | "history" | "export") => setSelected(selected?.kind === kind ? null : { kind });
+
   return (
-    <div className="builder-dark flex h-screen flex-col bg-zinc-950">
-      <header className="flex items-center gap-2 border-b border-zinc-200 bg-white px-2 py-2 sm:px-3">
-        <button type="button" onClick={onBack} className="rounded-md p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer" aria-label="Back">
+    <div className="builder-dark flex h-full flex-col bg-[var(--bg)]">
+      <header className="flex items-center gap-1.5 border-b border-zinc-200 px-2 py-2 sm:gap-2 sm:px-3">
+        <button type="button" onClick={onBack} className="shrink-0 rounded-md p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer" aria-label="Back">
           <ArrowLeft className="h-4 w-4" />
         </button>
         <div className="relative shrink-0">
-          <button type="button" className="flex h-8 items-center gap-1 rounded-md px-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer" onClick={() => setSwitchOpen((o) => !o)} aria-label="Switch agent" aria-expanded={switchOpen} title="Switch agent">
-            <Bot className="h-4 w-4 text-indigo-400" /> <ChevronDown className="h-3.5 w-3.5" />
+          <button type="button" className="flex h-8 items-center gap-1 rounded-md pl-0.5 pr-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer" onClick={() => setSwitchOpen((o) => !o)} aria-label="Switch agent" aria-expanded={switchOpen} title="Switch agent">
+            <TypeIcon kind="agent" size="sm" /> <ChevronDown className="h-3.5 w-3.5" />
           </button>
           {switchOpen && (
-            <div className="absolute left-0 top-10 z-40 max-h-80 w-72 overflow-y-auto rounded-xl border border-zinc-200 bg-white p-1.5 shadow-lg">
+            <div className="absolute left-0 top-10 z-40 max-h-80 w-72 overflow-y-auto rounded-lg border border-zinc-200 bg-[var(--surface-raised)] p-1 shadow-lg">
               {agents.isLoading && <div className="flex justify-center p-3"><Spinner className="h-4 w-4 text-zinc-400" /></div>}
               {(agents.data ?? []).map((a) => (
                 <button
@@ -296,72 +332,58 @@ function Editor({ id, onBack, onOpen, onExit }: EditorProps) {
                     if (dirty && !window.confirm("You have unsaved changes here. Leave anyway?")) return;
                     onOpen({ kind: "agent", id: a.id });
                   }}
-                  className={cn("flex w-full flex-col rounded-lg px-2.5 py-2 text-left text-xs hover:bg-zinc-100 cursor-pointer", a.id === id ? "text-indigo-600" : "text-zinc-700")}
+                  className={cn("flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-sm hover:bg-zinc-100 cursor-pointer", a.id === id ? "text-zinc-900" : "text-zinc-700")}
                 >
-                  <span className="w-full truncate font-medium">{a.name}</span>
-                  {a.goal && <span className="w-full truncate text-xs text-zinc-400">{a.goal}</span>}
+                  <span className="min-w-0 truncate">{a.name}</span>
+                  {a.id === id && <Check className="h-4 w-4 shrink-0" />}
                 </button>
               ))}
             </div>
           )}
         </div>
-        <Input aria-label="Agent name" className="h-8 w-full min-w-0 max-w-56 border-transparent font-semibold hover:border-zinc-200" value={form.name} disabled={readOnly} onChange={(e) => update({ ...form, name: e.target.value })} />
-        <span className={cn("hidden shrink-0 text-xs md:inline", dirty ? "text-amber-600" : "text-zinc-400")}>{readOnly ? "View only — shared by a teammate" : dirty ? "Unsaved changes" : "Saved"}</span>
-        {/* Narrow screens keep the icons; the labels come back from lg. */}
-        <div className="ml-auto flex shrink-0 gap-1.5 sm:gap-2">
+        <Input aria-label="Agent name" className="h-8 min-w-0 flex-1 border-transparent bg-transparent px-2 font-semibold hover:border-zinc-200 sm:max-w-64" value={form.name} disabled={readOnly} onChange={(e) => update({ ...form, name: e.target.value })} />
+        <span className={cn("hidden shrink-0 text-xs md:inline", dirty ? "text-amber-700" : "text-zinc-500")}>{readOnly ? "View only — shared by a teammate" : dirty ? "Unsaved changes" : "Saved"}</span>
+        {/* Settings, Test and Save in view; everything else under ⋯. Labels from sm/lg, icons below. */}
+        <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-1.5">
           <Button
             size="sm"
             variant="outline"
             aria-label="Settings"
-            className={cn("h-8 px-2 lg:px-3", selected?.kind === "agent" && "bg-indigo-50")}
+            aria-pressed={selected?.kind === "agent"}
+            className={cn("px-2 lg:px-3", selected?.kind === "agent" && "bg-zinc-100")}
             onClick={() => setSelected(selected?.kind === "agent" ? null : { kind: "agent", tab: "identity" })}
           >
             <Settings2 /> <span className="hidden lg:inline">Settings</span>
           </Button>
-          {/* The occasional ones, as one quiet row of icons. */}
-          <div className="flex items-center rounded-lg border border-zinc-200 p-0.5">
-            {([
-              !readOnly && { kind: "publish", label: "Publish", Icon: Globe },
-              { kind: "tests", label: "Tests", Icon: FlaskConical },
-              { kind: "usage", label: "Usage and cost", Icon: Coins },
-              { kind: "history", label: "History", Icon: History },
-              { kind: "export", label: "Export", Icon: Download },
-            ].filter(Boolean) as { kind: "publish" | "tests" | "usage" | "history" | "export"; label: string; Icon: typeof Globe }[]).map(({ kind, label, Icon }) => (
-              <button
-                key={kind}
-                type="button"
-                aria-label={label}
-                title={label}
-                aria-pressed={selected?.kind === kind}
-                onClick={() => setSelected(selected?.kind === kind ? null : { kind })}
-                className={cn(
-                  "inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors cursor-pointer [&_svg]:h-4 [&_svg]:w-4",
-                  selected?.kind === kind ? "bg-indigo-50 text-indigo-600" : "text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900",
-                )}
-              >
-                <Icon />
-              </button>
-            ))}
-          </div>
-          <Button size="sm" variant="outline" aria-label="Test" className={cn("h-8 px-2 lg:px-3", playOpen && "bg-indigo-50")} onClick={() => setPlayOpen((o) => !o)}>
+          <Button size="sm" variant="outline" aria-label="Test" aria-pressed={playOpen} className={cn("px-2 lg:px-3", playOpen && "bg-zinc-100")} onClick={() => setPlayOpen((o) => !o)}>
             <Play /> <span className="hidden lg:inline">Test</span>
           </Button>
           {!readOnly && (
-            <Button size="sm" aria-label="Save" className="h-8 px-2 lg:px-3" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>
+            <Button size="sm" aria-label="Save" className="px-2 sm:px-3" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>
               {save.isPending ? <Spinner className="h-4 w-4" /> : <Save />} <span className="hidden sm:inline">Save</span>
             </Button>
           )}
+          <Menu
+            label="More actions"
+            items={[
+              ...(readOnly ? [] : [{ label: "Publish", onClick: () => open("publish") }]),
+              { label: "Tests", onClick: () => open("tests") },
+              { label: "Usage and cost", onClick: () => open("usage") },
+              { label: "Version history", onClick: () => open("history") },
+              { label: "Export as a file", onClick: () => open("export") },
+            ]}
+          />
         </div>
       </header>
       {notice && (
-        <div className={cn("flex items-start gap-2 border-b px-4 py-2 text-xs", notice.tone === "ok" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : notice.tone === "warn" ? "border-amber-200 bg-amber-50 text-amber-900" : "border-red-200 bg-red-50 text-red-800")}>
-          {notice.tone === "ok" ? <Check className="mt-0.5 h-3.5 w-3.5" /> : <AlertTriangle className="mt-0.5 h-3.5 w-3.5" />}
-          <div className="flex-1">
+        <div className={cn("flex items-start gap-2 border-b px-4 py-2 text-sm", notice.tone === "ok" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : notice.tone === "warn" ? "border-amber-200 bg-amber-50 text-amber-900" : "border-red-200 bg-red-50 text-red-800")}>
+          {notice.tone === "ok" ? <Check className="mt-0.5 h-4 w-4 shrink-0" /> : <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />}
+          <div className="min-w-0 flex-1">
             <p className="font-medium">{notice.text}</p>
             {notice.detail?.map((d, i) => <p key={i}>• {d}</p>)}
           </div>
           {notice.reload && <button type="button" className="font-medium underline cursor-pointer" onClick={() => window.location.reload()}>Reload</button>}
-          <button type="button" aria-label="Dismiss" className="cursor-pointer" onClick={() => setNotice(null)}>×</button>
+          <button type="button" aria-label="Dismiss" className="rounded p-0.5 hover:bg-black/10 cursor-pointer" onClick={() => setNotice(null)}><X className="h-4 w-4" /></button>
         </div>
       )}
       <div className="flex min-h-0 flex-1">
@@ -369,84 +391,29 @@ function Editor({ id, onBack, onOpen, onExit }: EditorProps) {
           open={playOpen}
           narrowShows="right"
           left={
-            <div className="relative h-full">
-              <ReactFlow
-                nodes={flowNodes}
-                edges={flowEdges}
-                nodeTypes={nodeTypes}
-                onNodesChange={onNodesChange}
-                onPaneClick={() => setSelected(null)}
-                nodesConnectable={false}
-                deleteKeyCode={null}
-                fitView
-                fitViewOptions={{ padding: 0.3, maxZoom: 1 }}
-                proOptions={{ hideAttribution: true }}
-                colorMode="dark"
-              >
-                <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} color="#3f3f46" />
-                <Controls showInteractive={false} />
-              </ReactFlow>
-              {selected?.kind === "publish" && (
-                <div className="absolute inset-y-0 right-0 z-10 w-full border-l sm:w-96 border-zinc-200 bg-white shadow-lg">
-                  <PublishPanel
-                    kind="agent"
-                    targetId={id}
-                    name={form.name}
-                    token={token}
-                    currentVersion={version}
-                    dirty={dirty}
-                    onClose={() => setSelected(null)}
-                  />
-                </div>
-              )}
-              {selected?.kind === "usage" && (
-                <div className="absolute inset-y-0 right-0 z-10 w-full border-l sm:w-96 border-zinc-200 bg-white shadow-lg">
-                  <UsagePanel kind="agent" targetId={id} token={token} onClose={() => setSelected(null)} />
-                </div>
-              )}
-              {selected?.kind === "export" && agentQuery.data && (
-                <div className="absolute inset-y-0 right-0 z-10 w-full border-l sm:w-96 border-zinc-200 bg-white shadow-lg">
-                  <ExportPanel agent={agentQuery.data} token={token} onClose={() => setSelected(null)} />
-                </div>
-              )}
-              {selected?.kind === "tests" && (
-                <div className="absolute inset-y-0 right-0 z-10 w-full border-l sm:w-96 border-zinc-200 bg-white shadow-lg">
-                  <TestsPanel
-                    kind="agent"
-                    targetId={id}
-                    token={token}
-                    canManage={!readOnly}
-                    beforeRun={readOnly ? undefined : ensureSaved}
-                    onClose={() => setSelected(null)}
-                  />
-                </div>
-              )}
-              {selected?.kind === "history" && (
-                <div className="absolute inset-y-0 right-0 z-10 w-full border-l sm:w-80 border-zinc-200 bg-white shadow-lg">
-                  <VersionHistory
-                    kind="agent"
-                    targetId={id}
-                    token={token}
-                    canRestore={!readOnly}
-                    dirty={dirty}
-                    restoring={restore.isPending}
-                    onRestore={(v) => restore.mutate(v)}
-                    onClose={() => setSelected(null)}
-                  />
-                </div>
-              )}
-              {selected?.kind === "agent" && (
-                <div className="absolute inset-y-0 right-0 z-10 w-full border-l border-zinc-200 bg-white shadow-lg sm:w-[30rem]">
-                  <AgentConfigPanel
-                    agentId={id}
-                    value={form}
-                    token={token}
-                    readOnly={readOnly}
-                    onChange={update}
-                    tab={selected.tab}
-                    onTab={(tab) => setSelected({ kind: "agent", tab })}
-                    onClose={() => setSelected(null)}
-                  />
+            <div className="relative flex h-full">
+              <div className="relative min-w-0 flex-1">
+                <ReactFlow
+                  nodes={flowNodes}
+                  edges={flowEdges}
+                  nodeTypes={nodeTypes}
+                  onNodesChange={onNodesChange}
+                  onPaneClick={() => setSelected(null)}
+                  nodesConnectable={false}
+                  deleteKeyCode={null}
+                  fitView
+                  fitViewOptions={{ padding: 0.3, maxZoom: 1 }}
+                  proOptions={{ hideAttribution: true }}
+                  colorMode="dark"
+                >
+                  <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} color="#3f3f46" />
+                  <Controls showInteractive={false} />
+                </ReactFlow>
+              </div>
+              {drawer && (
+                // Beside the canvas when there's room; with the test panel open too, over it (the three would be too narrow).
+                <div className={cn("absolute inset-0 z-10 bg-[var(--surface)]", !playOpen && "md:static md:w-[24rem] md:shrink-0 md:border-l md:border-zinc-200 lg:w-[28rem]")}>
+                  {drawer}
                 </div>
               )}
             </div>
@@ -458,7 +425,6 @@ function Editor({ id, onBack, onOpen, onExit }: EditorProps) {
               token={token}
               beforeRun={readOnly ? undefined : ensureSaved}
               onView={setRunView}
-              request={request}
               stepName={() => form.name || "Agent"}
               onClose={() => {
                 setPlayOpen(false);
@@ -468,33 +434,6 @@ function Editor({ id, onBack, onOpen, onExit }: EditorProps) {
           }
         />
       </div>
-      <BuildBar
-        current="agent"
-        onOpen={onOpen}
-        onExit={onExit ? () => {
-          if (dirty && !window.confirm("You have unsaved changes here. Leave anyway?")) return false;
-          onExit();
-          return true;
-        } : undefined}
-        edit={
-          <form
-            className="flex min-w-0 flex-1 items-center gap-2"
-            onSubmit={(e) => {
-              e.preventDefault();
-              const text = ask.trim();
-              if (!text) return;
-              setPlayOpen(true);
-              setRequest({ text, at: Date.now() });
-              setAsk("");
-            }}
-          >
-            <input aria-label="Ask this agent" className={barInput} placeholder={`Ask ${form.name || "this agent"} something and press Run`} value={ask} onChange={(e) => setAsk(e.target.value)} />
-            <button type="submit" disabled={!ask.trim()} className={cn(barButton, "bg-emerald-600 text-white hover:bg-emerald-500")}>
-              <Play className="h-3.5 w-3.5 fill-current" /> Run
-            </button>
-          </form>
-        }
-      />
     </div>
   );
 }
