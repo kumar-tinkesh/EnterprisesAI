@@ -362,3 +362,55 @@ async def test_a_mixed_link_says_whose_connection_is_missing_and_stops_without_t
     row = await db.get(BuilderRun, r.json()["run_id"])
     await db.refresh(row)
     assert row.status == "failed" and "no longer has access" in row.error
+
+
+async def test_how_it_works_shows_steps_and_apps_never_instructions(db, tenant_client, solo_client, anon_client, make_user_client, demo, gateway, runtime):
+    agent = await make_agent(tenant_client, demo, ["echo"])
+    key = await publish(tenant_client, "agents", agent["id"], share=True)
+    assert key["show_outline"] is True  # on unless the publisher turns it off
+    slug = key["share_slug"]
+    assert (await anon_client.get(f"{S}/{slug}")).json()["show_outline"] is True
+
+    outline = (await anon_client.get(f"{S}/{slug}/outline")).json()
+    assert outline["kind"] == "agent" and outline["apps"] == ["demo"] and outline["asks_before_changes"] is True
+    [step] = outline["steps"]
+    assert (step["title"], step["kind"], step["hint"], step["apps"]) == ("Helper", "agent", "Help", ["demo"])
+
+    # A run says which tools it used, by name and status only.
+    visitor = await make_user_client(outsider())
+    gateway([reply(calls=[("demo__echo", {"text": "hi"})]), reply("Done.")])
+    r = await visitor.post(f"{S}/{slug}/runs", json={"input": "go", "wait_seconds": 0})
+    await worker(runtime).drain()
+    done = (await visitor.get(f"{S}/{slug}/runs/{r.json()['run_id']}")).json()
+    assert [(s["title"], s["status"]) for s in done["steps"]] == [("Echo", "succeeded")]
+    assert set(done["steps"][0]) == {"id", "title", "kind", "status"}  # no arguments, no results
+    assert done["duration_ms"] is not None and done["duration_ms"] >= 0 and "tokens" in done and "cost_usd" in done
+
+    # Turned off: no outline, no steps.
+    await tenant_client.patch(f"{B}/public-keys/{key['id']}", json={"show_outline": False})
+    assert (await anon_client.get(f"{S}/{slug}/outline")).status_code == 404
+    assert (await anon_client.get(f"{S}/{slug}")).json()["show_outline"] is False
+    assert (await visitor.get(f"{S}/{slug}/runs")).json()[0]["steps"] == []
+
+
+async def test_a_workflows_outline_is_its_steps_in_order_with_side_by_side_ones_on_one_level(tenant_client, anon_client, demo):
+    body = {
+        "name": "Digest",
+        "nodes": [
+            {"id": "in", "type": "input"},
+            {"id": "a", "type": "agent", "draft_agent": {"name": "Searcher", "role": "r", "goal": "Search the web", "instructions": "SECRET PROMPT",
+                                                           "config": {"tool_ids": [f"mcp:{demo.id}:echo"]}}},
+            {"id": "b", "type": "agent", "draft_agent": {"name": "Reader", "role": "r", "goal": "Read mail", "instructions": "SECRET PROMPT"}},
+            {"id": "out", "type": "output"},
+        ],
+        "edges": [{"id": "e1", "source": "in", "target": "a"}, {"id": "e2", "source": "in", "target": "b"},
+                  {"id": "e3", "source": "a", "target": "out"}, {"id": "e4", "source": "b", "target": "out"}],
+    }
+    wf = (await tenant_client.post(f"{B}/workflows", json=body)).json()
+    key = await publish(tenant_client, "workflows", wf["id"], share=True)
+    r = await anon_client.get(f"{S}/{key['share_slug']}/outline")
+    assert r.status_code == 200, r.text
+    assert "SECRET PROMPT" not in r.text
+    steps = r.json()["steps"]
+    assert [(s["title"], s["level"]) for s in steps] == [("Input", 0), ("Searcher", 1), ("Reader", 1), ("Answer", 2)]
+    assert steps[1]["apps"] == ["demo"] and steps[1]["hint"] == "Search the web"

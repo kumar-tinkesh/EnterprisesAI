@@ -44,7 +44,7 @@ function PublishedView() {
 
   const refresh = () => void queryClient.invalidateQueries({ queryKey: ["published"] });
   const update = useMutation({
-    mutationFn: ({ id, ...body }: { id: string; status?: "active" | "paused"; share?: boolean }) => builderApi.updatePublicKey(token, id, body),
+    mutationFn: ({ id, ...body }: { id: string; status?: "active" | "paused"; share?: boolean; show_outline?: boolean }) => builderApi.updatePublicKey(token, id, body),
     onSuccess: refresh,
   });
   const revoke = useMutation({ mutationFn: (id: string) => builderApi.revokePublicKey(token, id), onSuccess: refresh });
@@ -121,7 +121,7 @@ function KeyRow({
   item: Published["keys"][number];
   token: string;
   busy: boolean;
-  onUpdate: (body: { status?: "active" | "paused"; share?: boolean }) => void;
+  onUpdate: (body: { status?: "active" | "paused"; share?: boolean; show_outline?: boolean }) => void;
   onRevoke: () => void;
   onChange: () => void;
 }) {
@@ -171,6 +171,7 @@ function KeyRow({
             items={[
               { label: active ? "Pause" : "Resume", onClick: () => onUpdate({ status: active ? "paused" : "active" }) },
               { label: k.share_enabled ? "Turn off share link" : "Turn on share link", onClick: () => onUpdate({ share: !k.share_enabled }) },
+              ...(k.share_enabled ? [{ label: "Show how it works", checked: k.show_outline, onClick: () => onUpdate({ show_outline: !k.show_outline }) }] : []),
               { label: "Delete", onClick: onRevoke, danger: true },
             ]}
           />

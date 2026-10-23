@@ -35,6 +35,7 @@ import type {
   ShareCaller,
   SharedInfo,
   SharedNeeds,
+  SharedOutline,
   SharedRun,
   ToolMode,
   SchedulePreview,
@@ -195,12 +196,12 @@ export const builderApi = {
     body: {
       name: string; version: number | null; allowed_origins: string[]; requests_per_minute: number; daily_quota: number | null;
       acknowledge_write_tools: boolean; share: boolean; per_user_daily_limit: number | null; tool_mode: ToolMode;
-      publisher_server_ids: string[];
+      publisher_server_ids: string[]; show_outline: boolean;
     },
   ) => call<PublicKeyCreated>(t, `/${kind}s/${id}/public-keys`, "POST", body),
   updatePublicKey: (
     t: string, keyId: string,
-    body: { status?: "active" | "paused"; version?: number; latest?: boolean; name?: string; share?: boolean; per_user_daily_limit?: number; no_per_user_limit?: boolean; tool_mode?: ToolMode; publisher_server_ids?: string[] },
+    body: { status?: "active" | "paused"; version?: number; latest?: boolean; name?: string; share?: boolean; per_user_daily_limit?: number; no_per_user_limit?: boolean; tool_mode?: ToolMode; publisher_server_ids?: string[]; show_outline?: boolean },
   ) =>
     call<PublicKey>(t, `/public-keys/${keyId}`, "PATCH", body),
   revokePublicKey: (t: string, keyId: string) => call<void>(t, `/public-keys/${keyId}`, "DELETE"),
@@ -245,6 +246,7 @@ export const builderApi = {
 /** Share links (/api/v1/shared/{slug}): the info needs no login; running needs one. */
 export const sharedApi = {
   info: (slug: string) => request<SharedInfo>(`/shared/${encodeURIComponent(slug)}`, {}, undefined, BACKEND_API_URL),
+  outline: (slug: string) => request<SharedOutline>(`/shared/${encodeURIComponent(slug)}/outline`, {}, undefined, BACKEND_API_URL),
   needs: (t: string, slug: string) => request<SharedNeeds>(`/shared/${encodeURIComponent(slug)}/needs`, {}, t, BACKEND_API_URL),
   run: (t: string, slug: string, body: { input: string; variables: Record<string, unknown>; wait_seconds: number; stream: boolean }) =>
     request<SharedRun>(`/shared/${encodeURIComponent(slug)}/runs`, { method: "POST", body: JSON.stringify(body) }, t, BACKEND_API_URL),

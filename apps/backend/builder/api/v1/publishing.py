@@ -79,6 +79,8 @@ class KeyIn(BaseModel):
     tool_mode: Literal["publisher", "visitor", "mixed"] = "publisher"
     # "mixed": the servers that use YOUR account (and your approval); the rest use each visitor's.
     publisher_server_ids: list[str] = Field(default_factory=list, max_length=50)
+    # The share link page shows how it works: its steps and their apps (never instructions).
+    show_outline: bool = True
 
     @field_validator("allowed_origins")
     @classmethod
@@ -100,6 +102,7 @@ class KeyUpdate(BaseModel):
     no_per_user_limit: bool = False
     tool_mode: Literal["publisher", "visitor", "mixed"] | None = None
     publisher_server_ids: list[str] | None = Field(default=None, max_length=50)
+    show_outline: bool | None = None
 
     @field_validator("allowed_origins")
     @classmethod
@@ -126,6 +129,7 @@ class KeyOut(BaseModel):
     tool_mode: str
     publisher_server_ids: list[str]
     per_user_daily_limit: int | None
+    show_outline: bool
     people: int  # distinct people who ran it from the share link, ever
 
 
@@ -148,7 +152,7 @@ async def _out(db: AsyncSession, key: BuilderPublicKey, user: CurrentUser) -> di
         "last_used_at": as_utc(key.last_used_at), "created_at": as_utc(key.created_at), "owner_id": key.owner_id,
         "is_mine": key.owner_id == user.id, "share_enabled": bool(key.share_enabled), "share_slug": key.share_slug,
         "tool_mode": key.tool_mode or "publisher", "publisher_server_ids": list(key.publisher_server_ids or []),
-        "per_user_daily_limit": key.per_user_daily_limit,
+        "per_user_daily_limit": key.per_user_daily_limit, "show_outline": key.show_outline is not False,
         "people": (await db.execute(
             select(func.count(func.distinct(BuilderRun.caller_user_id))).where(BuilderRun.public_key_id == key.id, BuilderRun.caller_user_id.is_not(None))
         )).scalar_one(),
@@ -212,7 +216,7 @@ async def create_key(kind: Kind, target_id: str, payload: KeyIn, user: CurrentUs
         requests_per_minute=payload.requests_per_minute, daily_quota=payload.daily_quota,
         share_enabled=payload.share, share_slug=new_share_slug() if payload.share else None,
         per_user_daily_limit=payload.per_user_daily_limit, tool_mode=payload.tool_mode,
-        publisher_server_ids=list(dict.fromkeys(payload.publisher_server_ids)),
+        publisher_server_ids=list(dict.fromkeys(payload.publisher_server_ids)), show_outline=payload.show_outline,
         **({"agent_id": target.id} if kind == "agents" else {"workflow_id": target.id}),
     )
     db.add(key)
@@ -247,7 +251,7 @@ async def update_key(key_id: str, payload: KeyUpdate, user: CurrentUser = Depend
             key.share_slug = new_share_slug()
     if payload.publisher_server_ids is not None:
         key.publisher_server_ids = list(dict.fromkeys(payload.publisher_server_ids))
-    for field in ("name", "status", "allowed_origins", "requests_per_minute", "daily_quota", "per_user_daily_limit", "tool_mode"):
+    for field in ("name", "status", "allowed_origins", "requests_per_minute", "daily_quota", "per_user_daily_limit", "tool_mode", "show_outline"):
         value = getattr(payload, field)
         if value is not None:
             setattr(key, field, value.strip() if isinstance(value, str) else value)

@@ -434,6 +434,8 @@ export interface PublicKey {
   publisher_server_ids: string[];
   /** Runs a day each signed-in person may start from the share link (null = no own limit). */
   per_user_daily_limit: number | null;
+  /** The share link page shows how it works (steps and apps, never instructions). */
+  show_outline: boolean;
   /** Distinct people who ran it from the share link, ever. */
   people: number;
 }
@@ -460,6 +462,25 @@ export interface SharedInfo {
   shared_by: string;
   per_user_daily_limit: number | null;
   tool_mode: ToolMode;
+  /** Whether GET /shared/{slug}/outline answers, and runs list their steps. */
+  show_outline: boolean;
+}
+
+/** How a share link's agent/workflow works (GET /shared/{slug}/outline): steps and apps only. */
+export interface SharedOutline {
+  kind: "agent" | "workflow";
+  /** In order; steps on the same ``level`` run side by side. */
+  steps: { id: string; title: string; kind: string; hint: string; apps: string[]; level: number }[];
+  apps: string[];
+  asks_before_changes: boolean;
+}
+
+/** How far one step of a share-link run got. */
+export interface SharedStep {
+  id: string;
+  title: string;
+  kind: string;
+  status: "pending" | "running" | "succeeded" | "failed" | "waiting" | "skipped";
 }
 
 /** One of my runs through a share link: only what a caller may see. */
@@ -475,6 +496,12 @@ export interface SharedRun {
   created_at: string;
   /** On a visitor link, a waiting run's decisions — they're mine to make. */
   approvals: Approval[];
+  /** Its steps and where each got (empty when the link doesn't show how it works). */
+  steps: SharedStep[];
+  /** What it took; null until it's finished (or when unknown). */
+  duration_ms: number | null;
+  tokens: number | null;
+  cost_usd: number | null;
 }
 
 /** Returned once, at creation: the key itself. */

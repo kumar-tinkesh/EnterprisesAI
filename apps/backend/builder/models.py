@@ -470,6 +470,9 @@ class BuilderPublicKey(Base, TimestampMixin):
     # People the publisher turned away from the share link (user ids): they keep
     # seeing their earlier runs there but can't start new ones.
     blocked_user_ids: Mapped[list] = mapped_column(JSON, default=list)
+    # The share link page shows "How it works" (its steps, the apps each uses —
+    # never prompts or instructions) and each run's steps as they go.
+    show_outline: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
 class BuilderAgentMemory(Base, TimestampMixin):

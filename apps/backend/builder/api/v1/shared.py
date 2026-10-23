@@ -3,6 +3,7 @@ from a link, signed in.
 
     GET  /{slug}                        what the link runs: name, who shared it, what to send (no login)
     GET  /{slug}/needs                  "visitor"/"mixed" links: the systems it uses and which I still have to connect
+    GET  /{slug}/outline                how it works: its steps and their apps (when the publisher shows it; no login)
     POST /{slug}/runs                   run it: {"input": "...", "variables": {...}, "wait_seconds": 20}
                                         200 when it finished within wait_seconds, else 202 — then poll
     GET  /{slug}/runs                   my runs through this link, newest first
@@ -29,7 +30,8 @@ Whose tools (``tool_mode``):
   wait for the publisher's approval, not the caller's.
 
 Callers see only their own runs, and of those only status, the answer, its
-sources — and, on a visitor link, their own pending approvals.
+sources, what it took (time, tokens, cost), which step is where (``steps``, when the link shows how it works —
+builder.publishing.outline) — and, on a visitor link, their own pending approvals.
 """
 from __future__ import annotations
 
@@ -51,6 +53,7 @@ from builder.publishing.service import (
 )
 from builder.runs import states
 from builder.publishing.ip_limit import check_ip_limit
+from builder.publishing.outline import outline as build_outline, run_steps
 from builder.publishing.live import SSE_HEADERS, caller_events
 from builder.runs.db import as_utc, session_factory
 from builder.runs.service import approval_view, cancel_run
@@ -82,8 +85,18 @@ async def _link(db: AsyncSession, slug: str) -> BuilderPublicKey:
 NEEDS_WORKSPACE = "This link uses your own connected apps, which needs an account with a workspace."
 
 
-async def _view(db: AsyncSession, run: BuilderRun, user: CurrentUser) -> dict:
+def _shows(key: BuilderPublicKey) -> bool:
+    """Read while the key is fresh (a commit expires it): does the link show how it works?"""
+    return key.show_outline is not False
+
+
+async def _view(db: AsyncSession, run: BuilderRun, user: CurrentUser, steps: bool) -> dict:
     view = {**public_view(run), "input": (run.input or {}).get("text") or "", "created_at": as_utc(run.created_at).isoformat(), "approvals": []}
+    view["steps"] = await run_steps(db, run) if steps else []
+    # What it took, as the run's own page shows it: time, tokens, cost (None until known).
+    took = (as_utc(run.finished_at) - as_utc(run.started_at)).total_seconds() * 1000 if run.started_at and run.finished_at else None
+    tokens = (run.prompt_tokens or 0) + (run.completion_tokens or 0)
+    view.update({"duration_ms": round(took) if took is not None else None, "tokens": tokens or None, "cost_usd": run.cost_usd})
     # A run as the caller (a visitor link) waits on THEIR decisions: show them here.
     if run.status == states.WAITING and run.owner_id == user.id:
         pending = (
@@ -123,8 +136,21 @@ async def info(slug: str, db: AsyncSession = Depends(get_db)):
     return {
         "kind": key.kind, "name": name, "description": description, "inputs": inputs, "version": version,
         "shared_by": (owner.full_name or "").strip() if owner else "", "per_user_daily_limit": key.per_user_daily_limit,
-        "tool_mode": key.tool_mode or "publisher",
+        "tool_mode": key.tool_mode or "publisher", "show_outline": key.show_outline is not False,
     }
+
+
+@router.get("/{slug}/outline")
+async def how_it_works(slug: str, db: AsyncSession = Depends(get_db)):
+    """Its steps, in order, and the apps each uses — only when the publisher shows it."""
+    key = await _link(db, slug)
+    if key.show_outline is False:
+        raise HTTPException(status_code=404, detail="Whoever shared this keeps how it works to themselves.")
+    try:
+        definition, _ = await definition_for(db, key.kind, await target_of(db, key), key.version)
+    except PublishError as exc:
+        return _fail(exc)
+    return await build_outline(db, key.kind, definition)
 
 
 @router.get("/{slug}/needs")
@@ -155,6 +181,7 @@ async def start(
     slug: str, payload: SharedRunIn, request: Request, user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db),
 ):
     key = await _link(db, slug)
+    shows = _shows(key)
     await check_ip_limit(request)
     if user.id in (key.blocked_user_ids or []):
         raise HTTPException(status_code=403, detail="Whoever shared this has turned off your access to it.")
@@ -169,7 +196,7 @@ async def start(
     except PublishError as exc:
         return _fail(exc)
     run = await _wait(db, run.id, payload.wait_seconds)
-    return JSONResponse(status_code=200 if run.status in states.TERMINAL else 202, content=await _view(db, run, user))
+    return JSONResponse(status_code=200 if run.status in states.TERMINAL else 202, content=await _view(db, run, user, shows))
 
 
 @router.get("/{slug}/runs")
@@ -183,23 +210,24 @@ async def my_runs(slug: str, user: CurrentUser = Depends(get_current_user), db: 
             .limit(50)
         )
     ).scalars().all()
-    return [await _view(db, r, user) for r in runs]
+    return [await _view(db, r, user, _shows(key)) for r in runs]
 
 
 @router.get("/{slug}/runs/{run_id}")
 async def read(slug: str, run_id: str, user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     key = await _link(db, slug)
-    return await _view(db, await _own_run(db, key, run_id, user), user)
+    return await _view(db, await _own_run(db, key, run_id, user), user, _shows(key))
 
 
 @router.get("/{slug}/runs/{run_id}/events")
 async def events(slug: str, run_id: str, user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     key = await _link(db, slug)
+    shows = _shows(key)
     await _own_run(db, key, run_id, user)
 
     async def view() -> dict:
         async with session_factory() as fresh:
-            return await _view(fresh, await fresh.get(BuilderRun, run_id), user)
+            return await _view(fresh, await fresh.get(BuilderRun, run_id), user, shows)
 
     return StreamingResponse(caller_events(run_id, view), media_type="text/event-stream", headers=SSE_HEADERS)
 
@@ -207,6 +235,7 @@ async def events(slug: str, run_id: str, user: CurrentUser = Depends(get_current
 @router.post("/{slug}/runs/{run_id}/cancel")
 async def cancel(slug: str, run_id: str, user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     key = await _link(db, slug)
+    shows = _shows(key)
     run = await _own_run(db, key, run_id, user)
     await cancel_run(db, run)
-    return await _view(db, run, user)
+    return await _view(db, run, user, shows)
