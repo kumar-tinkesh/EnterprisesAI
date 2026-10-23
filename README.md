@@ -192,6 +192,23 @@ in the `alembic_version` table, so later `make upgrade` calls are safe no-ops.
 
 ---
 
+## Supabase or the local database
+
+`.env` keeps both: `SUPABASE_DATABASE_URL` (where Supabase is) and
+`AUTH_DATABASE_URL` (what the app uses — set = Supabase, absent = `data/auth.db`).
+The app never switches by itself: if the active database can't be reached,
+`make docker-dev` stops and says what to do (a free Supabase project pauses
+after 7 days unused — restore it from the dashboard).
+
+| Command | What it does |
+| :------ | :----------- |
+| `make db-status` | which database is active, and whether Supabase answers |
+| `make db-backup` | all of Supabase → `data/backup/supabase-<time>.db` |
+| `make db-local` | run on `data/auth.db`, refreshed from Supabase first when it answers (old file kept in `data/backup/`) |
+| `make db-supabase` | run on Supabase again; warns if the local file changed meanwhile (those changes stay local) |
+
+Restart after switching: `make docker-down && make docker-dev`. `YES=1` skips the questions.
+
 ## Switching databases (SQLite → Postgres → …)
 
 Native — **one env var**, zero code changes:

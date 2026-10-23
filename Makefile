@@ -10,7 +10,8 @@ SHELL := /bin/bash
 PNPM := $(shell command -v pnpm >/dev/null 2>&1 && echo pnpm || echo "npx --yes pnpm@$$(node -p "require('./web/package.json').packageManager.split('@')[1]")")
 
 .PHONY: help install install-api install-web upgrade downgrade stamp revision \
-        seed-admin api web test test-api test-web docker-up docker-dev docker-down clean help
+        seed-admin api web test test-api test-web docker-up docker-dev docker-down clean help \
+        db-status db-check db-backup db-local db-supabase
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -55,6 +56,7 @@ test-web: ## Frontend vitest suite
 	pnpm --dir web test
 
 docker-up: ## Full stack in Docker (web :3001, auth :8001, backend :8002)
+	@uv run python scripts/db.py check
 	docker compose up --build -d
 	@echo ""
 	@echo "=========================================================================="
@@ -71,6 +73,8 @@ DEV_COMPOSE := docker compose -f docker-compose.yml -f docker-compose.dev.yml
 DEV_SERVICES := auth redis backend llm-gateway worker
 
 docker-dev: ## Backend in Docker (hot reload) + web on the host with Turbopack (:3001)
+	@# The active database must answer first; otherwise say what to do, and start nothing.
+	@uv run python scripts/db.py check
 	@# Host deps (glibc SWC); a node_modules installed inside the Alpine image can't run here.
 	@ls -d web/node_modules/.pnpm/@next+swc-linux-x64-gnu@* >/dev/null 2>&1 || CI=true $(MAKE) install-web
 	-@$(DEV_COMPOSE) rm -sf web urls >/dev/null 2>&1
@@ -104,3 +108,20 @@ docker-down: ## Stop containers (data volumes are kept)
 
 clean: ## Remove local SQLite db and caches
 	rm -f auth.db && rm -rf .pytest_cache apps/auth/.pytest_cache
+
+# ── Database: Supabase or the local SQLite file — switched on purpose, never by itself ──
+
+db-status: ## Which database is active (Supabase or local SQLite), and can it be reached
+	@uv run python scripts/db.py status
+
+db-check: ## Exit with what to do when the active database can't be reached
+	@uv run python scripts/db.py check
+
+db-backup: ## Copy all of Supabase into data/backup/supabase-<time>.db
+	@uv run python scripts/db.py backup
+
+db-local: ## Run on data/auth.db (refreshed from Supabase first when reachable); YES=1 skips the question
+	@uv run python scripts/db.py local
+
+db-supabase: ## Run on Supabase again (SUPABASE_DATABASE_URL in .env); YES=1 skips the question
+	@uv run python scripts/db.py supabase
