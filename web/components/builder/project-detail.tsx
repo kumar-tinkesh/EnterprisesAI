@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import {
+import { ArrowLeft,
   Activity,
   AlertTriangle,
   CheckCircle2,
@@ -109,14 +109,21 @@ export function ProjectDetail({
       <Button size="sm" variant="outline" className="h-8 shrink-0" onClick={onOpenCanvas} title="Open it on the canvas editor">
         <Layers /> <span className="hidden sm:inline">Canvas</span>
       </Button>
-      <button type="button" onClick={onClose} aria-label="Close" className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 cursor-pointer">
+      <button type="button" onClick={onClose} aria-label="Close" className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 md:inline-flex cursor-pointer">
         <X className="h-4 w-4" />
       </button>
     </>
   );
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-white">
+    <div className="flex h-full min-h-0 flex-col bg-[var(--bg)]">
+      {/* A phone shows the details alone, so say whose they are and how to get back. */}
+      <div className="flex shrink-0 items-center gap-2 border-b border-zinc-200 px-2 py-2 md:hidden">
+        <button type="button" onClick={onClose} aria-label="Back to the list" className="rounded-md p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer">
+          <ArrowLeft className="h-4 w-4" />
+        </button>
+        <span className="min-w-0 truncate text-sm font-semibold text-zinc-900">{item?.name ?? (kind === "agent" ? "Agent" : "Workflow")}</span>
+      </div>
       <header className="flex shrink-0 items-center gap-2 border-b border-zinc-200 px-3 sm:px-4">
         <nav className="flex min-w-0 flex-1 gap-1 overflow-x-auto" role="tablist" aria-label={`${item?.name ?? kind} views`}>
           {TABS.map((t) => (
@@ -127,8 +134,8 @@ export function ProjectDetail({
               aria-selected={tab === t.id}
               onClick={() => onTab(t.id)}
               className={cn(
-                "inline-flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-3 text-xs font-semibold transition-colors cursor-pointer",
-                tab === t.id ? "border-indigo-500 text-indigo-700" : "border-transparent text-zinc-500 hover:text-zinc-900",
+                "-mb-px inline-flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-3 text-sm font-medium transition-colors cursor-pointer",
+                tab === t.id ? "border-[var(--accent-hover)] text-zinc-900" : "border-transparent text-zinc-500 hover:text-zinc-900",
               )}
             >
               <t.Icon className="h-3.5 w-3.5" /> {t.label}
@@ -167,8 +174,8 @@ export function ProjectDetail({
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="grid gap-1 border-b border-zinc-100 py-3 last:border-0 sm:grid-cols-[150px_1fr] sm:gap-4">
-      <span className="text-xs font-semibold uppercase tracking-wider text-zinc-500">{label}</span>
-      <div className="min-w-0 text-[13px] text-zinc-800">{children}</div>
+      <span className="text-sm text-zinc-500">{label}</span>
+      <div className="min-w-0 text-sm text-zinc-800">{children}</div>
     </div>
   );
 }
@@ -185,7 +192,7 @@ function Section({ title, hint, action, children }: { title: string; hint?: stri
         </div>
         {action}
       </div>
-      <div className="rounded-xl border border-zinc-200 bg-white px-4">{children}</div>
+      <div className="rounded-lg border border-zinc-200 px-4">{children}</div>
     </section>
   );
 }
@@ -233,7 +240,7 @@ function RecentRuns({ runs, loading }: { runs: Run[]; loading: boolean }) {
         return (
           <li key={r.id} className="flex items-center gap-3 py-2.5">
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-[13px] text-zinc-900">{r.input?.text || "—"}</span>
+              <span className="block truncate text-sm text-zinc-900">{r.input?.text || "—"}</span>
               {r.status === "failed" && r.error && <span className="block truncate text-xs text-red-600">{r.error}</span>}
             </span>
             <span className={cn("inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium", st.pill)}>
@@ -423,7 +430,7 @@ function WorkflowOverview({ workflow, token, onOpenCanvas }: { workflow: Workflo
                   <li key={n.id} className="flex items-start gap-3 py-2.5">
                     <span className="mt-0.5 w-5 shrink-0 text-right text-xs tabular-nums text-zinc-500">{i + 1}</span>
                     <span className="min-w-0 flex-1">
-                      <span className="flex items-center gap-1.5 text-[13px] font-medium text-zinc-900">
+                      <span className="flex items-center gap-1.5 text-sm font-medium text-zinc-900">
                         {stepTitle(n, agents)}
                         <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-xs font-normal text-zinc-500">{NODE_META[n.type].title}</span>
                       </span>
@@ -518,7 +525,7 @@ function HealthView({
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-3xl space-y-6 p-4 sm:p-5">
-        <div className="flex flex-wrap items-center gap-5 rounded-xl border border-zinc-200 bg-white p-4 sm:p-5">
+        <div className="flex flex-wrap items-center gap-5 rounded-lg border border-zinc-200 bg-white p-4 sm:p-5">
           <Ring score={health.score} />
           <div className="min-w-0 flex-1">
             <p className={cn("flex items-center gap-2 text-base font-semibold", st.text)}>
@@ -549,7 +556,7 @@ function HealthView({
               const at = b.key in FIX_AT ? FIX_AT[b.key] : b.key === "not_connected" ? null : "settings";
               const target = at === "settings" && !canManage ? null : at;
               return (
-                <div key={b.key} className={cn("rounded-xl border p-3.5", b.severity === "critical" ? "border-red-200 bg-red-50" : "border-amber-200 bg-amber-50")}>
+                <div key={b.key} className={cn("rounded-lg border p-3.5", b.severity === "critical" ? "border-red-200 bg-red-50" : "border-amber-200 bg-amber-50")}>
                   <p className={cn("flex items-center gap-2 text-sm font-semibold", b.severity === "critical" ? "text-red-700" : "text-amber-700")}>
                     {b.severity === "critical" ? <XCircle className="h-4 w-4 shrink-0" /> : <AlertTriangle className="h-4 w-4 shrink-0" />} {b.title}
                   </p>
@@ -571,7 +578,7 @@ function HealthView({
 
         <section>
           <h3 className="mb-2 text-sm font-semibold text-zinc-900">What the score is made of</h3>
-          <ul className="divide-y divide-zinc-100 rounded-xl border border-zinc-200 bg-white">
+          <ul className="divide-y divide-zinc-100 rounded-lg border border-zinc-200 bg-white">
             {health.dimensions.map((d) => (
               <Dimension key={d.key} d={d} />
             ))}
@@ -595,7 +602,7 @@ function Dimension({ d }: { d: Health["dimensions"][number] }) {
         )}
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-2">
-            <span className="text-[13px] font-medium text-zinc-900">{d.label}</span>
+            <span className="text-sm font-medium text-zinc-900">{d.label}</span>
             <span className="text-xs text-zinc-500">weight {d.weight}</span>
           </span>
           <span className="block truncate text-xs text-zinc-500">{d.summary}</span>

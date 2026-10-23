@@ -899,7 +899,7 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
                     className={cn(
                       "absolute z-30 bg-white shadow-xl",
                       selection?.kind === "settings"
-                        ? "inset-y-0 right-0 w-[410px] overflow-y-auto border-l border-zinc-200 p-4"
+                        ? "inset-y-0 right-0 w-full overflow-y-auto border-l border-zinc-200 p-4 sm:w-[410px]"
                         // A step or a line: a popup over the canvas, as tall as it needs.
                         : "right-3 top-3 flex max-h-[calc(100%-1.5rem)] w-[min(360px,calc(100%-1.5rem))] flex-col overflow-hidden rounded-xl border border-zinc-200",
                     )}
@@ -966,7 +966,7 @@ function Editor({ id, onBack, onSwitch, onOpen, onExit }: EditorProps) {
 
                 {/* ── history / tests / publish drawer ── */}
                 {drawer && (
-                  <div className="absolute inset-y-0 right-0 z-30 w-96 overflow-hidden border-l border-zinc-200 bg-white shadow-lg">
+                  <div className="absolute inset-y-0 right-0 z-30 w-full overflow-hidden border-l border-zinc-200 bg-white shadow-lg sm:w-96">
                     {selection?.kind === "history" && (
                       <VersionHistory
                         kind="workflow" targetId={id} token={token} canRestore={canManage} dirty={dirty}

@@ -138,17 +138,17 @@ function KeyRow({
           <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
             <span className="font-medium text-zinc-900">{k.name}</span>
             <span className={cn("rounded-full px-2 py-0.5 text-xs font-medium", active ? "bg-emerald-50 text-emerald-700" : "bg-zinc-100 text-zinc-500")}>{active ? "Live" : "Paused"}</span>
-            <span className="text-zinc-500">{way.title}</span>
+            {k.name !== way.title && <span className="text-zinc-500">{way.title}</span>}
           </p>
-          <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs text-zinc-500">
+          <p className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-zinc-500">
             <Link href={editHref(k.kind, k.target_id)} className="inline-flex max-w-[16rem] items-center gap-1 text-zinc-700 hover:text-zinc-900 hover:underline" title={`Open ${k.target_name}`}>
               {k.kind === "workflow" ? <Network className="h-3.5 w-3.5 shrink-0" /> : <Bot className="h-3.5 w-3.5 shrink-0" />}
               <span className="truncate">{k.target_name}</span>
             </Link>
-            <span>· {k.version ? `v${k.version}` : "latest"}</span>
-            <span>· {k.requests.toLocaleString()} requests</span>
-            <span>· {k.runs_today}{k.daily_quota ? `/${k.daily_quota}` : ""} today</span>
-            <span>· {k.last_used_at ? `used ${ago(k.last_used_at)}` : "never used"}</span>
+            <span>{k.version ? `v${k.version}` : "Latest version"}</span>
+            <span>{k.requests.toLocaleString()} requests</span>
+            <span>{k.runs_today}{k.daily_quota ? `/${k.daily_quota}` : ""} today</span>
+            <span>{k.last_used_at ? `Used ${ago(k.last_used_at).toLowerCase()}` : "Never used"}</span>
           </p>
           {url && (
             <button

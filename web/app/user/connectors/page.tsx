@@ -2,10 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, Check, ChevronDown, Copy, Pencil, Plus, Search, ShieldAlert, Trash2, Unlink, Wrench, X } from "lucide-react";
+import { Check, ChevronDown, Copy, Pencil, Plus, Search, ShieldAlert, Trash2, Unlink, Wrench, X } from "lucide-react";
 
 import ProtectedDashboard from "@/components/protected-dashboard";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { Select } from "@/components/builder/fields";
 import { ConnectServerDialog } from "@/components/connections/server-connect";
 import { ConnectorIcon, connectorKey } from "@/components/connections/connector-icon";
 import { vendorApi, type MCPServerEntry } from "@/lib/api";
@@ -28,7 +31,7 @@ const CATEGORIES: Record<string, string[]> = {
 };
 
 const RISK: Record<Risk, { label: string; hint: string; Icon: typeof Wrench; pill: string }> = {
-  read: { label: "Read", hint: "Only looks things up", Icon: Search, pill: "bg-sky-50 text-sky-700" },
+  read: { label: "Read", hint: "Only looks things up", Icon: Search, pill: "bg-zinc-100 text-zinc-600" },
   edit: { label: "Edit", hint: "Creates or changes data", Icon: Pencil, pill: "bg-amber-50 text-amber-700" },
   delete: { label: "Delete", hint: "Removes data", Icon: Trash2, pill: "bg-red-50 text-red-700" },
 };
@@ -102,33 +105,25 @@ function Connectors() {
   return (
     <div className="mt-6 space-y-6">
       <p className="text-sm text-zinc-500">
-        <span className="font-semibold text-zinc-900 tabular-nums">{connected.length}</span> of {servers.length} connected
-        <span className="mx-2 text-zinc-300" aria-hidden>·</span>
-        <span className="font-semibold text-zinc-900 tabular-nums">{totalTools.toLocaleString()}</span> tools
-        <span className="mx-2 text-zinc-300" aria-hidden>·</span>
-        <span className="font-semibold text-zinc-900 tabular-nums">{agentLinks}</span> in use by agents
+        <span className="font-medium text-zinc-900 tabular-nums">{connected.length}</span> of {servers.length} connected
+        <span className="mx-2" aria-hidden>·</span>
+        <span className="font-medium text-zinc-900 tabular-nums">{totalTools.toLocaleString()}</span> tools
+        <span className="mx-2" aria-hidden>·</span>
+        <span className="font-medium text-zinc-900 tabular-nums">{agentLinks}</span> in use by agents
       </p>
 
       <div className="space-y-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="relative min-w-[12rem] max-w-sm flex-1">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
-            <input
-              className="h-9 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-indigo-400 focus:outline-none"
-              placeholder={`Search ${servers.length} connectors…`}
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              aria-label="Search connectors"
-            />
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="relative flex-1 sm:max-w-sm">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+            <Input className="pl-9" placeholder={`Search ${servers.length} connectors`} value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Search connectors" />
           </div>
-          <label className="flex shrink-0 items-center gap-2 text-xs text-zinc-500">
-            Sort by
-            <select className="h-9 rounded-lg border border-zinc-200 bg-white px-2 text-sm text-zinc-900" value={sort} onChange={(e) => setSort(e.target.value as SortKey)}>
-              {Object.entries(SORTS).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
-            </select>
-          </label>
+          <Select className="sm:w-44" value={sort} onChange={(e) => setSort(e.target.value as SortKey)} aria-label="Sort by">
+            {Object.entries(SORTS).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+          </Select>
         </div>
-        <div className="flex flex-wrap gap-2" role="tablist" aria-label="Category">
+        {/* One row that scrolls sideways on a phone instead of wrapping into a block. */}
+        <div className="-mx-4 flex gap-1 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:px-0" role="tablist" aria-label="Category">
           {["All", ...Object.keys(CATEGORIES)].map((c) => (
             <button
               key={c}
@@ -137,8 +132,8 @@ function Connectors() {
               aria-selected={category === c}
               onClick={() => setCategory(c)}
               className={cn(
-                "rounded-lg border px-3 py-1.5 text-xs font-medium cursor-pointer",
-                category === c ? "border-indigo-400 bg-indigo-50 text-indigo-700" : "border-zinc-200 bg-white text-zinc-600 hover:text-zinc-900",
+                "shrink-0 rounded-md px-3 py-1.5 text-sm font-medium transition-colors cursor-pointer",
+                category === c ? "bg-zinc-100 text-zinc-900" : "text-zinc-500 hover:bg-zinc-50 hover:text-zinc-900",
               )}
             >
               {c}
@@ -148,77 +143,60 @@ function Connectors() {
       </div>
 
       {groups.length === 0 ? (
-        <p className="text-sm text-zinc-500">No connectors match your search.</p>
+        <p className="rounded-lg border border-dashed border-zinc-300 px-4 py-10 text-center text-sm text-zinc-500">No connectors match your search.</p>
       ) : (
         <div className="space-y-8">
           {groups.map((g) => (
-            <div key={g.label}>
-              <div className="mb-3 flex items-center gap-2">
-                <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">{g.label}</h2>
-                <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-500">{g.items.length}</span>
-                <span className="h-px flex-1 bg-zinc-100" />
-              </div>
-              <ul className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            <section key={g.label} className="space-y-3">
+              <h2 className="text-base font-semibold text-zinc-900">
+                {g.label} <span className="font-normal text-zinc-500">· {g.items.length}</span>
+              </h2>
+              <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                 {g.items.map((s) => {
                   const uses = usedBy[s.id] ?? 0;
-                  const busy = disconnect.isPending && disconnect.variables?.id === s.id;
                   return (
-                    <li key={s.id} className="group relative">
-                      <button
-                        type="button"
-                        onClick={() => setOpen(s.id)}
+                    <li key={s.id} className="flex">
+                      <div
                         className={cn(
-                          "flex h-full w-full items-start gap-3 rounded-xl border bg-white p-4 text-left transition hover:border-indigo-300 cursor-pointer",
-                          open === s.id ? "border-indigo-400" : "border-zinc-200",
+                          "flex w-full flex-col gap-3 rounded-lg border p-4 transition-colors",
+                          open === s.id ? "border-[var(--accent-border)]" : "border-zinc-200 hover:border-zinc-300",
                         )}
-                        title={`See ${s.name}'s tools`}
                       >
-                        <ConnectorIcon name={s.name} />
-                        <span className="min-w-0 flex-1 pr-14">
-                          <span className="flex items-center gap-2">
-                            <span className="truncate text-sm font-semibold text-zinc-900">{s.name}</span>
+                        <button type="button" onClick={() => setOpen(s.id)} className="flex flex-1 items-start gap-3 text-left cursor-pointer" title={`See ${s.name}'s tools`}>
+                          <ConnectorIcon name={s.name} size="sm" />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm font-medium text-zinc-900">{s.name}</span>
+                            {s.description && <span className="mt-0.5 line-clamp-2 block text-xs text-zinc-500">{s.description}</span>}
                           </span>
-                          {s.description && <span className="mt-1 line-clamp-2 block text-xs text-zinc-500">{s.description}</span>}
-                          {s.connected && (
-                            <span className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-500">
-                                <span className="font-medium text-zinc-600">{s.bound_tools.length} tool{s.bound_tools.length === 1 ? "" : "s"}</span>
-                                <span aria-hidden>•</span>
-                                <span className={uses ? "text-indigo-600" : ""}>{uses ? `Used by ${uses} agent${uses === 1 ? "" : "s"}` : "Not used by any agent yet"}</span>
+                        </button>
+                        <div className="flex items-center justify-between gap-2">
+                          {s.connected ? (
+                            <span className="flex min-w-0 items-center gap-1.5 text-xs text-zinc-500">
+                              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--success)]" aria-hidden />
+                              <span className="truncate">
+                                Connected · {s.bound_tools.length} tool{s.bound_tools.length === 1 ? "" : "s"}
+                                {uses ? ` · ${uses} agent${uses === 1 ? "" : "s"}` : ""}
+                              </span>
                             </span>
+                          ) : (
+                            <span className="text-xs text-zinc-500">Not connected</span>
                           )}
-                        </span>
-                      </button>
-                      <div className="absolute right-4 top-4 flex items-center gap-1">
-                        {s.connected ? (
-                          <>
-                            <button
-                              type="button"
-                              aria-label={`Disconnect ${s.name}`}
-                              title="Disconnect"
-                              disabled={busy}
-                              onClick={() => confirm(`Disconnect "${s.name}"? Agents that use it stop working until you connect again.`) && disconnect.mutate(s)}
-                              className="rounded-md p-1 text-zinc-400 opacity-0 transition hover:text-red-600 focus:opacity-100 group-hover:opacity-100 disabled:opacity-50 cursor-pointer"
-                            >
-                              {busy ? <Spinner className="h-4 w-4" /> : <Unlink className="h-4 w-4" />}
+                          {s.connected ? (
+                            <button type="button" onClick={() => setOpen(s.id)} className="shrink-0 text-sm font-medium text-zinc-700 hover:text-zinc-900 cursor-pointer">
+                              Manage
                             </button>
-                          </>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => setConnecting(s.id)}
-                            title={`Connect ${s.name}`}
-                            aria-label={`Connect ${s.name}`}
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-white shadow-sm hover:bg-indigo-500 cursor-pointer"
-                          >
-                            <Plus className="h-4 w-4" />
-                          </button>
-                        )}
+                          ) : (
+                            <Button size="sm" variant="outline" className="shrink-0" onClick={() => setConnecting(s.id)} aria-label={`Connect ${s.name}`}>
+                              <Plus /> Connect
+                            </Button>
+                          )}
+                        </div>
                       </div>
                     </li>
                   );
                 })}
               </ul>
-            </div>
+            </section>
           ))}
         </div>
       )}
@@ -229,9 +207,15 @@ function Connectors() {
           uses={usedBy[openServer.id] ?? 0}
           token={token}
           onConnect={() => setConnecting(openServer.id)}
+          disconnecting={disconnect.isPending && disconnect.variables?.id === openServer.id}
+          onDisconnect={() =>
+            confirm(`Disconnect "${openServer.name}"? Agents that use it stop working until you connect again.`) &&
+            disconnect.mutate(openServer, { onSuccess: () => setOpen(null) })
+          }
           onClose={() => setOpen(null)}
         />
       )}
+      {disconnect.isError && <p className="text-sm text-red-600">Couldn&apos;t disconnect. Try again.</p>}
       {connecting && (
         <ConnectServerDialog serverId={connecting} token={token} onClose={() => setConnecting(null)} onConnected={() => setConnecting(null)} />
       )}
@@ -242,7 +226,17 @@ function Connectors() {
 type Tool = ServerTools["tools"][number];
 
 /** The side panel: a connector's tools and what each one can do, nothing else. */
-function ToolsPanel({ server, uses, token, onConnect, onClose }: { server: MCPServerEntry; uses: number; token: string; onConnect: () => void; onClose: () => void }) {
+function ToolsPanel({
+  server, uses, token, onConnect, onDisconnect, disconnecting, onClose,
+}: {
+  server: MCPServerEntry;
+  uses: number;
+  token: string;
+  onConnect: () => void;
+  onDisconnect: () => void;
+  disconnecting: boolean;
+  onClose: () => void;
+}) {
   const tools = useQuery({ queryKey: ["builder-server-tools", server.id], queryFn: () => builderApi.serverTools(token, server.id), enabled: !!token, staleTime: 30_000 });
   const [q, setQ] = useState("");
   const [risk, setRisk] = useState<Risk | "all">("all");
@@ -268,43 +262,40 @@ function ToolsPanel({ server, uses, token, onConnect, onClose }: { server: MCPSe
   return (
     <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-label={`${server.name}: tools and capabilities`}>
       <button type="button" aria-label="Close" className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div className="relative flex h-full w-full max-w-lg flex-col border-l border-zinc-200 bg-white shadow-2xl">
-        <div className="flex items-start gap-3 border-b border-zinc-100 p-5">
-          <ConnectorIcon name={server.name} />
+      <div className="relative flex h-dvh w-full max-w-lg flex-col border-l border-zinc-200 bg-[var(--surface)] shadow-2xl">
+        <div className="flex items-start gap-3 border-b border-zinc-100 p-4 sm:p-5">
+          <ConnectorIcon name={server.name} size="sm" />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <h2 className="truncate text-base font-semibold text-zinc-900">{server.name}</h2>
             </div>
-            {server.description && <p className="mt-0.5 line-clamp-2 text-xs text-zinc-500">{server.description}</p>}
-            <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-              {server.connected ? (
-                <span className="rounded-full bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700">connected</span>
-              ) : (
-                <span className="rounded-full bg-zinc-100 px-2 py-0.5 font-medium text-zinc-600">not connected</span>
-              )}
-              <span className="inline-flex items-center gap-1 text-zinc-500">
-                <Bot className="h-3 w-3" /> {uses ? `Used by ${uses} agent${uses === 1 ? "" : "s"}` : "Not used by any agent yet"}
+            {server.description && <p className="mt-0.5 line-clamp-2 text-sm text-zinc-500">{server.description}</p>}
+            <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500">
+              <span className="inline-flex items-center gap-1.5">
+                <span className={cn("h-1.5 w-1.5 rounded-full", server.connected ? "bg-[var(--success)]" : "bg-zinc-400")} aria-hidden />
+                {server.connected ? "Connected" : "Not connected"}
               </span>
+              <span>{uses ? `Used by ${uses} agent${uses === 1 ? "" : "s"}` : "Not used by any agent yet"}</span>
             </p>
+            <div className="mt-3">
+              {server.connected ? (
+                <Button size="sm" variant="danger" disabled={disconnecting} onClick={onDisconnect}>
+                  {disconnecting ? <Spinner className="h-4 w-4" /> : <Unlink />} Disconnect
+                </Button>
+              ) : (
+                <Button size="sm" onClick={onConnect}><Plus /> Connect</Button>
+              )}
+            </div>
           </div>
           <button type="button" onClick={onClose} aria-label="Close" className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 cursor-pointer">
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        <div className="space-y-3 border-b border-zinc-100 px-5 py-4">
-          <div className="flex items-center justify-between gap-2">
-            <h3 className="flex items-center gap-1.5 text-sm font-semibold text-zinc-900"><Wrench className="h-4 w-4 text-zinc-400" /> Tools &amp; capabilities</h3>
-            {!tools.isLoading && <span className="text-xs text-zinc-500">{list.length} tool{list.length === 1 ? "" : "s"}</span>}
-          </div>
-          {!server.connected && (
-            <div className="flex items-center gap-3 rounded-lg border border-indigo-100 bg-indigo-50 p-3">
-              <p className="flex-1 text-xs text-indigo-700">Connect {server.name} so your agents can use these tools.</p>
-              <button type="button" onClick={onConnect} className="inline-flex shrink-0 items-center gap-1 rounded-md bg-indigo-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 cursor-pointer">
-                <Plus className="h-3.5 w-3.5" /> Connect
-              </button>
-            </div>
-          )}
+        <div className="space-y-3 border-b border-zinc-100 px-4 py-4 sm:px-5">
+          <h3 className="text-sm font-semibold text-zinc-900">
+            Tools {!tools.isLoading && <span className="font-normal text-zinc-500">· {list.length}</span>}
+          </h3>
           {list.length > 0 && (
             <>
               {/* What it can do, at a glance; each chip filters the list. */}
@@ -320,18 +311,12 @@ function ToolsPanel({ server, uses, token, onConnect, onClose }: { server: MCPSe
                 })}
               </div>
               <div className="relative">
-                <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-400" />
-                <input
-                  className="h-8 w-full rounded-lg border border-zinc-200 bg-white pl-8 pr-3 text-xs text-zinc-900 placeholder:text-zinc-400 focus:border-indigo-400 focus:outline-none"
-                  placeholder={`Search ${list.length} tools…`}
-                  value={q}
-                  onChange={(e) => setQ(e.target.value)}
-                  aria-label="Search tools"
-                />
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+                <Input className="pl-9" placeholder={`Search ${list.length} tools`} value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search tools" />
               </div>
               {counts.edit + counts.delete > 0 && (
                 <p className="flex items-start gap-1.5 text-xs text-zinc-500">
-                  <ShieldAlert className="mt-px h-3.5 w-3.5 shrink-0 text-amber-600" />
+                  <ShieldAlert className="mt-px h-3.5 w-3.5 shrink-0 text-amber-700" />
                   Tools that edit or delete data ask you first before they run, unless an agent is set up otherwise.
                 </p>
               )}
@@ -339,7 +324,7 @@ function ToolsPanel({ server, uses, token, onConnect, onClose }: { server: MCPSe
           )}
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5">
           {tools.isLoading ? (
             <div className="flex justify-center py-10"><Spinner className="h-5 w-5 text-zinc-400" /></div>
           ) : tools.isError ? (
@@ -367,8 +352,8 @@ function Chip({ on, onClick, title, children }: { on: boolean; onClick: () => vo
       title={title}
       aria-pressed={on}
       className={cn(
-        "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium cursor-pointer",
-        on ? "border-indigo-400 bg-indigo-50 text-indigo-700" : "border-zinc-200 bg-white text-zinc-600 hover:text-zinc-900",
+        "inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors cursor-pointer",
+        on ? "bg-zinc-100 text-zinc-900" : "text-zinc-500 hover:bg-zinc-50 hover:text-zinc-900",
       )}
     >
       {children}
@@ -397,16 +382,16 @@ function ToolCard({ tool }: { tool: Tool }) {
   const long = (tool.description ?? "").length > 160;
 
   return (
-    <li className="rounded-xl border border-zinc-200 bg-zinc-50 p-3">
+    <li className="rounded-lg border border-zinc-200 p-3">
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className="font-mono text-xs font-semibold text-zinc-900">{tool.name}</span>
+            <span className="break-all font-mono text-xs font-medium text-zinc-900">{tool.name}</span>
             <span className={cn("inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-xs font-medium", R.pill)} title={R.hint}>
-              <R.Icon className="h-2.5 w-2.5" /> {R.label}
+              <R.Icon className="h-3 w-3" /> {R.label}
             </span>
           </div>
-          {tool.description && <p className={cn("mt-1 text-xs leading-relaxed text-zinc-600", !open && "line-clamp-3")}>{tool.description}</p>}
+          {tool.description && <p className={cn("mt-1 text-sm text-zinc-500", !open && "line-clamp-3")}>{tool.description}</p>}
         </div>
         <button
           type="button"
@@ -417,19 +402,19 @@ function ToolCard({ tool }: { tool: Tool }) {
           }}
           aria-label={`Copy ${tool.name}`}
           title="Copy the tool's name"
-          className="rounded-md p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 cursor-pointer"
+          className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 cursor-pointer"
         >
-          {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
+          {copied ? <Check className="h-4 w-4 text-emerald-700" /> : <Copy className="h-4 w-4" />}
         </button>
       </div>
       {(params.length > 0 || long) && (
-        <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-800 cursor-pointer">
+        <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-zinc-700 hover:text-zinc-900 cursor-pointer">
           <ChevronDown className={cn("h-3 w-3 transition-transform", open && "rotate-180")} />
           {open ? "Less" : params.length ? `${params.length} input${params.length === 1 ? "" : "s"}` : "More"}
         </button>
       )}
       {open && params.length > 0 && (
-        <ul className="mt-2 divide-y divide-zinc-100 rounded-lg border border-zinc-200 bg-white">
+        <ul className="mt-2 divide-y divide-zinc-100 rounded-md bg-zinc-50">
           {params.map((p) => (
             <li key={p.name} className="px-2.5 py-1.5">
               <p className="flex flex-wrap items-center gap-1.5 text-xs">

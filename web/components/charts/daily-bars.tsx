@@ -6,8 +6,8 @@ import { CheckCircle2, Table2, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // Status colours (good / critical): always shown with an icon and a label, never alone.
-export const GOOD = "#0ca30c";
-export const CRITICAL = "#d03b3b";
+export const GOOD = "var(--success)";
+export const CRITICAL = "var(--danger)";
 
 export type DailyCount = { date: string; good: number; bad: number };
 
@@ -90,7 +90,7 @@ export function DailyBars({
           <div className="flex h-48 flex-col justify-between pb-5 text-right text-xs tabular-nums text-zinc-500" aria-hidden>
             {[4, 3, 2, 1, 0].map((i) => <span key={i} className="leading-none">{tick * i}</span>)}
           </div>
-          <div className="relative min-w-0 flex-1">
+          <div className="@container relative min-w-0 flex-1">
             <div className="pointer-events-none absolute inset-x-0 top-0 flex h-[calc(100%-1.25rem)] flex-col justify-between" aria-hidden>
               {[0, 1, 2, 3, 4].map((i) => <div key={i} className="border-t border-zinc-100" />)}
             </div>
@@ -115,11 +115,11 @@ export function DailyBars({
                       {d.bad > 0 && <div className="w-full rounded-t-[4px]" style={{ flexGrow: d.bad, background: CRITICAL, minHeight: 2 }} />}
                       {d.good > 0 && <div className={cn("w-full", d.bad > 0 ? "" : "rounded-t-[4px]")} style={{ flexGrow: d.good, background: GOOD, minHeight: 2 }} />}
                     </div>
-                    <span className={cn("absolute bottom-0 left-1/2 -translate-x-1/2 whitespace-nowrap text-xs text-zinc-500", i % 2 === (days.length - 1) % 2 ? "" : "hidden sm:inline")}>
+                    <span className={cn("absolute bottom-0 left-1/2 -translate-x-1/2 whitespace-nowrap text-xs text-zinc-500", i % 2 === (days.length - 1) % 2 ? "" : "hidden @3xl:inline")}>
                       {dayLabel(d.date)}
                     </span>
                     {hover === i && (
-                      <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 -translate-x-1/2 whitespace-nowrap rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs shadow-lg">
+                      <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 -translate-x-1/2 whitespace-nowrap rounded-md border border-zinc-200 bg-[var(--surface-raised)] px-2.5 py-1.5 text-xs shadow-lg">
                         <p className="font-medium text-zinc-900">{dayLabel(d.date)}</p>
                         <p className="flex items-center gap-1 text-zinc-600"><CheckCircle2 className="h-3 w-3" style={{ color: GOOD }} /> {d.good} {good}</p>
                         <p className="flex items-center gap-1 text-zinc-600"><XCircle className="h-3 w-3" style={{ color: CRITICAL }} /> {d.bad} {bad}</p>

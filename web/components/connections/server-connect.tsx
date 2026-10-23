@@ -95,7 +95,7 @@ export function UserConnectModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+      <div className="max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-xl border border-zinc-200 bg-[var(--surface-raised)] p-5 shadow-xl sm:p-6">
         <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
           <h3 className="text-lg font-semibold text-zinc-900">Connect "{server.name}"</h3>
           <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600 cursor-pointer">
@@ -380,7 +380,7 @@ export function WhatsAppBridgeModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-      <div className="w-full max-w-sm rounded-xl bg-white p-6 shadow-xl">
+      <div className="max-h-[90dvh] w-full max-w-sm overflow-y-auto rounded-xl border border-zinc-200 bg-[var(--surface-raised)] p-5 shadow-xl sm:p-6">
         <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
           <h3 className="text-lg font-semibold text-zinc-900">Connect &quot;{server.name}&quot;</h3>
           <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600 cursor-pointer">
@@ -490,7 +490,7 @@ export function ConnectServerDialog({
   } else {
     dialog = (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4" role="dialog" aria-modal="true">
-        <div className="w-full max-w-sm rounded-xl bg-white p-6 text-center shadow-xl">
+        <div className="max-h-[90dvh] w-full max-w-sm overflow-y-auto rounded-xl border border-zinc-200 bg-[var(--surface-raised)] p-5 text-center shadow-xl sm:p-6">
           {catalog.isLoading ? (
             <Spinner className="mx-auto h-6 w-6 text-zinc-500" />
           ) : (

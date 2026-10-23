@@ -118,9 +118,9 @@ function Dashboard() {
   return (
     <section className="mx-auto max-w-6xl space-y-8 px-4 py-6 sm:px-8 sm:py-8">
       {/* Greeting */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+      <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
-          <h1 className="truncate text-xl font-semibold text-zinc-900">
+          <h1 className="text-xl font-semibold text-zinc-900">
             {greeting()}, {firstName}
           </h1>
           <p className="mt-1 text-sm text-zinc-500">

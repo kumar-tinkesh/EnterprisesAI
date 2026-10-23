@@ -2,18 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  AlertTriangle,
-  BookOpen,
-  CheckCircle2,
-  FileText,
-  Pencil,
-  Plus,
-  Search,
-  Trash2,
-  Upload,
-  X,
-} from "lucide-react";
+import { BookOpen, FileText, Plus, Search, Upload } from "lucide-react";
 
 import ProtectedDashboard from "@/components/protected-dashboard";
 import { useAuthStore } from "@/stores/auth-store";
@@ -25,7 +14,11 @@ import {
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Dialog } from "@/components/ui/dialog";
+import { Menu } from "@/components/ui/menu";
 import { Spinner } from "@/components/ui/spinner";
+import { Tabs } from "@/components/ui/tabs";
+import { Field, Select, Textarea } from "@/components/builder/fields";
 import { cn } from "@/lib/utils";
 
 // Mirrors the backend's upload gate (knowledge/services/document_safety.py);
@@ -77,16 +70,9 @@ export default function KnowledgeBasesPage() {
     <ProtectedDashboard
       path="/user"
       title="Knowledge Base"
-      description="Documents your agents can retrieve from. Every member of your organisation can search them."
+      description="Documents your agents can look things up in. Everyone in your organisation can search them."
+      action={kbs.length > 0 && <Button onClick={() => setCreating(true)}><Plus /> New knowledge base</Button>}
     >
-      {kbs.length > 0 && (
-        <div className="mt-6 flex items-center justify-end gap-3">
-          <Button size="sm" onClick={() => setCreating(true)}>
-            <Plus /> New knowledge base
-          </Button>
-        </div>
-      )}
-
       {creating && (
         <CreateKnowledgeBase
           token={accessToken}
@@ -108,46 +94,52 @@ export default function KnowledgeBasesPage() {
           {errorText(kbsQuery.error)}
         </p>
       ) : kbs.length === 0 ? (
-        <div className="mt-6 rounded-xl border border-dashed border-zinc-300 bg-white p-10 text-center">
-          <BookOpen className="mx-auto h-8 w-8 text-violet-500" />
-          <h2 className="mt-3 font-semibold text-zinc-900">No knowledge bases yet</h2>
-          <p className="mt-1 text-sm text-zinc-500">
-            Create one, then upload documents or paste text into it.
-          </p>
-          <Button size="sm" className="mt-4" onClick={() => setCreating(true)}>
+        <div className="mt-6 flex flex-col items-center rounded-lg border border-dashed border-zinc-300 px-6 py-14 text-center">
+          <BookOpen className="h-6 w-6 text-zinc-400" />
+          <h2 className="mt-3 text-base font-semibold text-zinc-900">No knowledge bases yet</h2>
+          <p className="mt-1 max-w-sm text-sm text-zinc-500">Create one, then upload documents or paste text into it.</p>
+          <Button className="mt-5" onClick={() => setCreating(true)}>
             <Plus /> New knowledge base
           </Button>
         </div>
       ) : (
-        <div className="mt-6 grid gap-6 lg:grid-cols-[300px_minmax(0,1fr)]">
-          <aside className="min-w-0">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
-              <Input
-                className="pl-9"
-                placeholder="Filter by name…"
-                value={filter}
-                onChange={(e) => setFilter(e.target.value)}
-              />
-            </div>
-            <ul className="mt-3 space-y-2">
+        <div className="mt-6 grid gap-6 lg:grid-cols-[260px_minmax(0,1fr)]">
+          {/* Phones and tablets: a picker instead of a column. */}
+          <div className="lg:hidden">
+            <Select value={selectedId ?? ""} onChange={(e) => setSelectedId(e.target.value)} aria-label="Knowledge base">
+              {kbs.map((kb) => (
+                <option key={kb.id} value={kb.id}>
+                  {kb.name} ({kb.document_count})
+                </option>
+              ))}
+            </Select>
+          </div>
+
+          <aside className="hidden min-w-0 lg:block">
+            {kbs.length > 6 && (
+              <div className="relative mb-2">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+                <Input className="pl-9" placeholder="Filter" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter knowledge bases" />
+              </div>
+            )}
+            <ul className="space-y-0.5">
               {visible.map((kb) => (
                 <li key={kb.id}>
                   <button
+                    type="button"
                     onClick={() => setSelectedId(kb.id)}
+                    aria-current={kb.id === selectedId ? "true" : undefined}
                     className={cn(
-                      "w-full rounded-lg border bg-white p-3 text-left transition-colors cursor-pointer",
-                      kb.id === selectedId ? "border-violet-400 ring-1 ring-violet-200" : "border-zinc-200 hover:border-zinc-300",
+                      "flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors cursor-pointer",
+                      kb.id === selectedId ? "bg-zinc-100 text-zinc-900" : "text-zinc-500 hover:bg-zinc-50 hover:text-zinc-900",
                     )}
                   >
-                    <p className="truncate text-sm font-medium text-zinc-900">{kb.name}</p>
-                    <p className="mt-0.5 text-xs text-zinc-500">
-                      {kb.document_count} document{kb.document_count === 1 ? "" : "s"}
-                    </p>
+                    <span className="truncate font-medium">{kb.name}</span>
+                    <span className="shrink-0 text-xs tabular-nums text-zinc-500">{kb.document_count}</span>
                   </button>
                 </li>
               ))}
-              {visible.length === 0 && <li className="py-4 text-center text-sm text-zinc-400">No match.</li>}
+              {visible.length === 0 && <li className="px-3 py-4 text-sm text-zinc-500">No match.</li>}
             </ul>
           </aside>
 
@@ -182,33 +174,31 @@ function CreateKnowledgeBase({
   });
 
   return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (name.trim()) create.mutate();
-      }}
-      className="mt-4 rounded-xl border border-zinc-200 bg-white p-5"
-    >
-      <div className="flex items-center justify-between">
-        <h2 className="font-semibold text-zinc-900">New knowledge base</h2>
-        <button type="button" onClick={onClose} className="text-zinc-400 hover:text-zinc-700 cursor-pointer" aria-label="Close">
-          <X className="h-4 w-4" />
-        </button>
-      </div>
-      <div className="mt-3 grid gap-3 sm:grid-cols-2">
-        <Input placeholder="Name, e.g. HR policies" value={name} onChange={(e) => setName(e.target.value)} autoFocus required />
-        <Input placeholder="What's in it (optional)" value={description} onChange={(e) => setDescription(e.target.value)} />
-      </div>
-      {create.isError && <p className="mt-2 text-xs text-red-600">{errorText(create.error)}</p>}
-      <div className="mt-3 flex justify-end gap-2">
-        <Button type="button" variant="outline" size="sm" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button type="submit" size="sm" disabled={create.isPending || !name.trim()}>
-          {create.isPending ? <Spinner /> : "Create"}
-        </Button>
-      </div>
-    </form>
+    <Dialog title="New knowledge base" onClose={onClose}>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (name.trim()) create.mutate();
+        }}
+        className="space-y-4"
+      >
+        <Field label="Name">
+          <Input placeholder="e.g. HR policies" value={name} onChange={(e) => setName(e.target.value)} autoFocus required />
+        </Field>
+        <Field label="Description" hint="Optional. What's in it.">
+          <Input value={description} onChange={(e) => setDescription(e.target.value)} />
+        </Field>
+        {create.isError && <p className="text-sm text-red-600">{errorText(create.error)}</p>}
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={create.isPending || !name.trim()}>
+            {create.isPending && <Spinner className="h-4 w-4" />} Create
+          </Button>
+        </div>
+      </form>
+    </Dialog>
   );
 }
 
@@ -241,84 +231,62 @@ function KnowledgeBaseDetail({
   });
 
   return (
-    <section className="min-w-0 rounded-xl border border-zinc-200 bg-white">
-      <header className="border-b border-zinc-100 p-5">
-        {renaming ? (
+    <section className="min-w-0 space-y-5">
+      <header className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold text-zinc-900">{kb.name}</h2>
+          {kb.description && <p className="mt-0.5 text-sm text-zinc-500">{kb.description}</p>}
+          {remove.isError && <p className="mt-1 text-sm text-red-600">{errorText(remove.error)}</p>}
+        </div>
+        {kb.can_manage && (
+          <div className="flex shrink-0 items-center gap-1">
+            {remove.isPending && <Spinner className="h-4 w-4 text-zinc-400" />}
+            <Menu
+              label={`More for ${kb.name}`}
+              items={[
+                { label: "Rename", onClick: () => setRenaming(true) },
+                { label: "Delete", danger: true, onClick: () => confirm(`Delete "${kb.name}" and all of its documents?`) && remove.mutate() },
+              ]}
+            />
+          </div>
+        )}
+      </header>
+
+      {renaming && (
+        <Dialog title="Rename knowledge base" onClose={() => setRenaming(false)}>
           <form
             onSubmit={(e) => {
               e.preventDefault();
               if (name.trim()) update.mutate();
             }}
-            className="space-y-2"
+            className="space-y-4"
           >
-            <Input value={name} onChange={(e) => setName(e.target.value)} required />
-            <Input placeholder="Description" value={description} onChange={(e) => setDescription(e.target.value)} />
-            {update.isError && <p className="text-xs text-red-600">{errorText(update.error)}</p>}
-            <div className="flex gap-2">
-              <Button type="submit" size="sm" disabled={update.isPending}>
-                {update.isPending ? <Spinner /> : "Save"}
-              </Button>
-              <Button type="button" variant="outline" size="sm" onClick={() => setRenaming(false)}>
+            <Field label="Name">
+              <Input value={name} onChange={(e) => setName(e.target.value)} autoFocus required />
+            </Field>
+            <Field label="Description">
+              <Input value={description} onChange={(e) => setDescription(e.target.value)} />
+            </Field>
+            {update.isError && <p className="text-sm text-red-600">{errorText(update.error)}</p>}
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setRenaming(false)}>
                 Cancel
+              </Button>
+              <Button type="submit" disabled={update.isPending || !name.trim()}>
+                {update.isPending && <Spinner className="h-4 w-4" />} Save
               </Button>
             </div>
           </form>
-        ) : (
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0">
-              <h2 className="truncate text-lg font-semibold text-zinc-900">{kb.name}</h2>
-              {kb.description && <p className="mt-0.5 text-sm text-zinc-500">{kb.description}</p>}
-            </div>
-            {kb.can_manage && (
-              <div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={() => setRenaming(true)}>
-                  <Pencil /> Rename
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="text-red-600 hover:bg-red-50"
-                  disabled={remove.isPending}
-                  onClick={() => {
-                    if (confirm(`Delete "${kb.name}" and all of its documents?`)) remove.mutate();
-                  }}
-                >
-                  {remove.isPending ? <Spinner /> : <Trash2 />} Delete
-                </Button>
-              </div>
-            )}
-          </div>
-        )}
-        {remove.isError && <p className="mt-2 text-xs text-red-600">{errorText(remove.error)}</p>}
+        </Dialog>
+      )}
 
-        <nav className="mt-4 flex gap-1">
-          {(
-            [
-              ["documents", "Documents", FileText],
-              ["search", "Test search", Search],
-            ] as const
-          ).map(([id, label, Icon]) => (
-            <button
-              key={id}
-              onClick={() => setTab(id)}
-              className={cn(
-                "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium cursor-pointer",
-                tab === id ? "bg-zinc-900 text-white" : "text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800",
-              )}
-            >
-              <Icon className="h-3.5 w-3.5" /> {label}
-            </button>
-          ))}
-        </nav>
-      </header>
+      <Tabs value={tab} onChange={setTab} tabs={[["documents", "Documents"], ["search", "Test search"]] as const} />
 
-      <div className="p-5">
-        {tab === "documents" ? (
-          <DocumentsPanel kb={kb} token={token} onChanged={onChanged} />
-        ) : (
-          <SearchPanel kb={kb} token={token} />
-        )}
-      </div>
+      {tab === "documents" ? (
+        <DocumentsPanel kb={kb} token={token} onChanged={onChanged} />
+      ) : (
+        <SearchPanel kb={kb} token={token} />
+      )}
     </section>
   );
 }
@@ -377,9 +345,7 @@ function DocumentsPanel({ kb, token, onChanged }: { kb: KnowledgeBase; token: st
     onSuccess: refresh,
   });
 
-  function pickFiles(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(e.target.files || []);
-    e.target.value = "";
+  function addFiles(files: File[]) {
     if (!files.length) return;
     const problems = files.map(fileProblem).filter(Boolean);
     if (problems.length) {
@@ -393,102 +359,94 @@ function DocumentsPanel({ kb, token, onChanged }: { kb: KnowledgeBase; token: st
   const actionError = errorText(openText.error) || errorText(removeDoc.error);
 
   return (
-    <div>
+    <div className="space-y-4">
+      <input
+        ref={fileRef}
+        type="file"
+        multiple
+        className="hidden"
+        accept={ALLOWED_EXTENSIONS.join(",")}
+        onChange={(e) => {
+          const files = Array.from(e.target.files || []);
+          e.target.value = "";
+          addFiles(files);
+        }}
+      />
       <div className="flex flex-wrap items-center gap-2">
-        <input
-          ref={fileRef}
-          type="file"
-          multiple
-          className="hidden"
-          accept={ALLOWED_EXTENSIONS.join(",")}
-          onChange={pickFiles}
-        />
-        <Button size="sm" disabled={upload.isPending} onClick={() => fileRef.current?.click()}>
-          {upload.isPending ? <Spinner /> : <Upload />} Upload files
+        <Button disabled={upload.isPending} onClick={() => fileRef.current?.click()}>
+          {upload.isPending ? <Spinner className="h-4 w-4" /> : <Upload />} Upload files
         </Button>
-        <Button variant="outline" size="sm" onClick={() => setEditor({ id: null, title: "", content: "" })}>
+        <Button variant="outline" onClick={() => setEditor({ id: null, title: "", content: "" })}>
           <Plus /> Add text
         </Button>
-        <span className="text-xs text-zinc-400">PDF, DOCX, XLSX, CSV, Markdown, text, JPG or PNG · up to 25 MB</span>
       </div>
-      {uploadError && <p className="mt-2 text-xs text-red-600">{uploadError}</p>}
+      <p className="text-xs text-zinc-500">PDF, DOCX, XLSX, CSV, Markdown, text, JPG or PNG · up to 25 MB each</p>
+      {uploadError && <p className="text-sm text-red-600">{uploadError}</p>}
 
       {editor && (
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            saveText.mutate(editor);
-          }}
-          className="mt-4 space-y-2 rounded-lg border border-zinc-200 bg-zinc-50 p-4"
-        >
-          <Input
-            placeholder="Title"
-            value={editor.title}
-            maxLength={120}
-            onChange={(e) => setEditor({ ...editor, title: e.target.value })}
-            required
-          />
-          <textarea
-            className="min-h-40 w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900"
-            placeholder="Paste or type what your agents should know…"
-            value={editor.content}
-            onChange={(e) => setEditor({ ...editor, content: e.target.value })}
-            required
-          />
-          {saveText.isError && <p className="text-xs text-red-600">{errorText(saveText.error)}</p>}
-          <div className="flex gap-2">
-            <Button type="submit" size="sm" disabled={saveText.isPending || !editor.title.trim() || !editor.content.trim()}>
-              {saveText.isPending ? <Spinner /> : editor.id ? "Save and re-index" : "Add"}
-            </Button>
-            <Button type="button" variant="outline" size="sm" onClick={() => setEditor(null)}>
-              Cancel
-            </Button>
-          </div>
-        </form>
+        <Dialog title={editor.id ? "Edit text" : "Add text"} onClose={() => setEditor(null)}>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              saveText.mutate(editor);
+            }}
+            className="space-y-4"
+          >
+            <Field label="Title">
+              <Input value={editor.title} maxLength={120} onChange={(e) => setEditor({ ...editor, title: e.target.value })} autoFocus required />
+            </Field>
+            <Field label="Text">
+              <Textarea
+                className="min-h-48"
+                placeholder="Paste or type what your agents should know"
+                value={editor.content}
+                onChange={(e) => setEditor({ ...editor, content: e.target.value })}
+                required
+              />
+            </Field>
+            {saveText.isError && <p className="text-sm text-red-600">{errorText(saveText.error)}</p>}
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setEditor(null)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={saveText.isPending || !editor.title.trim() || !editor.content.trim()}>
+                {saveText.isPending && <Spinner className="h-4 w-4" />} {editor.id ? "Save" : "Add"}
+              </Button>
+            </div>
+          </form>
+        </Dialog>
       )}
 
-      {actionError && <p className="mt-3 text-xs text-red-600">{actionError}</p>}
+      {actionError && <p className="text-sm text-red-600">{actionError}</p>}
 
       {docsQuery.isLoading ? (
         <div className="flex justify-center py-8">
           <Spinner className="h-5 w-5 text-zinc-500" />
         </div>
       ) : docs.length === 0 ? (
-        <p className="py-8 text-center text-sm text-zinc-400">No documents yet.</p>
+        <p className="rounded-lg border border-dashed border-zinc-300 px-4 py-10 text-center text-sm text-zinc-500">No documents yet. Upload a file or add some text.</p>
       ) : (
-        <ul className="mt-4 divide-y divide-zinc-100 rounded-lg border border-zinc-200">
+        <ul className="divide-y divide-zinc-100 rounded-lg border border-zinc-200">
           {docs.map((doc) => (
-            <li key={doc.id} className="flex items-start gap-3 p-3">
-              <FileText className="mt-0.5 h-4 w-4 shrink-0 text-zinc-400" />
+            <li key={doc.id} className="flex items-start gap-3 px-4 py-3">
+              <FileText className="mt-0.5 h-4 w-4 shrink-0 text-zinc-500" />
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium text-zinc-900">{doc.filename}</p>
-                <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-zinc-500">
-                  <StatusBadge doc={doc} />
+                <p className="mt-0.5 flex flex-wrap items-center gap-x-3 text-xs text-zinc-500">
+                  <Status doc={doc} />
                   {doc.status === "ready" && <span>{doc.chunk_count} chunk{doc.chunk_count === 1 ? "" : "s"}</span>}
-                </div>
+                </p>
                 {doc.error_message && (
-                  <p className={cn("mt-1 text-xs", doc.status === "error" ? "text-red-600" : "text-amber-700")}>
-                    {doc.error_message}
-                  </p>
+                  <p className={cn("mt-1 text-xs", doc.status === "error" ? "text-red-600" : "text-amber-700")}>{doc.error_message}</p>
                 )}
               </div>
-              <div className="flex shrink-0 gap-1">
-                {doc.editable && doc.status !== "processing" && (
-                  <IconButton label="Edit" onClick={() => openText.mutate(doc)} disabled={openText.isPending}>
-                    <Pencil className="h-3.5 w-3.5" />
-                  </IconButton>
-                )}
-                <IconButton
-                  label="Delete"
-                  danger
-                  disabled={removeDoc.isPending}
-                  onClick={() => {
-                    if (confirm(`Delete "${doc.filename}"?`)) removeDoc.mutate(doc);
-                  }}
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </IconButton>
-              </div>
+              <Menu
+                label={`More for ${doc.filename}`}
+                items={[
+                  ...(doc.editable && doc.status !== "processing" ? [{ label: "Edit", onClick: () => openText.mutate(doc) }] : []),
+                  { label: "Delete", danger: true, onClick: () => confirm(`Delete "${doc.filename}"?`) && removeDoc.mutate(doc) },
+                ]}
+              />
             </li>
           ))}
         </ul>
@@ -497,47 +455,21 @@ function DocumentsPanel({ kb, token, onChanged }: { kb: KnowledgeBase; token: st
   );
 }
 
-function StatusBadge({ doc }: { doc: KnowledgeDocument }) {
+/** A document's state as a coloured dot and a word. */
+function Status({ doc }: { doc: KnowledgeDocument }) {
   if (doc.status === "processing") {
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-sky-50 px-2 py-0.5 font-medium text-sky-700">
+      <span className="inline-flex items-center gap-1.5 text-zinc-700">
         <Spinner className="h-3 w-3" /> Indexing
       </span>
     );
   }
-  if (doc.status === "error") {
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 font-medium text-red-700">
-        <AlertTriangle className="h-3 w-3" /> Failed
-      </span>
-    );
-  }
+  const failed = doc.status === "error";
   return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700">
-      <CheckCircle2 className="h-3 w-3" /> Ready
+    <span className={cn("inline-flex items-center gap-1.5", failed ? "text-red-600" : "text-zinc-700")}>
+      <span className={cn("h-1.5 w-1.5 rounded-full", failed ? "bg-[var(--danger)]" : "bg-[var(--success)]")} aria-hidden />
+      {failed ? "Failed" : "Ready"}
     </span>
-  );
-}
-
-function IconButton({
-  label,
-  danger,
-  children,
-  ...props
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & { label: string; danger?: boolean }) {
-  return (
-    <button
-      type="button"
-      title={label}
-      aria-label={label}
-      className={cn(
-        "rounded-md p-1.5 text-zinc-400 transition-colors cursor-pointer disabled:opacity-50",
-        danger ? "hover:bg-red-50 hover:text-red-600" : "hover:bg-zinc-100 hover:text-zinc-800",
-      )}
-      {...props}
-    >
-      {children}
-    </button>
   );
 }
 
@@ -548,7 +480,7 @@ function SearchPanel({ kb, token }: { kb: KnowledgeBase; token: string }) {
   });
 
   return (
-    <div>
+    <div className="space-y-4">
       <p className="text-sm text-zinc-500">
         Ask something the way an agent would — you&apos;ll see the passages it would get back.
       </p>
@@ -557,33 +489,31 @@ function SearchPanel({ kb, token }: { kb: KnowledgeBase; token: string }) {
           e.preventDefault();
           if (query.trim()) search.mutate(query.trim());
         }}
-        className="mt-3 flex gap-2"
+        className="flex gap-2"
       >
         <Input placeholder="e.g. What is the refund window?" value={query} onChange={(e) => setQuery(e.target.value)} />
         <Button type="submit" disabled={search.isPending || !query.trim()}>
-          {search.isPending ? <Spinner /> : <Search />} Search
+          {search.isPending ? <Spinner className="h-4 w-4" /> : <Search />} <span className="hidden sm:inline">Search</span>
         </Button>
       </form>
-      {search.isError && <p className="mt-2 text-xs text-red-600">{errorText(search.error)}</p>}
+      {search.isError && <p className="text-sm text-red-600">{errorText(search.error)}</p>}
 
       {search.data &&
         (search.data.results.length === 0 ? (
-          <p className="py-8 text-center text-sm text-zinc-400">
+          <p className="py-8 text-center text-sm text-zinc-500">
             Nothing found. Documents still indexing aren&apos;t searchable yet.
           </p>
         ) : (
-          <ol className="mt-4 space-y-3">
+          <ol className="space-y-3">
             {search.data.results.map((hit, i) => (
               <li key={hit.id} className="rounded-lg border border-zinc-200 p-4">
-                <div className="flex flex-wrap items-center gap-2 text-xs">
-                  <span className="font-semibold text-zinc-900">#{i + 1}</span>
-                  <span className="truncate text-zinc-600">{hit.filename}</span>
-                  <span className="rounded-full bg-violet-50 px-2 py-0.5 font-medium text-violet-700">
-                    {hit.retrieval_method}
-                  </span>
-                  <span className="ml-auto tabular-nums text-zinc-400">score {hit.score.toFixed(3)}</span>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500">
+                  <span className="font-medium text-zinc-900">#{i + 1}</span>
+                  <span className="min-w-0 truncate">{hit.filename}</span>
+                  <span>{hit.retrieval_method}</span>
+                  <span className="ml-auto tabular-nums">score {hit.score.toFixed(3)}</span>
                 </div>
-                <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-zinc-700">{hit.content}</p>
+                <p className="mt-2 whitespace-pre-wrap break-words text-sm text-zinc-700">{hit.content}</p>
               </li>
             ))}
           </ol>

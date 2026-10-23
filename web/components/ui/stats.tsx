@@ -30,21 +30,21 @@ export function Stat({
 }) {
   const body = (
     <>
-      <dt className="flex items-center justify-between gap-2 text-sm text-zinc-500">
-        {label}
-        {!loading && delta && (
-          <span className={cn("inline-flex items-center gap-0.5 text-xs font-medium tabular-nums", delta.good ? "text-emerald-700" : "text-red-600")} title="vs the previous period">
-            {delta.up ? <ArrowUpRight className="h-3.5 w-3.5" /> : <ArrowDownRight className="h-3.5 w-3.5" />}
-            {delta.text}
-          </span>
-        )}
-      </dt>
+      <dt className="truncate text-sm text-zinc-500">{label}</dt>
       {loading ? (
         <dd className="mt-2 h-7 w-16 animate-pulse rounded bg-zinc-100" />
       ) : (
-        <dd className="mt-1 text-2xl font-semibold tabular-nums text-zinc-900">
-          {value}
-          {suffix && <span className="text-base font-normal text-zinc-500">{suffix}</span>}
+        <dd className="mt-1 flex flex-wrap items-baseline gap-x-2">
+          <span className="text-2xl font-semibold tabular-nums text-zinc-900">
+            {value}
+            {suffix && <span className="text-base font-normal text-zinc-500">{suffix}</span>}
+          </span>
+          {delta && (
+            <span className={cn("inline-flex items-center text-xs font-medium tabular-nums", delta.good ? "text-emerald-700" : "text-red-600")} title="vs the previous period">
+              {delta.up ? <ArrowUpRight className="h-3.5 w-3.5" /> : <ArrowDownRight className="h-3.5 w-3.5" />}
+              {delta.text}
+            </span>
+          )}
         </dd>
       )}
       {sub && <dd className="truncate text-xs text-zinc-500">{sub}</dd>}

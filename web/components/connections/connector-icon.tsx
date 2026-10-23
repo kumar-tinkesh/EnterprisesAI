@@ -178,7 +178,7 @@ export function ConnectorIcon({ name, size = "md", className }: { name: string; 
   return (
     <div
       className={cn(
-        "flex shrink-0 items-center justify-center rounded-xl border border-zinc-200 bg-zinc-50 text-zinc-100",
+        "flex shrink-0 items-center justify-center rounded-lg border border-zinc-200 bg-zinc-50 text-zinc-100",
         size === "xs" ? "h-5 w-5 rounded-md p-0.5" : size === "sm" ? "h-9 w-9 p-2" : "h-12 w-12 p-2.5",
         className,
       )}

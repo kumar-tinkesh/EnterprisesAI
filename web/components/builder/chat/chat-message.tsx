@@ -1,11 +1,12 @@
 "use client";
 
-import { memo, useState, type ReactNode } from "react";
+import { createContext, memo, useContext, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Check, CheckCircle2, ChevronDown, Copy, FileText, Image as ImageIcon, Loader2, Pencil, RotateCw, ShieldAlert, Wand2, Wrench, XCircle } from "lucide-react";
 
 import { MarkdownView } from "@/components/builder/chat/markdown-view";
 import { AnswerView } from "@/components/builder/run-output";
+import { TypeIcon } from "@/components/builder/type-icon";
 import { builderApi } from "@/lib/builder/api";
 import type { OutputConfig } from "@/lib/builder/types";
 import { formatCost, formatDuration, formatTokens, hueOf, initials, runDurationMs, trailSummary } from "@/lib/builder/chat";
@@ -13,7 +14,12 @@ import { displayTool } from "@/lib/builder/run-state";
 import type { Attachment, GuardrailFlag, Run, RunToolCall } from "@/lib/builder/types";
 import { cn } from "@/lib/utils";
 
+/** Set by a chat: its avatars are the agent's or workflow's type icon, not a person's initials. */
+export const AvatarKind = createContext<"agent" | "workflow" | null>(null);
+
 export function Avatar({ name, size = 28, live = false }: { name: string; size?: number; live?: boolean }) {
+  const kind = useContext(AvatarKind);
+  if (kind) return <TypeIcon kind={kind} size={size >= 48 ? "lg" : size >= 32 ? "md" : "sm"} live={live} />;
   const h = hueOf(name);
   return (
     <span

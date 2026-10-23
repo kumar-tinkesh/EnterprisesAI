@@ -6,7 +6,7 @@ import { AlertTriangle, ArrowDown, ChevronDown, ChevronRight, Circle, ExternalLi
 
 import { Spinner } from "@/components/ui/spinner";
 import { ApprovalCard } from "@/components/builder/approval-card";
-import { AnswerMessage, Avatar, FileChip, GuardrailNotes, UserMessage } from "@/components/builder/chat/chat-message";
+import { AnswerMessage, Avatar, AvatarKind, FileChip, GuardrailNotes, UserMessage } from "@/components/builder/chat/chat-message";
 import { ChatHistory } from "@/components/builder/chat/chat-history";
 import { MarkdownView } from "@/components/builder/chat/markdown-view";
 import { coerce } from "@/components/builder/playground";
@@ -354,7 +354,8 @@ export function ChatPanel({
   const editorTitle = kind === "agent" ? "Open in the agent editor" : "Open in the workflow editor";
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-white">
+    <AvatarKind.Provider value={kind}>
+    <div className="flex h-full min-h-0 flex-col bg-[var(--bg)]">
       {/* Header */}
       <header className="flex shrink-0 items-center gap-2 border-b border-zinc-200 px-3 py-2.5 sm:px-4">
         {!embedded && <Avatar name={name} size={32} />}
@@ -421,7 +422,7 @@ export function ChatPanel({
             {empty && (
               <div className="mx-auto flex max-w-lg flex-col items-center py-10 text-center">
                 <Avatar name={name} size={56} />
-                <h2 className="mt-4 text-xl font-semibold tracking-tight text-zinc-900">{name}</h2>
+                <h2 className="mt-4 text-xl font-semibold text-zinc-900">{name}</h2>
                 {sub && <p className={cn("mt-1.5 line-clamp-3 leading-relaxed", welcome ? "text-sm text-zinc-700" : "text-xs text-zinc-500")}>{sub}</p>}
                 {missing.length > 0 && (
                   <div className="mt-4 w-full space-y-1.5 rounded-xl border border-amber-200 bg-amber-50 p-3 text-left">
@@ -607,7 +608,7 @@ export function ChatPanel({
               e.preventDefault();
               submit();
             }}
-            className="flex items-end gap-2 rounded-2xl border border-zinc-300 bg-white px-3 py-2 shadow-sm transition focus-within:border-indigo-400 focus-within:shadow-md"
+            className="flex flex-wrap items-end gap-2 rounded-xl border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 transition focus-within:border-[var(--accent-hover)] sm:flex-nowrap"
           >
             {kind === "agent" && (
               <>
@@ -647,14 +648,14 @@ export function ChatPanel({
                   submit();
                 }
               }}
-              className="max-h-40 min-h-[36px] min-w-0 flex-1 resize-none bg-transparent py-1.5 text-sm text-zinc-900 outline-none placeholder:text-zinc-400"
+              className="order-first max-h-40 min-h-[36px] min-w-0 basis-full resize-none bg-transparent py-1.5 text-sm text-zinc-900 outline-none placeholder:text-zinc-500 sm:order-none sm:basis-auto sm:flex-1"
             />
             <select
               value={depth}
               onChange={(e) => setDepth(e.target.value as AnswerDepth)}
               aria-label="How long an answer"
               title="How long an answer"
-              className="mb-0.5 h-8 shrink-0 rounded-lg border border-zinc-200 bg-zinc-50 px-1.5 text-xs text-zinc-600"
+              className="mb-0.5 ml-auto h-8 shrink-0 rounded-md border border-zinc-200 bg-zinc-50 px-1.5 text-xs text-zinc-600 sm:ml-0"
             >
               {DEPTHS.map((d) => <option key={d.id} value={d.id}>{d.label}</option>)}
             </select>
@@ -673,14 +674,14 @@ export function ChatPanel({
                 type="submit"
                 disabled={!canSend}
                 aria-label="Send"
-                className="mb-0.5 inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-indigo-600 px-3 text-xs font-semibold text-white shadow-sm hover:bg-indigo-500 disabled:opacity-40 cursor-pointer"
+                className="mb-0.5 inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-sm font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-40 cursor-pointer"
               >
                 {send.isPending ? <Spinner className="h-3.5 w-3.5" /> : <Send className="h-3.5 w-3.5" />}
                 <span className="hidden sm:inline">Send</span>
               </button>
             )}
           </form>
-          <p className="text-center text-xs text-zinc-400">
+          <p className="text-center text-xs text-zinc-500">
             Runs with your connected accounts.{" "}
             {kind === "agent"
               ? remembers
@@ -691,5 +692,6 @@ export function ChatPanel({
         </div>
       </div>
     </div>
+    </AvatarKind.Provider>
   );
 }

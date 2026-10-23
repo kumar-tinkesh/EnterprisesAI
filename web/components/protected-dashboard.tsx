@@ -29,12 +29,15 @@ export default function ProtectedDashboard({
   path,
   title,
   description,
+  action,
   fullBleed,
   children,
 }: {
   path: string;
   title: string;
   description: string;
+  /** The page's main button, shown right of the title. */
+  action?: React.ReactNode;
   fullBleed?: boolean;
   children: React.ReactNode;
 }) {
@@ -143,9 +146,12 @@ export default function ProtectedDashboard({
       <UserShell fullBleed={fullBleed}>
         {fullBleed ? children : (
           <div className="mx-auto max-w-6xl px-4 py-6 sm:px-8 sm:py-8">
-            <header>
-              <h1 className="text-xl font-semibold text-zinc-900">{title}</h1>
-              <p className="mt-1 text-sm text-zinc-500">{description}</p>
+            <header className="flex flex-wrap items-end justify-between gap-4">
+              <div className="min-w-0">
+                <h1 className="text-xl font-semibold text-zinc-900">{title}</h1>
+                <p className="mt-1 text-sm text-zinc-500">{description}</p>
+              </div>
+              {action && <div className="shrink-0">{action}</div>}
             </header>
             {children}
           </div>
