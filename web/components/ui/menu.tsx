@@ -6,7 +6,8 @@ import { Check, MoreHorizontal } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
-export type MenuItem = { label: string; onClick: () => void; danger?: boolean; checked?: boolean };
+/** ``divided``: a line above it, to start a new group. */
+export type MenuItem = { label: string; onClick: () => void; danger?: boolean; checked?: boolean; divided?: boolean };
 
 const WIDTH = 208;
 const GAP = 4;
@@ -84,20 +85,21 @@ export function Menu({ label, items, trigger, triggerClassName }: { label: strin
             className="fixed z-[60] rounded-lg border border-zinc-200 bg-[var(--surface-raised)] p-1 shadow-lg"
           >
             {items.map((it) => (
-              <button
-                key={it.label}
-                type="button"
-                role={it.checked === undefined ? "menuitem" : "menuitemradio"}
-                aria-checked={it.checked}
-                onClick={() => {
-                  setOpen(false);
-                  it.onClick();
-                }}
-                className={cn("flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left text-sm hover:bg-zinc-100 cursor-pointer", it.danger ? "text-red-600" : "text-zinc-700")}
-              >
-                {it.label}
-                {it.checked && <Check className="h-4 w-4 shrink-0 text-zinc-900" />}
-              </button>
+              <div key={it.label} className={cn(it.divided && "mt-1 border-t border-zinc-200 pt-1")}>
+                <button
+                  type="button"
+                  role={it.checked === undefined ? "menuitem" : "menuitemradio"}
+                  aria-checked={it.checked}
+                  onClick={() => {
+                    setOpen(false);
+                    it.onClick();
+                  }}
+                  className={cn("flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left text-sm hover:bg-zinc-100 cursor-pointer", it.danger ? "text-red-600" : "text-zinc-700")}
+                >
+                  {it.label}
+                  {it.checked && <Check className="h-4 w-4 shrink-0 text-zinc-900" />}
+                </button>
+              </div>
             ))}
           </div>,
           document.body,

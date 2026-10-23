@@ -123,7 +123,7 @@ function Connectors() {
           </Select>
         </div>
         {/* One row that scrolls sideways on a phone instead of wrapping into a block. */}
-        <div className="-mx-4 flex gap-1 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:px-0" role="tablist" aria-label="Category">
+        <div className="no-scrollbar -mx-4 flex gap-1 overflow-x-auto px-4 sm:mx-0 sm:flex-wrap sm:px-0" role="tablist" aria-label="Category">
           {["All", ...Object.keys(CATEGORIES)].map((c) => (
             <button
               key={c}

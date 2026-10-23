@@ -125,7 +125,7 @@ export function ProjectDetail({
         <span className="min-w-0 truncate text-sm font-semibold text-zinc-900">{item?.name ?? (kind === "agent" ? "Agent" : "Workflow")}</span>
       </div>
       <header className="flex shrink-0 items-center gap-2 border-b border-zinc-200 px-3 sm:px-4">
-        <nav className="flex min-w-0 flex-1 gap-1 overflow-x-auto" role="tablist" aria-label={`${item?.name ?? kind} views`}>
+        <nav className="no-scrollbar flex min-w-0 flex-1 gap-1 overflow-x-auto" role="tablist" aria-label={`${item?.name ?? kind} views`}>
           {TABS.map((t) => (
             <button
               key={t.id}
@@ -143,8 +143,7 @@ export function ProjectDetail({
             </button>
           ))}
         </nav>
-        {/* On Chat they sit with New and History instead. */}
-        {tab !== "chat" && controls}
+        {controls}
       </header>
 
       <div className="min-h-0 flex-1">
@@ -153,7 +152,7 @@ export function ProjectDetail({
         ) : !item ? (
           <div className="flex justify-center py-16"><Spinner className="h-6 w-6 text-zinc-400" /></div>
         ) : tab === "chat" ? (
-          <ChatPanel key={`${kind}:${id}`} target={target} token={token} onClose={onClose} onEdit={onOpenCanvas} embedded actions={controls} />
+          <ChatPanel key={`${kind}:${id}`} target={target} token={token} onClose={onClose} onEdit={onOpenCanvas} embedded />
         ) : tab === "simulate" ? (
           <div className="h-full [&>div]:h-full">
             <TestsPanel kind={kind} targetId={id} token={token} canManage={canManage} onClose={() => onTab("overview")} />

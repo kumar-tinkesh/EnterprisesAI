@@ -162,3 +162,8 @@ h1, h2, h3 { letter-spacing: -0.01em; line-height: 1.25; }
 .builder-dark .text-rose-700, .builder-dark .hover\:text-red-600:hover, .builder-dark .hover\:text-red-700:hover { color: var(--danger); }
 .builder-dark .border-red-100, .builder-dark .border-red-200, .builder-dark .border-red-300,
 .builder-dark .hover\:border-red-300:hover { border-color: var(--danger-border); }
+
+/* A row that scrolls sideways on a narrow screen (tabs, filters) without
+   showing a scrollbar; swiping and the trackpad still scroll it. */
+.no-scrollbar { scrollbar-width: none; overflow-y: hidden; }
+.no-scrollbar::-webkit-scrollbar { display: none; }

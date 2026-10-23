@@ -168,7 +168,7 @@ new system needs exactly three steps:
 ```bash
 cp .env.example .env        # 1. create your local env file (defaults work)
 make install                # 2. uv sync + pnpm install (lockfiles pinned)
-make dev                    # 3. run API :8001 + Web :3000 together
+make docker-dev             # 3. backend in Docker + Web :3001 with hot reload
 ```
 
 **Tables are created automatically.** On startup the API runs Alembic to bring
@@ -184,7 +184,7 @@ in the `alembic_version` table, so later `make upgrade` calls are safe no-ops.
 | Command | What it does |
 | :------ | :----------- |
 | `make install` | backend (`uv sync --frozen`) + frontend (`pnpm install --frozen-lockfile`) |
-| `make dev` | API + Web with hot reload, one command |
+| `make docker-dev` | backend (auth :8001, API :8002) in Docker + Web :3001 with hot reload |
 | `make upgrade` / `make downgrade` | migrate forward / back one step |
 | `make revision m="add x"` | autogenerate a new migration |
 | `make test` | pytest + vitest |

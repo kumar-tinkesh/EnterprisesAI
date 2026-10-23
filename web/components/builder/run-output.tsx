@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 export function AnswerView({ text }: { text: string }) {
   const json = asJson(text);
   if (json !== null) {
-    return <pre className="overflow-x-auto rounded-lg border border-zinc-200 bg-zinc-50 p-3 font-mono text-xs leading-relaxed text-zinc-800">{json}</pre>;
+    return <pre className="whitespace-pre-wrap break-words rounded-lg border border-zinc-200 bg-zinc-50 p-3 font-mono text-xs leading-relaxed text-zinc-800">{json}</pre>;
   }
   return <MarkdownView text={text} />;
 }

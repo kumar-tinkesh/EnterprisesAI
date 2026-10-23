@@ -2,7 +2,7 @@
 # EnterpriseAI — developer workflow
 #
 #   make install      # backend deps (uv) + frontend deps (pnpm)
-#   make dev          # run BOTH services with hot reload
+#   make docker-dev   # backend in Docker + web with hot reload (:3001)
 #   make test         # backend + frontend tests
 # ============================================================================
 SHELL := /bin/bash
@@ -10,7 +10,7 @@ SHELL := /bin/bash
 PNPM := $(shell command -v pnpm >/dev/null 2>&1 && echo pnpm || echo "npx --yes pnpm@$$(node -p "require('./web/package.json').packageManager.split('@')[1]")")
 
 .PHONY: help install install-api install-web upgrade downgrade stamp revision \
-        seed-admin api web dev test test-api test-web docker-up docker-dev docker-down clean help
+        seed-admin api web test test-api test-web docker-up docker-dev docker-down clean help
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -45,9 +45,6 @@ api: ## Run auth API on :8001 with reload
 
 web: ## Run Next.js on :3000 with reload
 	pnpm --dir web dev
-
-dev: ## Run API (:8001) and Web (:3000) together
-	$(MAKE) -j2 api web
 
 test: test-api test-web ## Run every test suite
 

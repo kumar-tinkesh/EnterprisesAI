@@ -71,17 +71,17 @@ export function ChatHistory({
         aria-label="Chat history"
         title="Chat history"
         className={cn(
-          "inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium cursor-pointer",
-          open ? "border-indigo-300 bg-indigo-50 text-indigo-700" : "border-zinc-200 text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900",
+          "inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-sm cursor-pointer",
+          open ? "bg-zinc-100 text-zinc-900" : "text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900",
         )}
       >
-        <History className="h-3.5 w-3.5" />
+        <History className="h-4 w-4" />
         <span className="hidden sm:inline">History</span>
-        {chats.length > 0 && <span className="rounded-full bg-zinc-100 px-1.5 text-xs text-zinc-500">{chats.length}</span>}
+        {chats.length > 0 && <span className="text-xs tabular-nums text-zinc-500">{chats.length}</span>}
       </button>
 
       {open && (
-        <div className="absolute right-0 top-[calc(100%+6px)] z-30 w-[min(20rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-xl">
+        <div className="absolute right-0 top-[calc(100%+6px)] z-30 w-[min(20rem,calc(100vw-2rem))] overflow-hidden rounded-lg border border-zinc-200 bg-[var(--surface-raised)] shadow-xl">
           <div className="flex items-center justify-between border-b border-zinc-100 px-3 py-2">
             <p className="text-xs font-semibold text-zinc-900">Your chats</p>
             <button
@@ -90,7 +90,7 @@ export function ChatHistory({
                 onNew();
                 setOpen(false);
               }}
-              className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium text-indigo-600 hover:bg-indigo-50 cursor-pointer"
+              className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer"
             >
               <Plus className="h-3 w-3" /> New chat
             </button>

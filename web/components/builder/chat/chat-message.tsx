@@ -2,13 +2,15 @@
 
 import { createContext, memo, useContext, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Check, CheckCircle2, ChevronDown, Copy, FileText, Image as ImageIcon, Loader2, Pencil, RotateCw, ShieldAlert, Wand2, Wrench, XCircle } from "lucide-react";
+import { AlertTriangle, Check, CheckCircle2, ChevronDown, ChevronRight, Copy, FileText, Image as ImageIcon, Info, Loader2, Pencil, RotateCw, ShieldAlert, Wand2, Wrench, XCircle } from "lucide-react";
 
 import { MarkdownView } from "@/components/builder/chat/markdown-view";
 import { AnswerView } from "@/components/builder/run-output";
 import { TypeIcon } from "@/components/builder/type-icon";
+import { Menu } from "@/components/ui/menu";
 import { builderApi } from "@/lib/builder/api";
 import type { OutputConfig } from "@/lib/builder/types";
+import { answerJsonText } from "@/lib/builder/answer-json";
 import { formatCost, formatDuration, formatTokens, hueOf, initials, runDurationMs, trailSummary } from "@/lib/builder/chat";
 import { displayTool } from "@/lib/builder/run-state";
 import type { Attachment, GuardrailFlag, Run, RunToolCall } from "@/lib/builder/types";
@@ -39,6 +41,9 @@ export function Avatar({ name, size = 28, live = false }: { name: string; size?:
   );
 }
 
+/** A small icon-only action under a message. */
+const ICON_BUTTON = "inline-flex h-7 w-7 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-40 cursor-pointer";
+
 export function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -50,9 +55,11 @@ export function CopyButton({ text }: { text: string }) {
           setTimeout(() => setCopied(false), 1500);
         });
       }}
-      className="inline-flex items-center gap-1 hover:text-zinc-800 cursor-pointer"
+      aria-label={copied ? "Copied" : "Copy"}
+      title={copied ? "Copied" : "Copy"}
+      className={ICON_BUTTON}
     >
-      {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />} {copied ? "Copied" : "Copy"}
+      {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
     </button>
   );
 }
@@ -61,8 +68,8 @@ export function CopyButton({ text }: { text: string }) {
 export function FileChip({ file, onRemove }: { file: Pick<Attachment, "filename" | "kind">; onRemove?: () => void }) {
   const Icon = file.kind === "image" ? ImageIcon : FileText;
   return (
-    <span className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-2 py-1 text-xs text-zinc-700">
-      <Icon className="h-3.5 w-3.5 shrink-0 text-indigo-500" />
+    <span className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs text-zinc-700">
+      <Icon className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
       <span className="min-w-0 truncate">{file.filename}</span>
       {onRemove && (
         <button type="button" aria-label={`Remove ${file.filename}`} onClick={onRemove} className="shrink-0 text-zinc-400 hover:text-red-600 cursor-pointer">
@@ -82,14 +89,14 @@ export function UserMessage({ text, onEdit, files = [] }: { text: string; onEdit
             {files.map((f) => <FileChip key={f.id} file={f} />)}
           </div>
         )}
-        <div className="whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-indigo-600 px-4 py-2.5 text-sm leading-relaxed text-white shadow-sm">{text}</div>
+        <div className="whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-[var(--surface-strong)] px-4 py-2.5 text-sm leading-relaxed text-zinc-900">{text}</div>
         {onEdit && (
           <button
             type="button"
             onClick={onEdit}
-            className="mt-1 inline-flex items-center gap-1 text-xs text-zinc-400 opacity-100 transition hover:text-zinc-700 sm:opacity-0 sm:group-hover:opacity-100 sm:focus:opacity-100 cursor-pointer"
+            className="mt-1 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-900 sm:opacity-0 sm:group-hover:opacity-100 sm:focus:opacity-100 cursor-pointer"
           >
-            <Pencil className="h-3 w-3" /> Edit &amp; resend
+            <Pencil className="h-3 w-3" /> Edit
           </button>
         )}
       </div>
@@ -101,34 +108,34 @@ const CALL_ICON: Record<string, ReactNode> = {
   succeeded: <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />,
   failed: <XCircle className="h-3.5 w-3.5 text-red-500" />,
   declined: <XCircle className="h-3.5 w-3.5 text-amber-500" />,
-  started: <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-500" />,
+  started: <Loader2 className="h-3.5 w-3.5 animate-spin text-zinc-500" />,
 };
 
 function ToolCallRow({ call, stepName }: { call: RunToolCall; stepName?: string }) {
   const failed = call.is_error || call.status === "failed";
   const hasArgs = call.arguments && Object.keys(call.arguments).length > 0;
   return (
-    <details className="group/call rounded-lg border border-zinc-200 bg-white">
+    <details className="group/call rounded-md border border-zinc-200">
       <summary className="flex cursor-pointer list-none items-center gap-2 px-2.5 py-2 text-xs">
         {CALL_ICON[failed ? "failed" : call.status] ?? <Wrench className="h-3.5 w-3.5 text-zinc-400" />}
         <span className="min-w-0 truncate font-mono font-medium text-zinc-800">{displayTool(call.tool_name)}</span>
-        {stepName && <span className="hidden shrink-0 text-xs text-zinc-400 sm:inline">in {stepName}</span>}
+        {stepName && <span className="hidden shrink-0 text-xs text-zinc-500 sm:inline">in {stepName}</span>}
         {call.risk !== "read" && (
-          <span className="shrink-0 rounded bg-amber-50 px-1 text-xs font-semibold uppercase text-amber-700">{call.risk}</span>
+          <span className="shrink-0 rounded bg-amber-50 px-1.5 text-xs font-medium capitalize text-amber-700">{call.risk}</span>
         )}
         {call.status === "declined" && <span className="shrink-0 text-xs font-medium text-amber-700">declined</span>}
-        <span className="ml-auto shrink-0 tabular-nums text-xs text-zinc-400">{call.duration_ms != null ? formatDuration(call.duration_ms) : ""}</span>
+        <span className="ml-auto shrink-0 tabular-nums text-xs text-zinc-500">{call.duration_ms != null ? formatDuration(call.duration_ms) : ""}</span>
         <ChevronDown className="h-3.5 w-3.5 shrink-0 text-zinc-400 transition-transform group-open/call:rotate-180" />
       </summary>
       <div className="space-y-2 border-t border-zinc-100 p-2.5">
         {hasArgs && (
           <div>
-            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-400">Sent</p>
-            <pre className="max-h-40 overflow-auto rounded bg-zinc-50 p-2 font-mono text-[10.5px] leading-relaxed text-zinc-700">{JSON.stringify(call.arguments, null, 2)}</pre>
+            <p className="mb-1 text-xs font-medium text-zinc-500">Sent</p>
+            <pre className="max-h-40 overflow-auto rounded bg-zinc-50 p-2 font-mono text-xs leading-relaxed text-zinc-700">{JSON.stringify(call.arguments, null, 2)}</pre>
           </div>
         )}
         <div>
-          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-400">{failed ? "Error" : "Got back"}</p>
+          <p className="mb-1 text-xs font-medium text-zinc-500">{failed ? "Error" : "Got back"}</p>
           <p className={cn("max-h-56 overflow-auto whitespace-pre-wrap break-words rounded p-2 text-xs leading-relaxed", failed ? "bg-red-50 text-red-700" : "bg-zinc-50 text-zinc-600")}>
             {call.result_preview || (call.status === "declined" ? "You declined this call." : "(nothing)")}
           </p>
@@ -139,16 +146,18 @@ function ToolCallRow({ call, stepName }: { call: RunToolCall; stepName?: string 
 }
 
 /** "How it ran": the tools a finished run called, each expandable. */
-export function RunTrail({ run, stepName }: { run: Run; stepName?: (nodeId: string) => string }) {
+/** "▸ Used 3 tools · 44 s" above an answer; open it to see each call. */
+export function RunTrail({ run, stepName, ms }: { run: Run; stepName?: (nodeId: string) => string; ms?: number | null }) {
   const summary = trailSummary(run);
   if (!summary) return null;
   return (
-    <details className="group/trail mt-2 rounded-xl border border-zinc-200 bg-zinc-50/60">
-      <summary className="flex cursor-pointer list-none items-center gap-1.5 px-3 py-2 text-xs font-medium text-zinc-600 hover:text-zinc-900">
-        <Wrench className="h-3.5 w-3.5" /> How it ran <span className="font-normal text-zinc-400">· {summary}</span>
-        <ChevronDown className="ml-auto h-3.5 w-3.5 transition-transform group-open/trail:rotate-180" />
+    <details className="group/trail mb-2">
+      <summary className="inline-flex cursor-pointer list-none items-center gap-1 rounded-md py-0.5 text-xs text-zinc-500 hover:text-zinc-900 [&::-webkit-details-marker]:hidden">
+        <ChevronRight className="h-3.5 w-3.5 transition-transform group-open/trail:rotate-90" />
+        {summary}
+        {ms != null && <span className="tabular-nums"> · {formatDuration(ms)}</span>}
       </summary>
-      <div className="space-y-1.5 border-t border-zinc-200 p-2">
+      <div className="mt-1.5 space-y-1.5 border-l-2 border-zinc-200 pl-3">
         {(run.tool_calls ?? []).map((c) => (
           <ToolCallRow key={c.id} call={c} stepName={run.kind === "workflow" && c.node_id ? stepName?.(c.node_id) : undefined} />
         ))}
@@ -178,8 +187,9 @@ export function GuardrailNotes({ flags }: { flags: GuardrailFlag[] }) {
 }
 
 /** Ways to see a workflow's answer again, one click each: its output step re-run on what reached it
- *  (POST /workflows/{id}/output-preview) — nothing else runs, and each is fetched once. */
-const RESHAPES: { key: string; label: string; config: OutputConfig }[] = [
+ *  (POST /workflows/{id}/output-preview) — nothing else runs, and each is fetched once. JSON is
+ *  made here from the answer itself instead (``local``), so it's exactly the answer, the same every time. */
+const RESHAPES: { key: string; label: string; config: OutputConfig; local?: boolean }[] = [
   { key: "report", label: "Report", config: { format: "formatted" } },
   {
     key: "brief", label: "Brief", config: {
@@ -193,7 +203,7 @@ const RESHAPES: { key: string; label: string; config: OutputConfig }[] = [
   },
   { key: "tables", label: "Tables", config: { format: "markdown", instructions: "Put every list of records into markdown tables (one row each, every field kept, URLs and dates exact); keep short headings between them." } },
   { key: "text", label: "Plain text", config: { format: "text" } },
-  { key: "json", label: "JSON", config: { format: "json" } },
+  { key: "json", label: "JSON", config: { format: "json" }, local: true },
   { key: "hindi", label: "हिंदी", config: { format: "markdown", language: "Hindi" } },
 ];
 
@@ -205,7 +215,7 @@ function useReshaped(run: Run, reshape: Reshape | undefined, key: string) {
   return useQuery({
     queryKey: ["builder-reshape", run.id, key],
     queryFn: () => builderApi.outputPreview(reshape!.token, reshape!.workflowId, { run_id: run.id, node_id: reshape!.nodeId, output_config: choice!.config }),
-    enabled: !!reshape && !!choice,
+    enabled: !!reshape && !!choice && !choice.local,
     staleTime: Infinity,
   });
 }
@@ -232,70 +242,81 @@ export const AnswerMessage = memo(function AnswerMessage({
   const original = run.output_text ?? run.output?.text ?? "";
   const [shape, setShape] = useState("original");
   const reshaped = useReshaped(run, shape === "original" ? undefined : reshape, shape);
-  const text = shape === "original" ? original : reshaped.data?.text ?? "";
+  const local = RESHAPES.find((r) => r.key === shape)?.local;
+  const text =
+    shape === "original"
+      ? original
+      : local
+        ? answerJsonText(original, { question: run.input?.text, sources: run.output?.sources })
+        : reshaped.data?.text ?? "";
   const ms = runDurationMs(run);
   const canReshape = !!reshape && run.status === "succeeded" && !!original;
+  const [details, setDetails] = useState(false);
+  const tokens = (run.prompt_tokens ?? 0) + (run.completion_tokens ?? 0);
+  const shapeLabel = shape === "original" ? "Original" : RESHAPES.find((r) => r.key === shape)?.label;
   return (
     <div className="group/answer flex gap-3">
       <Avatar name={name} />
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 flex-1 pt-0.5">
+        <RunTrail run={run} stepName={stepName} ms={ms} />
         <GuardrailNotes flags={run.output?.guardrails ?? []} />
         {run.status === "failed" ? (
-          <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
             <p className="flex items-center gap-1.5 font-medium"><AlertTriangle className="h-4 w-4" /> It couldn&apos;t finish</p>
-            <p className="mt-1 whitespace-pre-wrap break-words text-xs">{run.error || "Something went wrong."}</p>
+            <p className="mt-1 whitespace-pre-wrap break-words text-sm">{run.error || "Something went wrong."}</p>
           </div>
         ) : run.status === "cancelled" ? (
           <div className="space-y-2">
-            <p className="text-sm italic text-zinc-400">Stopped before it finished.</p>
+            <p className="text-sm italic text-zinc-500">Stopped before it finished.</p>
             {text && <MarkdownView text={text} />}
           </div>
-        ) : shape !== "original" && reshaped.isPending ? (
-          <p className="flex items-center gap-1.5 text-sm text-zinc-400"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Reshaping the answer…</p>
-        ) : shape !== "original" && reshaped.error ? (
-          <p className="text-xs text-red-600">{reshaped.error instanceof Error ? reshaped.error.message : "Couldn't reshape it."}</p>
+        ) : shape !== "original" && !local && reshaped.isPending ? (
+          <p className="flex items-center gap-1.5 text-sm text-zinc-500"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Reshaping the answer…</p>
+        ) : shape !== "original" && !local && reshaped.error ? (
+          <p className="text-sm text-red-600">{reshaped.error instanceof Error ? reshaped.error.message : "Couldn't reshape it."}</p>
         ) : text ? (
           <AnswerView text={text} />
         ) : (
-          <p className="text-sm text-zinc-400">(no answer)</p>
+          <p className="text-sm text-zinc-500">(no answer)</p>
         )}
-        {canReshape && (
-          <div className="mt-2 flex flex-wrap items-center gap-1" role="group" aria-label="See the answer as">
-            <Wand2 className="mr-0.5 h-3.5 w-3.5 text-zinc-400" />
-            {[{ key: "original", label: "Original" }, ...RESHAPES].map((r) => (
-              <button
-                key={r.key}
-                type="button"
-                aria-pressed={shape === r.key}
-                onClick={() => setShape(r.key)}
-                className={cn(
-                  "rounded-full border px-2 py-0.5 text-xs font-medium transition-colors cursor-pointer",
-                  shape === r.key ? "border-indigo-500 bg-indigo-50 text-indigo-700" : "border-zinc-200 text-zinc-500 hover:border-zinc-300 hover:text-zinc-800",
-                )}
-              >
-                {r.label}
-              </button>
+        {(run.output?.sources?.length ?? 0) > 0 && (
+          <div className="mt-3 flex flex-wrap items-center gap-1.5 text-xs text-zinc-500">
+            Sources
+            {run.output!.sources!.map((src) => (
+              <span key={src} className="rounded-md bg-zinc-100 px-2 py-0.5 text-zinc-700">{src}</span>
             ))}
           </div>
         )}
-        {(run.output?.sources?.length ?? 0) > 0 && (
-          <p className="mt-2 text-xs text-zinc-500">Sources: {run.output!.sources!.join(", ")}</p>
-        )}
-        <RunTrail run={run} stepName={stepName} />
-        <div className={cn("mt-1.5 flex flex-wrap items-center gap-3 text-xs text-zinc-400 transition-opacity", !latest && "sm:opacity-0 sm:group-hover/answer:opacity-100")}>
-          {ms != null && <span className="tabular-nums">{formatDuration(ms)}</span>}
-          {(run.prompt_tokens ?? 0) + (run.completion_tokens ?? 0) > 0 && (
-            <span className="tabular-nums" title={`${run.prompt_tokens ?? 0} tokens in, ${run.completion_tokens ?? 0} out${run.cost_usd == null ? " · this model has no known price" : ""}`}>
-              {formatTokens((run.prompt_tokens ?? 0) + (run.completion_tokens ?? 0))} tokens{run.cost_usd != null ? ` · ${formatCost(run.cost_usd)}` : ""}
-            </span>
-          )}
-          <span>{new Date(run.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
-          {run.definition_version ? <span>v{run.definition_version}</span> : null}
+        {/* The latest answer keeps its actions in view; earlier ones show them on hover (always on touch). */}
+        <div className={cn("mt-2 flex flex-wrap items-center gap-0.5 transition-opacity", !latest && "sm:opacity-0 sm:group-hover/answer:opacity-100 sm:focus-within:opacity-100")}>
           {text && <CopyButton text={text} />}
-          <button type="button" onClick={onRetry} disabled={retryDisabled} className="inline-flex items-center gap-1 hover:text-zinc-800 disabled:opacity-40 cursor-pointer" title="Ask the same thing again">
-            <RotateCw className="h-3 w-3" /> Retry
+          <button type="button" onClick={onRetry} disabled={retryDisabled} aria-label="Retry" title="Ask the same thing again" className={ICON_BUTTON}>
+            <RotateCw className="h-4 w-4" />
+          </button>
+          {canReshape && (
+            <Menu
+              label="See the answer as"
+              trigger={<><Wand2 className="h-3.5 w-3.5" /> {shape === "original" ? "View as" : shapeLabel} <ChevronDown className="h-3 w-3" /></>}
+              triggerClassName={cn("inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer", shape === "original" ? "text-zinc-500" : "bg-zinc-100 text-zinc-900")}
+              items={[{ key: "original", label: "Original" }, ...RESHAPES].map((r) => ({ label: r.label, checked: shape === r.key, onClick: () => setShape(r.key) }))}
+            />
+          )}
+          <button type="button" onClick={() => setDetails((d) => !d)} aria-expanded={details} aria-label="Details" title="Time, tokens and cost" className={cn(ICON_BUTTON, details && "bg-zinc-100 text-zinc-900")}>
+            <Info className="h-4 w-4" />
           </button>
         </div>
+        {details && (
+          <p className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs tabular-nums text-zinc-500">
+            <span>{new Date(run.created_at).toLocaleString([], { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}</span>
+            {ms != null && <span>Took {formatDuration(ms)}</span>}
+            {tokens > 0 && (
+              <span title={`${run.prompt_tokens ?? 0} tokens in, ${run.completion_tokens ?? 0} out${run.cost_usd == null ? " · this model has no known price" : ""}`}>
+                {formatTokens(tokens)} tokens{run.cost_usd != null ? ` · ${formatCost(run.cost_usd)}` : ""}
+              </span>
+            )}
+            {run.definition_version ? <span>Version {run.definition_version}</span> : null}
+          </p>
+        )}
       </div>
     </div>
   );

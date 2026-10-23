@@ -2,16 +2,18 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowDown, ChevronDown, ChevronRight, Circle, ExternalLink, Paperclip, Plus, Send, SlidersHorizontal, Sparkles, Square, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Circle, ExternalLink, Paperclip, Plus, SlidersHorizontal, Sparkles, Square, X } from "lucide-react";
 
+import { Input } from "@/components/ui/input";
+import { Menu } from "@/components/ui/menu";
 import { Spinner } from "@/components/ui/spinner";
+import { Field, Select } from "@/components/builder/fields";
 import { ApprovalCard } from "@/components/builder/approval-card";
 import { AnswerMessage, Avatar, AvatarKind, FileChip, GuardrailNotes, UserMessage } from "@/components/builder/chat/chat-message";
 import { ChatHistory } from "@/components/builder/chat/chat-history";
 import { MarkdownView } from "@/components/builder/chat/markdown-view";
 import { coerce } from "@/components/builder/playground";
 import { ConnectButton } from "@/components/connections/connect-button";
-import { StreamToggle } from "@/components/builder/stream-toggle";
 import { ApiError } from "@/lib/api";
 import { builderApi } from "@/lib/builder/api";
 import { dayLabel, startersFor } from "@/lib/builder/chat";
@@ -24,15 +26,15 @@ import { cn } from "@/lib/utils";
 
 export type ChatTarget = { kind: "agent" | "workflow"; id: string };
 
-const TONE_DOT = { info: "text-sky-500", ok: "text-emerald-500", warn: "text-amber-500", error: "text-red-500" } as const;
+const TONE_DOT = { info: "text-zinc-400", ok: "text-emerald-500", warn: "text-amber-500", error: "text-red-500" } as const;
 // What the attach button offers: what the backend can read (builder/api/v1/attachments.py).
 const ACCEPT = ".pdf,.docx,.xlsx,.csv,.md,.txt,.png,.jpg,.jpeg";
 const MAX_FILES = 5;
 
-const DEPTHS: { id: AnswerDepth; label: string }[] = [
-  { id: "auto", label: "Auto" },
-  { id: "short", label: "Short" },
-  { id: "detailed", label: "Detailed" },
+const DEPTHS: { id: AnswerDepth; label: string; hint: string }[] = [
+  { id: "short", label: "Short", hint: "a line or two" },
+  { id: "auto", label: "Auto", hint: "sized to the question" },
+  { id: "detailed", label: "Detailed", hint: "in depth" },
 ];
 
 function useElapsed(since: string | null | undefined, running: boolean): number {
@@ -77,9 +79,9 @@ function LiveAnswer({
       <Avatar name={name} live />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 text-xs text-zinc-500" role="status" aria-live="polite">
-          <Spinner className="h-3.5 w-3.5 shrink-0 text-indigo-500" />
+          <Spinner className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
           <span className="min-w-0 truncate"><span className="font-medium text-zinc-700">{doing}</span></span>
-          <span className="ml-auto shrink-0 font-mono tabular-nums text-zinc-400">{(elapsed / 1000).toFixed(1)}s</span>
+          <span className="ml-auto shrink-0 tabular-nums text-zinc-500">{(elapsed / 1000).toFixed(1)}s</span>
         </div>
         <GuardrailNotes flags={view.guardrails} />
         {pending.length > 0 && (
@@ -96,17 +98,17 @@ function LiveAnswer({
           <div className="mt-2"><MarkdownView text={view.live.text + " ▍"} /></div>
         ) : (
           <div className="mt-2.5 space-y-2" aria-hidden>
-            <div className="h-2 w-[80%] animate-pulse rounded-full bg-indigo-100" />
-            <div className="h-2 w-[55%] animate-pulse rounded-full bg-indigo-50" />
+            <div className="h-2 w-[80%] animate-pulse rounded-full bg-zinc-100" />
+            <div className="h-2 w-[55%] animate-pulse rounded-full bg-zinc-100" />
           </div>
         )}
         {view.timeline.length > 0 && (
-          <details className="group/live mt-2 rounded-xl border border-zinc-200 bg-zinc-50/60">
-            <summary className="flex cursor-pointer list-none items-center gap-1.5 px-3 py-2 text-xs font-medium text-zinc-600">
+          <details className="group/live mt-2">
+            <summary className="inline-flex cursor-pointer list-none items-center gap-1 text-xs text-zinc-500 hover:text-zinc-900 [&::-webkit-details-marker]:hidden">
               <ChevronRight className="h-3.5 w-3.5 transition-transform group-open/live:rotate-90" /> What it&apos;s doing
-              <span className="font-normal text-zinc-400">· {view.timeline.length} step{view.timeline.length === 1 ? "" : "s"}</span>
+              <span>· {view.timeline.length} step{view.timeline.length === 1 ? "" : "s"}</span>
             </summary>
-            <ol className="space-y-1 border-t border-zinc-200 px-3 py-2">
+            <ol className="mt-1.5 space-y-1 border-l-2 border-zinc-200 pl-3">
               {view.timeline.map((t) => (
                 <li key={t.key} className="flex gap-2 text-xs text-zinc-700">
                   <Circle className={cn("mt-1 h-2 w-2 shrink-0 fill-current", TONE_DOT[t.tone])} />
@@ -136,15 +138,12 @@ export function ChatPanel({
   onClose,
   onEdit,
   embedded = false,
-  actions,
 }: {
   target: ChatTarget;
   token: string;
   onClose: () => void;
   /** Inside a page that already shows who this is: the header keeps only the chat's own controls. */
   embedded?: boolean;
-  /** Embedded: the page's own controls, on the same line as New and History. */
-  actions?: React.ReactNode;
   /** Open this agent/workflow in the editor beside the chat. */
   onEdit: () => void;
 }) {
@@ -234,11 +233,12 @@ export function ChatPanel({
   // ── Sending ──
   const [input, setInput] = useState("");
   const [depth, setDepth] = useState<AnswerDepth>("auto");
-  const [streamOn] = useStreamPref();
+  const [streamOn, setStreamOn] = useStreamPref();
   const [values, setValues] = useState<Record<string, string>>({});
   const [showInputs, setShowInputs] = useState(false);
   const [problems, setProblems] = useState<Problem[]>([]);
   const missingRequired = fields.filter((f) => f.required && !(values[f.name] ?? "").trim());
+  const inputsOpen = showInputs || missingRequired.length > 0;
 
   // ── Files for the next message (agents only) ──
   const [files, setFiles] = useState<Attachment[]>([]);
@@ -357,25 +357,20 @@ export function ChatPanel({
     <AvatarKind.Provider value={kind}>
     <div className="flex h-full min-h-0 flex-col bg-[var(--bg)]">
       {/* Header */}
-      <header className="flex shrink-0 items-center gap-2 border-b border-zinc-200 px-3 py-2.5 sm:px-4">
+      <header className="flex shrink-0 items-center gap-2 border-b border-zinc-200 px-3 py-2 sm:px-4">
         {!embedded && <Avatar name={name} size={32} />}
         <div className="min-w-0 flex-1">
-          {!embedded && (
-            <p className="flex items-center gap-1.5">
-              <span className="truncate text-sm font-semibold text-zinc-900">{name}</span>
-              <span className="hidden shrink-0 rounded-full bg-zinc-100 px-1.5 py-0.5 text-xs font-medium capitalize text-zinc-500 sm:inline">{kind}</span>
-            </p>
-          )}
-          <p className={cn("truncate text-zinc-500", embedded ? "text-xs font-medium" : "text-xs")}>{chat ? chat.title : "New chat"}</p>
+          {!embedded && <p className="truncate text-sm font-semibold text-zinc-900">{name}</p>}
+          <p className={cn("truncate", embedded ? "text-sm font-medium text-zinc-900" : "text-xs text-zinc-500")}>{chat ? chat.title : "New chat"}</p>
         </div>
         <button
           type="button"
           onClick={newChat}
           aria-label="New chat"
           title="New chat — this one stays in your history"
-          className="inline-flex h-8 items-center gap-1 rounded-lg border border-zinc-200 px-2.5 text-xs font-medium text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900 cursor-pointer"
+          className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-sm text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer"
         >
-          <Plus className="h-3.5 w-3.5" /> <span className="hidden sm:inline">New</span>
+          <Plus className="h-4 w-4" /> <span className="hidden sm:inline">New chat</span>
         </button>
         <ChatHistory
           chats={chats.data ?? []}
@@ -386,7 +381,6 @@ export function ChatPanel({
           onRename={renameChat}
           onDelete={removeChat}
         />
-        {embedded && actions}
         {!embedded && (
           <>
             <button
@@ -394,11 +388,11 @@ export function ChatPanel({
               onClick={onEdit}
               aria-label={editorTitle}
               title={editorTitle}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-200 text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900 cursor-pointer"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer"
             >
-              <ExternalLink className="h-3.5 w-3.5" />
+              <ExternalLink className="h-4 w-4" />
             </button>
-            <button type="button" onClick={onClose} aria-label="Close chat" className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 cursor-pointer">
+            <button type="button" onClick={onClose} aria-label="Close chat" className="inline-flex h-8 w-8 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer">
               <X className="h-4 w-4" />
             </button>
           </>
@@ -413,24 +407,32 @@ export function ChatPanel({
             const el = e.currentTarget;
             setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 120);
           }}
-          className="absolute inset-0 overflow-y-auto overscroll-contain px-3 py-5 sm:px-5"
+          className="absolute inset-0 overflow-y-auto overscroll-contain px-4 py-6 sm:px-6"
         >
-          <div className="mx-auto flex max-w-3xl flex-col gap-6">
+          <div className="mx-auto flex max-w-[720px] flex-col gap-8">
             {chatId && runs.isLoading && <div className="flex justify-center py-8"><Spinner className="h-5 w-5 text-zinc-400" /></div>}
-            {runs.isError && <p className="rounded-lg bg-red-50 p-3 text-xs text-red-700">Couldn&apos;t load this chat.</p>}
+            {runs.isError && <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">Couldn&apos;t load this chat.</p>}
 
             {empty && (
               <div className="mx-auto flex max-w-lg flex-col items-center py-10 text-center">
                 <Avatar name={name} size={56} />
                 <h2 className="mt-4 text-xl font-semibold text-zinc-900">{name}</h2>
-                {sub && <p className={cn("mt-1.5 line-clamp-3 leading-relaxed", welcome ? "text-sm text-zinc-700" : "text-xs text-zinc-500")}>{sub}</p>}
+                {sub && <p className={cn("mt-1.5 line-clamp-3", welcome ? "text-sm text-zinc-700" : "text-sm text-zinc-500")}>{sub}</p>}
+                <p className="mt-2 text-xs text-zinc-500">
+                  Runs with your connected accounts.{" "}
+                  {kind === "agent"
+                    ? remembers
+                      ? "It remembers this chat, and what it has learned about you across chats."
+                      : "It remembers the earlier messages of this chat."
+                    : `Each message runs the workflow, start to finish.${fields.length > 0 ? " Fill in its inputs above the message box." : ""}`}
+                </p>
                 {missing.length > 0 && (
-                  <div className="mt-4 w-full space-y-1.5 rounded-xl border border-amber-200 bg-amber-50 p-3 text-left">
-                    <p className="text-xs font-semibold text-amber-900">Connect your account{missing.length === 1 ? "" : "s"} first</p>
+                  <div className="mt-4 w-full space-y-1.5 rounded-lg border border-amber-200 bg-amber-50 p-3 text-left">
+                    <p className="text-sm font-medium text-zinc-900">Connect your account{missing.length === 1 ? "" : "s"} first</p>
                     {missing.map((r) => (
-                      <div key={r.server_id} className="flex items-center gap-2 text-xs text-amber-900">
+                      <div key={r.server_id} className="flex items-center gap-2 text-sm text-zinc-700">
                         <span className="min-w-0 flex-1 truncate" title={r.tools.join(", ")}>
-                          {r.name} <span className="text-amber-700">· for {r.tools.length} tool{r.tools.length === 1 ? "" : "s"}</span>
+                          {r.name} <span className="text-zinc-500">· for {r.tools.length} tool{r.tools.length === 1 ? "" : "s"}</span>
                         </span>
                         <ConnectButton
                           serverId={r.server_id}
@@ -442,7 +444,7 @@ export function ChatPanel({
                     ))}
                   </div>
                 )}
-                {kind === "agent" ? (
+                {kind === "agent" && (
                   <ul className={cn("mt-6 grid w-full gap-2", starters.length === 4 ? "sm:grid-cols-2" : "sm:grid-cols-3")}>
                     {starters.map((s) => (
                       <li key={s.label}>
@@ -450,19 +452,14 @@ export function ChatPanel({
                           type="button"
                           disabled={busy}
                           onClick={() => submit(s.prompt)}
-                          className="group flex h-full w-full items-center justify-between gap-2 rounded-xl border border-zinc-200 bg-white p-3 text-left text-xs font-medium text-zinc-800 transition hover:-translate-y-0.5 hover:border-indigo-300 hover:shadow-sm disabled:opacity-50 cursor-pointer"
+                          className="group flex h-full w-full items-center justify-between gap-2 rounded-lg border border-zinc-200 p-3 text-left text-sm text-zinc-700 transition-colors hover:border-zinc-300 hover:bg-zinc-50 hover:text-zinc-900 disabled:opacity-50 cursor-pointer"
                         >
-                          <span className="flex items-center gap-2"><Sparkles className="h-3.5 w-3.5 shrink-0 text-indigo-500" /> {s.label}</span>
-                          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-zinc-400 group-hover:text-indigo-500" />
+                          <span className="flex items-center gap-2"><Sparkles className="h-4 w-4 shrink-0 text-zinc-400" /> {s.label}</span>
+                          <ChevronRight className="h-4 w-4 shrink-0 text-zinc-400 group-hover:text-zinc-900" />
                         </button>
                       </li>
                     ))}
                   </ul>
-                ) : (
-                  <p className="mt-5 max-w-sm text-xs leading-relaxed text-zinc-500">
-                    Each message runs the workflow on it, start to finish.{" "}
-                    {fields.length > 0 && "Fill in its inputs below the message box."}
-                  </p>
                 )}
               </div>
             )}
@@ -474,11 +471,7 @@ export function ChatPanel({
               return (
                 <div key={run.id} className="flex flex-col gap-4">
                   {showDay && (
-                    <div className="flex items-center gap-3" aria-hidden>
-                      <span className="h-px flex-1 bg-zinc-200" />
-                      <span className="text-xs font-semibold uppercase tracking-wider text-zinc-400">{dayLabel(run.created_at)}</span>
-                      <span className="h-px flex-1 bg-zinc-200" />
-                    </div>
+                    <p className="text-center text-xs text-zinc-500" aria-hidden>{dayLabel(run.created_at)}</p>
                   )}
                   <UserMessage
                     files={run.input?.attachments}
@@ -518,7 +511,7 @@ export function ChatPanel({
           <button
             type="button"
             onClick={() => end.current?.scrollIntoView({ behavior: "smooth", block: "end" })}
-            className="absolute bottom-3 left-1/2 z-10 inline-flex -translate-x-1/2 items-center gap-1 rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-lg hover:text-zinc-900 cursor-pointer"
+            className="absolute bottom-3 left-1/2 z-10 inline-flex -translate-x-1/2 items-center gap-1 rounded-full border border-zinc-200 bg-[var(--surface-raised)] px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-lg hover:text-zinc-900 cursor-pointer"
           >
             <ArrowDown className="h-3 w-3" /> Jump to latest
           </button>
@@ -526,14 +519,14 @@ export function ChatPanel({
       </div>
 
       {/* Composer */}
-      <div className="shrink-0 border-t border-zinc-100 bg-white px-3 pb-3 pt-2 sm:px-4">
-        <div className="mx-auto max-w-3xl space-y-2">
+      <div className="shrink-0 px-3 pb-3 pt-2 sm:px-4 sm:pb-4">
+        <div className="mx-auto max-w-[720px] space-y-2">
           {problems.length > 0 && (
-            <div className="space-y-1 rounded-xl border border-red-200 bg-red-50 p-2.5" role="alert">
-              <p className="text-xs font-semibold text-red-800">It can&apos;t run yet</p>
+            <div className="space-y-1.5 rounded-lg border border-red-200 bg-red-50 p-3" role="alert">
+              <p className="text-sm font-medium text-zinc-900">It can&apos;t run yet</p>
               {problems.map((p, i) => (
-                <p key={i} className="flex flex-wrap items-center gap-1.5 text-xs text-red-700">
-                  <AlertTriangle className="h-3 w-3 shrink-0" />
+                <p key={i} className="flex flex-wrap items-center gap-1.5 text-sm text-red-700">
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
                   <span className="min-w-0 flex-1">{p.message}</span>
                   {p.code === "not_connected" && p.server_id && (
                     <ConnectButton
@@ -547,59 +540,42 @@ export function ChatPanel({
             </div>
           )}
 
+          {/* A workflow's inputs: a small form card over the message box, open while any required one is empty. */}
           {kind === "workflow" && fields.length > 0 && (
-            <div className="rounded-xl border border-zinc-200">
+            <div className="rounded-xl border border-zinc-200 bg-[var(--surface)]">
               <button
                 type="button"
                 onClick={() => setShowInputs((s) => !s)}
-                aria-expanded={showInputs}
-                className="flex w-full items-center gap-1.5 px-3 py-2 text-xs font-medium text-zinc-700 cursor-pointer"
+                aria-expanded={inputsOpen}
+                className="flex w-full items-center gap-2 px-3 py-2.5 text-sm font-medium text-zinc-900 cursor-pointer"
               >
-                <SlidersHorizontal className="h-3.5 w-3.5 text-zinc-400" /> Inputs
-                {missingRequired.length > 0 && <span className="text-xs font-normal text-amber-700">· {missingRequired.length} required</span>}
-                <ChevronDown className={cn("ml-auto h-3.5 w-3.5 text-zinc-400 transition-transform", showInputs && "rotate-180")} />
+                <SlidersHorizontal className="h-4 w-4 text-zinc-500" /> Inputs
+                <span className={cn("text-xs font-normal", missingRequired.length ? "text-amber-700" : "text-zinc-500")}>
+                  {missingRequired.length ? `${missingRequired.length} required` : `${fields.length} filled in`}
+                </span>
+                <ChevronDown className={cn("ml-auto h-4 w-4 text-zinc-500 transition-transform", inputsOpen && "rotate-180")} />
               </button>
-              {showInputs && (
-                <div className="grid gap-2 border-t border-zinc-100 p-3 sm:grid-cols-2">
+              {inputsOpen && (
+                <div className="grid gap-3 border-t border-zinc-200 p-3 sm:grid-cols-2">
                   {fields.map((f) => (
-                    <label key={f.name} className="space-y-1 text-xs">
-                      <span className="font-medium text-zinc-700">
-                        {f.label || f.name}
-                        {f.required && <span className="text-red-500"> *</span>}
-                      </span>
+                    <Field key={f.name} label={`${f.label || f.name}${f.required ? " *" : ""}`} hint={f.type === "boolean" ? undefined : f.description ?? undefined}>
                       {f.type === "boolean" ? (
-                        <select
-                          value={values[f.name] ?? ""}
-                          onChange={(e) => setValues({ ...values, [f.name]: e.target.value })}
-                          className="h-8 w-full rounded-md border border-zinc-300 bg-white px-2 text-xs"
-                        >
+                        <Select value={values[f.name] ?? ""} onChange={(e) => setValues({ ...values, [f.name]: e.target.value })}>
                           <option value="">—</option>
                           <option value="true">Yes</option>
                           <option value="false">No</option>
-                        </select>
+                        </Select>
                       ) : (
-                        <input
+                        <Input
                           type={f.type === "number" ? "number" : "text"}
                           value={values[f.name] ?? ""}
-                          placeholder={f.description ?? undefined}
                           onChange={(e) => setValues({ ...values, [f.name]: e.target.value })}
-                          className="h-8 w-full rounded-md border border-zinc-300 px-2 text-xs outline-none focus:border-indigo-400"
                         />
                       )}
-                    </label>
+                    </Field>
                   ))}
                 </div>
               )}
-            </div>
-          )}
-
-          {kind === "agent" && (files.length > 0 || uploading > 0 || fileError) && (
-            <div className="flex flex-wrap items-center gap-1.5">
-              {files.map((f) => (
-                <FileChip key={f.id} file={f} onRemove={() => setFiles((cur) => cur.filter((x) => x.id !== f.id))} />
-              ))}
-              {uploading > 0 && <span className="inline-flex items-center gap-1.5 text-xs text-zinc-500"><Spinner className="h-3 w-3" /> Reading {uploading} file{uploading === 1 ? "" : "s"}…</span>}
-              {fileError && <span className="text-xs text-red-600">{fileError}</span>}
             </div>
           )}
 
@@ -608,39 +584,23 @@ export function ChatPanel({
               e.preventDefault();
               submit();
             }}
-            className="flex flex-wrap items-end gap-2 rounded-xl border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 transition focus-within:border-[var(--accent-hover)] sm:flex-nowrap"
+            className="rounded-2xl border border-[var(--border-strong)] bg-[var(--surface)] px-3 pb-2 pt-3 transition focus-within:border-[var(--accent-hover)]"
           >
-            {kind === "agent" && (
-              <>
-                <input
-                  ref={picker}
-                  type="file"
-                  multiple
-                  accept={ACCEPT}
-                  className="hidden"
-                  onChange={(e) => {
-                    void attach(e.target.files);
-                    e.target.value = "";
-                  }}
-                />
-                <button
-                  type="button"
-                  onClick={() => picker.current?.click()}
-                  disabled={busy || files.length >= MAX_FILES}
-                  aria-label="Attach files"
-                  title="Attach a document (PDF, Word, Excel, CSV, text) or an image (JPG, PNG)"
-                  className="mb-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 disabled:opacity-40 cursor-pointer"
-                >
-                  <Paperclip className="h-4 w-4" />
-                </button>
-              </>
+            {kind === "agent" && (files.length > 0 || uploading > 0 || fileError) && (
+              <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                {files.map((f) => (
+                  <FileChip key={f.id} file={f} onRemove={() => setFiles((cur) => cur.filter((x) => x.id !== f.id))} />
+                ))}
+                {uploading > 0 && <span className="inline-flex items-center gap-1.5 text-xs text-zinc-500"><Spinner className="h-3 w-3" /> Reading {uploading} file{uploading === 1 ? "" : "s"}…</span>}
+                {fileError && <span className="text-xs text-red-600">{fileError}</span>}
+              </div>
             )}
             <textarea
               ref={composer}
               rows={1}
               value={input}
               aria-label={`Message ${name}`}
-              placeholder={kind === "agent" ? "Type a message…" : "What should it work on?"}
+              placeholder={kind === "agent" ? `Ask ${name} anything…` : `What should ${name} work on?`}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -648,47 +608,67 @@ export function ChatPanel({
                   submit();
                 }
               }}
-              className="order-first max-h-40 min-h-[36px] min-w-0 basis-full resize-none bg-transparent py-1.5 text-sm text-zinc-900 outline-none placeholder:text-zinc-500 sm:order-none sm:basis-auto sm:flex-1"
+              className="block max-h-40 min-h-[36px] w-full resize-none bg-transparent px-1 py-1 text-sm text-zinc-900 outline-none placeholder:text-zinc-500"
             />
-            <select
-              value={depth}
-              onChange={(e) => setDepth(e.target.value as AnswerDepth)}
-              aria-label="How long an answer"
-              title="How long an answer"
-              className="mb-0.5 ml-auto h-8 shrink-0 rounded-md border border-zinc-200 bg-zinc-50 px-1.5 text-xs text-zinc-600 sm:ml-0"
-            >
-              {DEPTHS.map((d) => <option key={d.id} value={d.id}>{d.label}</option>)}
-            </select>
-            <StreamToggle className="mb-1.5" />
-            {busy && liveRunId ? (
-              <button
-                type="button"
-                onClick={() => stop.mutate()}
-                disabled={stop.isPending}
-                className="mb-0.5 inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 text-xs font-semibold text-red-600 hover:bg-red-100 disabled:opacity-50 cursor-pointer"
-              >
-                <Square className="h-3 w-3 fill-current" /> Stop
-              </button>
-            ) : (
-              <button
-                type="submit"
-                disabled={!canSend}
-                aria-label="Send"
-                className="mb-0.5 inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-sm font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-40 cursor-pointer"
-              >
-                {send.isPending ? <Spinner className="h-3.5 w-3.5" /> : <Send className="h-3.5 w-3.5" />}
-                <span className="hidden sm:inline">Send</span>
-              </button>
-            )}
+            <div className="mt-1 flex items-center gap-1">
+              {kind === "agent" && (
+                <>
+                  <input
+                    ref={picker}
+                    type="file"
+                    multiple
+                    accept={ACCEPT}
+                    className="hidden"
+                    onChange={(e) => {
+                      void attach(e.target.files);
+                      e.target.value = "";
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => picker.current?.click()}
+                    disabled={busy || files.length >= MAX_FILES}
+                    aria-label="Attach files"
+                    title="Attach a document (PDF, Word, Excel, CSV, text) or an image (JPG, PNG)"
+                    className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-40 cursor-pointer"
+                  >
+                    <Paperclip className="h-4 w-4" />
+                  </button>
+                </>
+              )}
+              <Menu
+                label="Answer settings"
+                trigger={<>Length: {DEPTHS.find((d) => d.id === depth)?.label} <ChevronDown className="h-3.5 w-3.5" /></>}
+                triggerClassName="inline-flex h-8 items-center gap-1 rounded-md px-2 text-xs font-medium text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer"
+                items={[
+                  ...DEPTHS.map((d) => ({ label: `${d.label} — ${d.hint}`, checked: depth === d.id, onClick: () => setDepth(d.id) })),
+                  { label: "Show the answer as it's written", checked: streamOn, divided: true, onClick: () => setStreamOn(!streamOn) },
+                ]}
+              />
+              {busy && liveRunId ? (
+                <button
+                  type="button"
+                  onClick={() => stop.mutate()}
+                  disabled={stop.isPending}
+                  aria-label="Stop"
+                  title="Stop"
+                  className="ml-auto inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-[var(--bg)] hover:opacity-90 disabled:opacity-50 cursor-pointer"
+                >
+                  <Square className="h-3 w-3 fill-current" />
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  disabled={!canSend}
+                  aria-label="Send"
+                  title="Send (Enter) · new line: Shift+Enter"
+                  className="ml-auto inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)] disabled:bg-zinc-200 disabled:text-zinc-500 cursor-pointer disabled:cursor-default"
+                >
+                  {send.isPending ? <Spinner className="h-4 w-4" /> : <ArrowUp className="h-4 w-4" />}
+                </button>
+              )}
+            </div>
           </form>
-          <p className="text-center text-xs text-zinc-500">
-            Runs with your connected accounts.{" "}
-            {kind === "agent"
-              ? remembers
-                ? "It remembers this chat, and what it has learned about you across chats."
-                : "It remembers the earlier messages of this chat."
-              : "Each message is a full run."}
-          </p>
         </div>
       </div>
     </div>

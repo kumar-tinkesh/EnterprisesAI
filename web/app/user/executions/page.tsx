@@ -277,7 +277,7 @@ export default function ExecutionsPage() {
         </Select>
       </div>
       {all.length > 0 && (
-        <div className="-mx-4 flex items-center gap-1 overflow-x-auto px-4 sm:mx-0 sm:px-0" role="tablist" aria-label="Filter">
+        <div className="no-scrollbar -mx-4 flex items-center gap-1 overflow-x-auto px-4 sm:mx-0 sm:px-0" role="tablist" aria-label="Filter">
           {MAIN_FILTERS.filter(narrows).map((f) => (
             <FilterTab key={f} on={filter === f} onClick={() => setFilter(f)}>
               {FILTERS[f]} <span className="tabular-nums text-zinc-500">{counts[f]}</span>
@@ -491,7 +491,6 @@ function Row({
           >
             {item.name}
           </button>
-          {item.sub && <p className="truncate text-xs text-zinc-500">{item.sub}</p>}
           {/* Narrow: the columns, folded into one line. */}
           <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-zinc-500 @3xl:hidden">
             <StatusLabel s={s} className="inline-flex text-xs" />
