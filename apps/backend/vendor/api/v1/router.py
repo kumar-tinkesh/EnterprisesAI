@@ -6,6 +6,7 @@ from fastapi import APIRouter
 from vendor.api.v1.bridge import (
     forget_bridge_as_user,
     get_bridge_status_as_user,
+    pair_phone_as_user,
     router as bridge_router,
     start_bridge_as_user,
     stop_bridge_as_user,
@@ -62,6 +63,7 @@ __all__ = [
     "router",
     "start_bridge_as_user",
     "get_bridge_status_as_user",
+    "pair_phone_as_user",
     "stop_bridge_as_user",
     "forget_bridge_as_user",
     "post_add_mcp_server",

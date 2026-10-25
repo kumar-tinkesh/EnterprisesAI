@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.deps import CurrentUser, get_current_user
 from src.db.session import get_db
 
-from vendor.api.v1.schemas import BridgeStatusResponse
+from vendor.api.v1.schemas import BridgePairPhoneRequest, BridgeStatusResponse
 from vendor.services.mcp_service import get_mcp_server, is_server_visible_to_user
 from vendor.services.whatsapp_bridge import manager as bridge_manager
 
@@ -70,6 +70,29 @@ async def get_bridge_status_as_user(
     'starting'/'awaiting_qr' until it settles at 'connected' or 'error'."""
     await _get_visible_device_pairing_server(db, server_id=server_id, user=user)
     result = await bridge_manager.get_status(db, server_id=server_id, user_id=user.id)
+    return BridgeStatusResponse(**result)
+
+
+@router.post("/mcp/{server_id}/bridge/pair-phone-as-user", response_model=BridgeStatusResponse)
+async def pair_phone_as_user(
+    server_id: str,
+    payload: BridgePairPhoneRequest,
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get a pairing code for *this user's own* waiting bridge — link by
+    phone number instead of scanning the QR (needed when the app is open on
+    the same phone WhatsApp runs on). Keep polling status-as-user after."""
+    await _get_visible_device_pairing_server(db, server_id=server_id, user=user)
+    try:
+        result = await bridge_manager.request_pairing_code(
+            db, server_id=server_id, user_id=user.id, phone=payload.phone
+        )
+    except bridge_manager.InvalidPhoneNumber as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except bridge_manager.BridgeError as exc:
+        code = status.HTTP_409_CONFLICT if exc.status_code == 409 else status.HTTP_502_BAD_GATEWAY
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
     return BridgeStatusResponse(**result)
 
 

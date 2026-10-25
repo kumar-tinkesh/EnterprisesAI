@@ -44,6 +44,7 @@ MAX_CONTAINERS = int(os.environ.get("WHATSAPP_MAX_CONTAINERS", "0") or 0)
 
 _ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{32,128}$")
+_PHONE_RE = re.compile(r"^[1-9][0-9]{6,14}$")  # E.164 digits, no "+"
 _LABEL = "enterpriseai.whatsapp-bridge"
 
 
@@ -155,6 +156,44 @@ def instance_status(instance_id: str, x_api_key: str | None = Header(None)):
             return json.load(r)
     except (urllib.error.URLError, TimeoutError, ConnectionError):
         return {"status": "starting", "qr": ""}
+
+
+@app.post("/instances/{instance_id}/pair-phone")
+def pair_phone(
+    instance_id: str,
+    phone: str = Body(..., embed=True),
+    x_api_key: str | None = Header(None),
+):
+    """Ask the bridge for a phone-number pairing code (the alternative to
+    scanning its QR) — proxied to its own /api/pair-phone."""
+    _check_key(x_api_key)
+    _validate_id(instance_id)
+    if not _PHONE_RE.match(phone):
+        raise HTTPException(status_code=400, detail="phone must be digits with country code, e.g. 919876543210")
+    name = _container_name(instance_id)
+
+    try:
+        c = client.containers.get(name)
+    except docker.errors.NotFound:
+        raise HTTPException(status_code=409, detail="bridge is not running")
+    if c.status != "running":
+        raise HTTPException(status_code=409, detail="bridge is not running")
+
+    req = urllib.request.Request(
+        f"http://{name}:8080/api/pair-phone",
+        data=json.dumps({"phone": phone}).encode(),
+        headers={"X-Bridge-Token": _container_token(c), "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=25) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as exc:
+        # The bridge's own refusal (bad number, not waiting to be paired) —
+        # pass its status and plain-text reason through.
+        raise HTTPException(status_code=exc.code, detail=exc.read().decode(errors="replace").strip()[:200])
+    except (urllib.error.URLError, TimeoutError, ConnectionError):
+        raise HTTPException(status_code=502, detail="bridge unreachable")
 
 
 @app.delete("/instances/{instance_id}")

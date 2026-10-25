@@ -333,6 +333,12 @@ export function WhatsAppBridgeModal({
 }) {
   const [status, setStatus] = useState<BridgeStatus | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
+  // A QR on the same phone WhatsApp runs on can't be scanned — touch
+  // devices start on "link with phone number" instead.
+  const [mode, setMode] = useState<"qr" | "phone">(() =>
+    typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches ? "phone" : "qr",
+  );
+  const [phone, setPhone] = useState("");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const stopPolling = () => {
@@ -370,6 +376,11 @@ export function WhatsAppBridgeModal({
     },
   });
 
+  const pairMutation = useMutation({
+    mutationFn: () => vendorApi.pairPhoneBridgeAsUser(accessToken, server.id, phone),
+  });
+  const pairCode = status?.pair_code || pairMutation.data?.pair_code;
+
   useEffect(() => {
     startMutation.mutate();
     return stopPolling;
@@ -398,14 +409,75 @@ export function WhatsAppBridgeModal({
             </div>
           )}
 
-          {status?.status === "awaiting_qr" && status.qr && (
+          {status?.status === "awaiting_qr" && (status.qr || pairCode) && mode === "qr" && (
             <>
               <p className="text-xs text-zinc-500">
                 Open WhatsApp on your phone → Settings → Linked Devices → Link a Device, then
                 scan this code.
               </p>
-              <QrCanvas value={status.qr} />
+              {status.qr && <QrCanvas value={status.qr} />}
               <p className="text-xs text-zinc-400">Waiting for you to scan…</p>
+              <button
+                type="button"
+                onClick={() => setMode("phone")}
+                className="text-xs font-medium text-emerald-700 hover:underline cursor-pointer"
+              >
+                On this phone? Link with phone number instead
+              </button>
+            </>
+          )}
+
+          {status?.status === "awaiting_qr" && (status.qr || pairCode) && mode === "phone" && (
+            <>
+              {pairCode ? (
+                <>
+                  <p className="text-xs text-zinc-500">
+                    Open WhatsApp → Settings → Linked Devices → Link a Device → <b>Link with phone
+                    number instead</b>, then enter this code (or tap WhatsApp&apos;s notification).
+                  </p>
+                  <p className="select-all font-mono text-2xl font-semibold tracking-widest text-zinc-900">
+                    {pairCode}
+                  </p>
+                  <p className="text-xs text-zinc-400">Waiting for you to enter it…</p>
+                </>
+              ) : (
+                <form
+                  className="space-y-3 text-left"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    pairMutation.mutate();
+                  }}
+                >
+                  <label className="block text-xs font-medium text-zinc-600">
+                    Your WhatsApp number, with country code
+                  </label>
+                  <Input
+                    type="tel"
+                    inputMode="tel"
+                    autoComplete="tel"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    placeholder="+91 98765 43210"
+                  />
+                  {pairMutation.error && (
+                    <p className="text-xs text-red-600">
+                      {pairMutation.error instanceof ApiError ? pairMutation.error.message : "Could not get a code."}
+                    </p>
+                  )}
+                  <Button type="submit" className="w-full" disabled={!phone.trim() || pairMutation.isPending}>
+                    {pairMutation.isPending ? <Spinner className="h-4 w-4" /> : "Get pairing code"}
+                  </Button>
+                </form>
+              )}
+              {status.qr && (
+                <button
+                  type="button"
+                  onClick={() => setMode("qr")}
+                  className="text-xs font-medium text-emerald-700 hover:underline cursor-pointer"
+                >
+                  Scan a QR code instead
+                </button>
+              )}
             </>
           )}
 
@@ -423,6 +495,7 @@ export function WhatsAppBridgeModal({
                 type="button"
                 onClick={() => {
                   setStatus(null);
+                  pairMutation.reset();
                   startMutation.mutate();
                 }}
               >

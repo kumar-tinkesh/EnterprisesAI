@@ -52,6 +52,11 @@ user**; EnterpriseAI's own additions are listed separately below.
   placement alone doesn't guard an API that can read and send as the user.
 - `WHATSAPP_BRIDGE_HOST` (default `127.0.0.1`; the orchestrator sets
   `0.0.0.0` inside the bridge's own container).
+- `POST /api/pair-phone` (`{"phone": "<digits with country code>"}`):
+  whatsmeow's `PairPhone` on the waiting login session, returning the code
+  to type into WhatsApp → Linked devices → "Link with phone number instead"
+  (for someone on the same phone WhatsApp runs on, who can't scan the QR).
+  `/api/status` also serves it as `pair_code` until pairing ends.
 
 **`server/`**
 - Sends `WHATSAPP_BRIDGE_TOKEN` as `X-Bridge-Token` on every bridge request.

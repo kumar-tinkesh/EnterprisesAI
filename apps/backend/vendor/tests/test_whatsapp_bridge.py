@@ -58,10 +58,12 @@ class _FakeOrchestrator:
             raise bridge_manager.BridgeError("WhatsApp orchestrator unreachable: boom")
         if method == "GET":
             return dict(self.bridge_status)
+        if path.endswith("/pair-phone"):
+            return {"code": "ABCD-EFGH"}
         return {"status": "starting"}
 
     def started_tokens(self) -> list[str]:
-        return [j["token"] for m, _p, j, _q in self.calls if m == "POST"]
+        return [j["token"] for m, p, j, _q in self.calls if m == "POST" and p.endswith("/start")]
 
 
 @pytest.fixture
@@ -391,3 +393,58 @@ def test_without_a_default_a_bare_number_is_refused_clearly(monkeypatch):
     wa = _vendored_whatsapp(monkeypatch, "")
     to, problem = wa.normalize_recipient("8789977380")
     assert to is None and "country code" in problem and "918789977380" in problem
+
+
+@pytest.mark.asyncio
+async def test_pairing_code_for_a_waiting_bridge(admin_client, db, orch):
+    server_id, server = await _server(admin_client, db)
+    await bridge_manager.start_bridge(db, server=server, user_id="tu_pc", tenant_id="tenant_test_01")
+    orch.bridge_status = {"status": "waiting_for_scan", "qr": "2@abc", "pair_code": ""}
+    await bridge_manager.get_status(db, server_id=server_id, user_id="tu_pc")
+
+    result = await bridge_manager.request_pairing_code(db, server_id=server_id, user_id="tu_pc", phone="87899 77380")
+
+    assert result == {"status": "awaiting_qr", "pair_code": "ABCD-EFGH"}
+    row = await _row(db, server_id, "tu_pc")
+    assert orch.calls[-1] == ("POST", f"/instances/{row.id}/pair-phone", {"phone": "918789977380"}, None)
+
+    # Polling keeps carrying the code while it's still waiting, and drops it once connected.
+    orch.bridge_status = {"status": "waiting_for_scan", "qr": "2@def", "pair_code": "ABCD-EFGH"}
+    status = await bridge_manager.get_status(db, server_id=server_id, user_id="tu_pc")
+    assert status == {"status": "awaiting_qr", "qr": "2@def", "pair_code": "ABCD-EFGH"}
+    orch.bridge_status = {"status": "connected", "qr": "", "pair_code": ""}
+    assert await bridge_manager.get_status(db, server_id=server_id, user_id="tu_pc") == {"status": "connected"}
+
+
+@pytest.mark.asyncio
+async def test_pairing_code_refused_before_connect(admin_client, db, orch):
+    server_id, _server_row = await _server(admin_client, db)
+    with pytest.raises(bridge_manager.BridgeError) as exc:
+        await bridge_manager.request_pairing_code(db, server_id=server_id, user_id="tu_none", phone="918789977380")
+    assert exc.value.status_code == 409
+    assert orch.calls == []
+
+
+@pytest.mark.asyncio
+async def test_pair_phone_as_user_rejects_a_bad_number(admin_client, tenant_client, db, orch):
+    server_id = await _create_device_pairing_server(admin_client, db, name="wa-pair")
+    await tenant_client.post(f"{BASE}/mcp/{server_id}/bridge/connect-as-user")
+
+    resp = await tenant_client.post(f"{BASE}/mcp/{server_id}/bridge/pair-phone-as-user", json={"phone": "123"})
+    assert resp.status_code == 400
+    assert not any(p.endswith("/pair-phone") for _m, p, _j, _q in orch.calls)
+
+    resp = await tenant_client.post(
+        f"{BASE}/mcp/{server_id}/bridge/pair-phone-as-user", json={"phone": "+91 87899 77380"}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["pair_code"] == "ABCD-EFGH"
+
+
+def test_pairing_phone_is_normalized_like_a_recipient():
+    for written in ("8789977380", "+91 87899-77380", "08789977380", "918789977380", "0091 8789977380"):
+        assert bridge_manager.normalize_pairing_phone(written) == "918789977380", written
+    assert bridge_manager.normalize_pairing_phone("+1 (415) 555-0100") == "14155550100"
+    for bad in ("", "123", "call me", "4155550100x"):
+        with pytest.raises(bridge_manager.InvalidPhoneNumber):
+            bridge_manager.normalize_pairing_phone(bad)

@@ -46,6 +46,15 @@ _live_checked: dict[str, float] = {}  # instance id -> when its container was la
 class BridgeError(Exception):
     """Raised for a bridge lifecycle failure the caller should surface."""
 
+    def __init__(self, message: str, *, status_code: int | None = None, detail: str | None = None):
+        super().__init__(message)
+        self.status_code = status_code  # the orchestrator's HTTP status, when it answered
+        self.detail = detail  # its own "detail" message, when it gave one
+
+
+class InvalidPhoneNumber(ValueError):
+    """The number given for phone pairing can't be a WhatsApp account."""
+
 
 def container_name(instance_id: str) -> str:
     return f"eai-wa-bridge-{instance_id}"
@@ -73,7 +82,15 @@ async def _orchestrator(method: str, path: str, *, json: dict | None = None, par
     except httpx.HTTPError as exc:
         raise BridgeError(f"WhatsApp orchestrator unreachable: {exc}") from exc
     if resp.status_code >= 400:
-        raise BridgeError(f"WhatsApp orchestrator {method} {path} -> HTTP {resp.status_code}: {resp.text[:200]}")
+        try:
+            detail = resp.json().get("detail")
+        except ValueError:
+            detail = None
+        raise BridgeError(
+            f"WhatsApp orchestrator {method} {path} -> HTTP {resp.status_code}: {resp.text[:200]}",
+            status_code=resp.status_code,
+            detail=detail if isinstance(detail, str) else None,
+        )
     return resp.json()
 
 
@@ -152,6 +169,61 @@ async def start_bridge(
     return {"status": "starting"}
 
 
+def normalize_pairing_phone(phone: str) -> str:
+    """The digits WhatsApp's phone pairing wants (country code, no "+"), read
+    the same way the MCP server reads a recipient (vendor_src/server/
+    whatsapp.py: normalize_recipient) — a bare 10-digit number gets
+    WHATSAPP_DEFAULT_COUNTRY_CODE."""
+    value = (phone or "").strip()
+    digits = "".join(c for c in value if c.isdigit())
+    if not digits or any(c not in "0123456789+-() ." for c in value):
+        raise InvalidPhoneNumber("Enter your WhatsApp number, e.g. 919876543210")
+    if value.startswith("00"):
+        digits = digits[2:]
+    elif not value.startswith("+") and len(digits) == 11 and digits.startswith("0"):
+        digits = digits[1:]  # a national trunk 0
+    if len(digits) == 10 and not value.startswith("+"):
+        country = "".join(c for c in get_backend_settings().WHATSAPP_DEFAULT_COUNTRY_CODE if c.isdigit())
+        if not country:
+            raise InvalidPhoneNumber(f"Add your country code, e.g. 91{digits} for India")
+        digits = country + digits
+    if not 11 <= len(digits) <= 15 or digits.startswith("0"):
+        raise InvalidPhoneNumber("That doesn't look like a full number with country code (e.g. 919876543210)")
+    return digits
+
+
+async def request_pairing_code(db, *, server_id: str, user_id: str, phone: str) -> dict:
+    """Phone-number alternative to the QR: ask this user's waiting bridge for
+    a pairing code to type into WhatsApp → Linked devices → "Link with phone
+    number instead". For someone on the same phone WhatsApp runs on, who
+    can't scan a QR shown on that phone's own screen. Keep polling
+    ``get_status`` afterwards — it also carries the code, and turns
+    'connected' once it's entered."""
+    digits = normalize_pairing_phone(phone)
+    row = await _get_instance(db, server_id=server_id, user_id=user_id)
+    if row is None or row.status not in ("starting", "awaiting_qr"):
+        raise BridgeError("WhatsApp isn't waiting to be linked. Click connect first.", status_code=409)
+    try:
+        result = await _orchestrator("POST", f"/instances/{row.id}/pair-phone", json={"phone": digits})
+    except BridgeError as exc:
+        if exc.status_code == 409:
+            raise BridgeError(
+                "WhatsApp isn't ready to link yet — wait for the QR code to appear, then try again.",
+                status_code=409,
+            ) from exc
+        if exc.status_code == 400:
+            raise InvalidPhoneNumber(exc.detail or "WhatsApp rejected that number") from exc
+        if exc.status_code is not None:
+            raise BridgeError(
+                f"Couldn't get a pairing code from WhatsApp ({exc.detail or exc.status_code}). Try again."
+            ) from exc
+        raise
+    code = result.get("code")
+    if not code:
+        raise BridgeError("WhatsApp didn't return a pairing code. Try again.")
+    return {"status": "awaiting_qr", "pair_code": code}
+
+
 def _map_status(bridge: dict) -> tuple[str, str | None, str | None]:
     """Orchestrator/bridge status -> (our status, qr, error)."""
     status = bridge.get("status") or ""
@@ -184,6 +256,7 @@ async def get_status(db, *, server_id: str, user_id: str) -> dict:
         return {"status": "error", "error": str(exc)}
 
     status, qr, error = _map_status(bridge)
+    pair_code = (bridge.get("pair_code") or None) if status == "awaiting_qr" else None
     if status == "connected":
         _live_checked[row.id] = time.monotonic()
     else:
@@ -201,6 +274,8 @@ async def get_status(db, *, server_id: str, user_id: str) -> dict:
     out: dict = {"status": status}
     if qr:
         out["qr"] = qr
+    if pair_code:
+        out["pair_code"] = pair_code
     if error:
         out["error"] = error
     return out

@@ -348,6 +348,13 @@ class BridgeStatusResponse(BaseModel):
 
     status: str  # not_connected | starting | awaiting_qr | connected | error
     qr: str | None = None
+    pair_code: str | None = None  # phone-number pairing code, once requested
     error: str | None = None
+
+
+class BridgePairPhoneRequest(BaseModel):
+    """Link by phone number instead of scanning the QR."""
+
+    phone: str = Field(..., min_length=1, max_length=32)
 
 

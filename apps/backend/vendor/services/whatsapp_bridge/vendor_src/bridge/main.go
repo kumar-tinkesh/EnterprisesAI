@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
@@ -42,16 +43,28 @@ import (
 // renderer draws from, so /api/status can hand it to the caller raw (they
 // render it into an actual QR image with any standard library) instead of
 // scraping stdout for ASCII art.
+//
+// PairCode is the phone-number alternative to the QR (see /api/pair-phone):
+// someone opening the app on the same phone WhatsApp runs on can't scan a
+// QR shown on that phone's own screen, so they type this code into
+// WhatsApp → Linked devices → "Link with phone number instead".
 var pairingState = struct {
 	sync.RWMutex
-	Status string // "waiting_for_scan" | "connected" | "timeout" | "error"
-	QR     string // raw QR payload string; only meaningful while Status == "waiting_for_scan"
+	Status   string // "waiting_for_scan" | "connected" | "timeout" | "error"
+	QR       string // raw QR payload string; only meaningful while Status == "waiting_for_scan"
+	PairCode string // set by /api/pair-phone; only meaningful while Status == "waiting_for_scan"
 }{Status: "starting"}
 
 func setPairingState(status, qr string) {
 	pairingState.Lock()
 	pairingState.Status = status
 	pairingState.QR = qr
+	// The QR rotates every ~20s within the same login session; a pairing
+	// code stays valid across those rotations, so only drop it once the
+	// session is no longer waiting to be paired.
+	if status != "waiting_for_scan" {
+		pairingState.PairCode = ""
+	}
 	pairingState.Unlock()
 }
 
@@ -821,10 +834,57 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 	// plain liveness) without parsing logs — see pairingState above.
 	http.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
 		pairingState.RLock()
-		status, qr := pairingState.Status, pairingState.QR
+		status, qr, pairCode := pairingState.Status, pairingState.QR, pairingState.PairCode
 		pairingState.RUnlock()
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": status, "qr": qr})
+		json.NewEncoder(w).Encode(map[string]string{"status": status, "qr": qr, "pair_code": pairCode})
+	})
+
+	// Vendor addition: link by phone number instead of scanning the QR —
+	// whatsmeow's PairPhone on the same login websocket the QR belongs to,
+	// so it's only possible once the first QR has arrived (whatsmeow's own
+	// requirement: the connection must be fully established) and until
+	// pairing succeeds or the QRs run out. The phone gets a push
+	// notification to enter the code, which /api/status also keeps serving.
+	http.HandleFunc("/api/pair-phone", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			Phone string `json:"phone"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Phone == "" {
+			http.Error(w, "phone is required", http.StatusBadRequest)
+			return
+		}
+		pairingState.RLock()
+		ready := pairingState.Status == "waiting_for_scan" && pairingState.QR != ""
+		pairingState.RUnlock()
+		if !ready {
+			http.Error(w, "Not waiting to be paired", http.StatusConflict)
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+		code, err := client.PairPhone(ctx, req.Phone, true, whatsmeow.PairClientChrome, "Chrome (Linux)")
+		if err != nil {
+			status := http.StatusBadGateway
+			if errors.Is(err, whatsmeow.ErrPhoneNumberTooShort) || errors.Is(err, whatsmeow.ErrPhoneNumberIsNotInternational) {
+				status = http.StatusBadRequest
+			}
+			http.Error(w, err.Error(), status)
+			return
+		}
+
+		pairingState.Lock()
+		if pairingState.Status == "waiting_for_scan" {
+			pairingState.PairCode = code
+		}
+		pairingState.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"code": code})
 	})
 
 	// Vendor addition (not upstream): read-side endpoints backing

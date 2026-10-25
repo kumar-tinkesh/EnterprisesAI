@@ -360,6 +360,7 @@ export interface OAuthAuthorizeAsUserBody {
 export interface BridgeStatus {
   status: "not_connected" | "starting" | "awaiting_qr" | "connected" | "error";
   qr?: string | null;
+  pair_code?: string | null;
   error?: string | null;
 }
 
@@ -496,6 +497,13 @@ export const vendorApi = {
   getBridgeStatusAsUser: (token: string, serverId: string) =>
     request<BridgeStatus>(`${VR}/mcp/${serverId}/bridge/status-as-user`, {
       method: "GET",
+    }, token, BACKEND_API_URL),
+  // Link by phone number instead of the QR — for someone on the same phone
+  // WhatsApp runs on. Returns the code to type into WhatsApp.
+  pairPhoneBridgeAsUser: (token: string, serverId: string, phone: string) =>
+    request<BridgeStatus>(`${VR}/mcp/${serverId}/bridge/pair-phone-as-user`, {
+      method: "POST",
+      body: JSON.stringify({ phone }),
     }, token, BACKEND_API_URL),
   disconnectBridgeAsUser: (token: string, serverId: string) =>
     request<void>(`${VR}/mcp/${serverId}/bridge/disconnect-as-user`, {
