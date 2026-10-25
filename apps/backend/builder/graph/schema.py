@@ -164,6 +164,9 @@ class WorkflowConfig(BaseModel):
     own_knowledge_base_id: str | None = None
     approvals: ToolApprovalPolicy = Field(default_factory=ToolApprovalPolicy)
     approval_overrides: ApprovalOverrides = Field(default_factory=ApprovalOverrides)
+    # A greeting or a general question gets a direct answer (ending with what the
+    # workflow can do) instead of running every step — builder.workflows.front_desk.
+    answer_general_questions: bool = True
 
     def knowledge_base_ids(self) -> list[str]:
         ids = list(self.default_knowledge_base_ids)

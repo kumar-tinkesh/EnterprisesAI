@@ -35,6 +35,7 @@ from builder.runs import lease, states
 from builder.runs.db import session_factory, utcnow
 from builder.runs.events import emit
 from builder.runs.tool_calls import Paused
+from builder.workflows import front_desk
 from builder.workflows import scheduler as S
 from builder.workflows.nodes import RUNNERS, NodeOutcome, StepContext, run_trigger
 
@@ -112,6 +113,15 @@ def _step_summary(state: dict, graph: S.Graph, agents: dict) -> str:
     return "\n\n---\n**Step by step**\n\n" + "\n\n".join(parts) if parts else ""
 
 
+def _asks_front_desk(run: BuilderRun, config: WorkflowConfig, variables: dict) -> bool:
+    """Only a message someone typed (app chat, a share link) — never a schedule,
+    a webhook, a test, or a run given its inputs as fields."""
+    return (
+        config.answer_general_questions and run.purpose in ("run", "public")
+        and not run.schedule_id and not run.webhook_id and not variables
+    )
+
+
 async def execute_workflow(run: BuilderRun, user: CurrentUser, worker_id: str, *, tool_owners: dict[str, CurrentUser] | None = None) -> None:
     definition = run.definition["workflow"]
     config = WorkflowConfig.model_validate(definition.get("config") or {})
@@ -126,6 +136,27 @@ async def execute_workflow(run: BuilderRun, user: CurrentUser, worker_id: str, *
     S.resume_interrupted(state)
     await _save(run.id, worker_id, state)
     await emit(run.id, "run_status", status=states.RUNNING)
+
+    # Decided once and saved: a resumed run doesn't ask again.
+    if "front_desk" not in state and _asks_front_desk(run, config, variables):
+        desk = await front_desk.decide(run.definition, original, (run.input or {}).get("history") or [])
+        state["prompt_tokens"] += desk.pop("prompt_tokens", 0)
+        state["completion_tokens"] += desk.pop("completion_tokens", 0)
+        state["front_desk"] = desk
+        await _save(run.id, worker_id, state)
+    if (state.get("front_desk") or {}).get("route") == "general":
+        answer = state["front_desk"]["answer"]
+        for n in state["nodes"].values():
+            n["status"] = S.PRUNED  # no step ran: shown as skipped
+        await _save(run.id, worker_id, state)
+        await emit(run.id, "output", text=answer, sources=[])
+        if await lease.release(
+            run.id, worker_id, status=states.SUCCEEDED, output_text=answer,
+            output={"text": answer, "sources": [], "final_node": None, "guardrails": [], "front_desk": "general"},
+            prompt_tokens=state["prompt_tokens"], completion_tokens=state["completion_tokens"], cost_usd=state.get("cost_usd"),
+        ):
+            await emit(run.id, "run_status", status=states.SUCCEEDED)
+        return
 
     session_started = time.monotonic()
     active_before = state.get("active_seconds", 0.0)

@@ -137,6 +137,13 @@ export function WorkflowSettings({
                   <span className="block text-xs text-zinc-500">Appends individual step outputs to final answer.</span>
                 </span>
               </label>
+              <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-zinc-200 bg-zinc-50 p-2.5">
+                <input type="checkbox" className="mt-0.5 h-4 w-4 accent-indigo-600" checked={config.answer_general_questions ?? true} onChange={(e) => set({ answer_general_questions: e.target.checked })} />
+                <span>
+                  <span className="block text-xs font-medium text-zinc-900">Answer general questions</span>
+                  <span className="block text-xs text-zinc-500">A greeting or a question none of the steps is for gets a direct answer and a list of what this workflow can do, without running the steps. Schedules and webhooks always run the steps.</span>
+                </span>
+              </label>
             </div>
           )}
 

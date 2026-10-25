@@ -99,6 +99,9 @@ class ChatSettings(_Strict):
     welcome: str = Field(default="", max_length=500)
     # Suggested first questions, shown as buttons on an empty chat.
     starters: list[str] = Field(default_factory=list, max_length=4)
+    # Greetings and general questions its goal isn't for get a real answer, ending
+    # with what it can help with (builder.agents.prompts) — not a refusal.
+    answer_general: bool = True
 
     @field_validator("starters")
     @classmethod

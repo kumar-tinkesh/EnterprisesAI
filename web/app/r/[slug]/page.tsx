@@ -610,7 +610,8 @@ function StatusDot({ run }: { run: SharedRun }) {
 /** "▸ 3 steps" above the answer; while it runs, the step it's on. Open: each step and where it got. */
 function Steps({ steps, running }: { steps: SharedStep[]; running: boolean }) {
   const [open, setOpen] = useState(false);
-  if (!steps.length) return null;
+  // Every step skipped: it answered directly (a greeting, a general question) — nothing to show.
+  if (!steps.length || (!running && steps.every((s) => s.status === "skipped"))) return null;
   const now = steps.find((s) => s.status === "running" || s.status === "waiting");
   const done = steps.filter((s) => s.status === "succeeded").length;
   const failed = steps.filter((s) => s.status === "failed").length;
@@ -663,12 +664,15 @@ function Turn({
           ) : run.status === "failed" || run.status === "cancelled" ? (
             <p className="text-sm text-red-600">{run.error || "It couldn't finish this request."}</p>
           ) : run.waiting_for === "approval" ? (
-            <p className="flex items-start gap-2 text-sm text-zinc-700">
-              <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
-              {own && run.approvals.length > 0
-                ? run.approvals.some((a) => a.payload.outbound) ? "Here's what it wrote. Send it?" : "It needs your OK before going on:"
-                : "Waiting for whoever shared this to approve a step. You can leave — the answer will be under History."}
-            </p>
+            own && run.approvals.some((a) => a.payload.outbound) ? (
+              // A message to send is an ordinary step, not a warning: no alert icon.
+              <p className="text-sm text-zinc-700">Here&apos;s what it wrote. Send it?</p>
+            ) : (
+              <p className="flex items-start gap-2 text-sm text-zinc-700">
+                <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+                {own && run.approvals.length > 0 ? "It needs your OK before going on:" : "Waiting for whoever shared this to approve a step. You can leave — the answer will be under History."}
+              </p>
+            )
           ) : live ? (
             <MarkdownView text={live + " ▍"} />
           ) : (

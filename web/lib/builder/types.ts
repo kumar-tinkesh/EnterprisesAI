@@ -59,8 +59,9 @@ export interface AgentConfig {
   reliability?: { retries?: number; request_timeout_seconds?: number | null; fallback_model?: string; retry_on?: string[] };
   approvals?: ApprovalPolicy;
   guardrails?: GuardrailSettings;
-  /** What a person sees on an empty chat: a welcome line and suggested first questions. */
-  chat?: { welcome?: string; starters?: string[] };
+  /** What a person sees on an empty chat: a welcome line and suggested first questions.
+   *  answer_general (default on): greetings and general questions get a real answer, ending with what it can do. */
+  chat?: { welcome?: string; starters?: string[]; answer_general?: boolean };
   /** Long-term memory of each person it works for. */
   memory?: { enabled?: boolean; max_items?: number };
   /** Other standalone agents it may hand tasks to (each becomes an "ask_<name>" tool). */
@@ -550,6 +551,9 @@ export interface WorkflowConfig {
   own_knowledge_base_id?: string | null;
   approvals?: ApprovalPolicy;
   approval_overrides?: { read?: ApprovalOverride; edit?: ApprovalOverride; delete?: ApprovalOverride };
+  /** Default on: a greeting or general question gets a direct answer (ending with what the workflow
+   *  can do) instead of running every step. Only for messages someone types — not schedules or webhooks. */
+  answer_general_questions?: boolean;
 }
 
 export type AnswerDepth = "auto" | "short" | "detailed";

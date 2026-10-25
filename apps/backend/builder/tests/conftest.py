@@ -18,6 +18,21 @@ def _fresh_ip_limits():
     reset_local_counts()
 
 
+@pytest.fixture(autouse=True)
+def _front_desk_off(request, monkeypatch):
+    """A workflow's front desk (builder.workflows.front_desk) makes a model call
+    before the first step; the scripted gateways in the workflow tests don't
+    expect it, so it lets every run through unless a test marks ``front_desk``."""
+    if request.node.get_closest_marker("front_desk"):
+        return
+    from builder.workflows import front_desk
+
+    async def let_through(definition, text, history=None):
+        return dict(front_desk.TASK)
+
+    monkeypatch.setattr(front_desk, "decide", let_through)
+
+
 @pytest_asyncio.fixture
 async def make_user_client(db):
     """A client authenticated as any ``CurrentUser`` (the shared conftest only has fixed ones)."""

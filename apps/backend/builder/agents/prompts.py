@@ -54,6 +54,13 @@ _DEPTH = {
 }
 
 
+_GENERAL_RULES = (
+    "If someone greets you, makes small talk, or asks a general question your goal isn't for, answer it helpfully "
+    "from your own knowledge, in their language and tone. Don't refuse it or force it into your task. End such an "
+    "answer with one short line on what you can help with. Leave that line off answers about your own work."
+)
+
+
 def system_prompt(
     agent: dict, config: AgentConfig, *, has_tools: bool, has_knowledge: bool, depth: str = "auto",
     extra: list[str] | None = None,
@@ -65,6 +72,8 @@ def system_prompt(
         parts.append(f"Instructions:\n{agent['instructions']}")
     if has_tools:
         parts.append(_TOOL_RULES)
+    if config.chat.answer_general:
+        parts.append(_GENERAL_RULES)
     if has_knowledge:
         parts.append("For questions about the organisation's own documents and policies, search the knowledge base first and answer from what it returns.")
     rules = response_rules(config)

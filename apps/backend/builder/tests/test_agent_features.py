@@ -230,7 +230,7 @@ async def test_export_then_import_matches_tools_by_name(tenant_client, demo):
     assert r.status_code == 201, r.text
     body = r.json()
     assert body["agent"]["id"] != agent["id"] and body["agent"]["config"]["tool_ids"] == [f"mcp:{demo.id}:echo"]
-    assert body["agent"]["config"]["chat"] == {"welcome": "Hi!", "starters": ["Echo something"]}
+    assert body["agent"]["config"]["chat"] == {"welcome": "Hi!", "starters": ["Echo something"], "answer_general": True}
     assert len(body["skipped"]) == 2
 
     assert (await tenant_client.post(f"{B}/agents/import", json={**file, "format": "other"})).status_code == 422
@@ -311,6 +311,6 @@ def test_payload_text_shapes():
 
 async def test_welcome_and_starters_are_validated(tenant_client, demo):
     agent = await make_agent(tenant_client, demo, [], chat={"welcome": "Ask me about refunds.", "starters": [" Refund status ", "Refund status", ""]})
-    assert agent["config"]["chat"] == {"welcome": "Ask me about refunds.", "starters": ["Refund status"]}
+    assert agent["config"]["chat"] == {"welcome": "Ask me about refunds.", "starters": ["Refund status"], "answer_general": True}
     r = await tenant_client.post(f"{B}/agents", json={"name": "X", "role": "r", "goal": "g", "config": {"chat": {"starters": ["a"] * 5}}})
     assert r.status_code == 422

@@ -59,6 +59,7 @@ python_files = ["test_*.py"]
 pythonpath = [".", "apps/auth", "apps/backend", "apps/llm_gateway"]
 asyncio_mode = "auto"
 filterwarnings = ["ignore::DeprecationWarning"]
+markers = ["front_desk: run a workflow's real front desk (builder.workflows.front_desk) instead of letting every message through"]
 
 [tool.importlinter]
 root_packages = ["vendor", "user", "knowledge", "builder"]

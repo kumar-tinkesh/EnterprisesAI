@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { ChevronDown, Hand, Link2, Send, ShieldAlert } from "lucide-react";
+import { CheckCircle2, ChevronDown, CircleSlash, Hand, Link2, Pencil, Send, ShieldAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -121,16 +121,22 @@ function DecisionCard({ approval, token, onDone }: { approval: Approval; token: 
 }
 
 /** A send tool waiting on a yes: the message it wrote first, then "send it?". A no keeps the
- *  message in the answer without sending it (builder.agents.runtime: _with_kept_drafts). */
+ *  message in the answer without sending it (builder.agents.runtime: _with_kept_drafts).
+ *  Styled as part of the answer, in the app's own tokens — amber only marks that it's waiting. */
 function SendCard({ approval, draft, token, onDone }: { approval: Approval; draft: OutboundDraft; token: string; onDone: () => void }) {
   const p = approval.payload;
   const [body, setBody] = useState(draft.body);
+  const [editing, setEditing] = useState(false);
   const [details, setDetails] = useState(false);
+  const [decided, setDecided] = useState<"sent" | "kept" | null>(null);
   const changed = body !== draft.body;
   const decide = useMutation({
     mutationFn: ({ decision, body }: { decision: "approve" | "reject" | "edit"; body?: Record<string, unknown> }) =>
       builderApi.decide(token, approval.id, decision, body),
-    onSuccess: onDone,
+    onSuccess: (_data, { decision }) => {
+      setDecided(decision === "reject" ? "kept" : "sent");
+      onDone();
+    },
   });
   const error =
     decide.error instanceof ApiError
@@ -142,48 +148,109 @@ function SendCard({ approval, draft, token, onDone }: { approval: Approval; draf
   const send = () =>
     decide.mutate(changed ? { decision: "edit", body: { ...(p.arguments ?? {}), [draft.body_field]: body } } : { decision: "approve" });
 
+  if (decided) {
+    return (
+      <p className="flex items-center gap-1.5 text-xs text-[var(--text-muted)]">
+        {decided === "sent" ? (
+          <><CheckCircle2 className="h-3.5 w-3.5 text-[var(--success)]" /> Sending{draft.to ? ` to ${draft.to}` : ""}…</>
+        ) : (
+          <><CircleSlash className="h-3.5 w-3.5" /> Not sent — kept in the reply</>
+        )}
+      </p>
+    );
+  }
+
   return (
-    <div className="space-y-3 rounded-xl border border-amber-300 bg-amber-50/60 p-3">
+    <div className="space-y-3 rounded-2xl border border-[var(--border)] bg-[var(--surface-raised)] p-3.5">
       <div className="flex items-center gap-2">
-        <Send className="h-4 w-4 text-amber-700" />
-        <p className="flex-1 text-sm font-semibold text-amber-900">Ready to send{p.server_name ? ` via ${p.server_name}` : ""}</p>
+        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--accent-wash)]">
+          <Send className="h-3.5 w-3.5 text-[var(--link)]" />
+        </span>
+        <p className="min-w-0 flex-1 truncate text-sm font-medium text-[var(--text)]">
+          Ready to send{p.server_name ? <span className="font-normal text-[var(--text-muted)]"> · {p.server_name}</span> : null}
+        </p>
+        <span className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--text-subtle)]">
+          <span className="h-1.5 w-1.5 rounded-full bg-[var(--warning)]" aria-hidden /> Waiting for you
+        </span>
       </div>
+
       {approval.caller && (
-        <p className="flex items-center gap-1 text-xs text-amber-900" title="This run came in through your share link and uses your connected tools.">
+        <p className="flex items-center gap-1 text-xs text-[var(--text-muted)]" title="This run came in through your share link and uses your connected tools.">
           <Link2 className="h-3 w-3 shrink-0" /> Via share link · {approval.caller.name || approval.caller.email || "a deleted account"}
           {approval.caller.name && approval.caller.email ? ` (${approval.caller.email})` : ""}
         </p>
       )}
+
       {(draft.to || draft.subject) && (
-        <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-xs">
-          {draft.to && (<><dt className="text-zinc-500">To</dt><dd className="break-all text-zinc-800">{draft.to}</dd></>)}
-          {draft.subject && (<><dt className="text-zinc-500">Subject</dt><dd className="text-zinc-800">{draft.subject}</dd></>)}
-        </dl>
-      )}
-      <Textarea rows={Math.min(12, Math.max(4, body.split("\n").length + 1))} value={body} onChange={(e) => setBody(e.target.value)} aria-label="Message" />
-      <p className="text-sm font-medium text-amber-900">Send this?</p>
-      <div className="flex flex-wrap gap-2">
-        <Button size="sm" disabled={busy || !body.trim()} onClick={send}>{changed ? "Send my version" : "Yes, send"}</Button>
-        <Button size="sm" variant="outline" disabled={busy} onClick={() => decide.mutate({ decision: "reject" })}>
-          No, just keep the reply
-        </Button>
-      </div>
-      <button
-        type="button"
-        onClick={() => setDetails((d) => !d)}
-        aria-expanded={details}
-        className="flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-800 cursor-pointer"
-      >
-        <ChevronDown className={`h-3 w-3 transition-transform ${details ? "rotate-180" : ""}`} /> Details
-      </button>
-      {details && (
-        <div className="space-y-1">
-          {p.message && <p className="text-xs text-zinc-600">{p.message}</p>}
-          <pre className="max-h-40 overflow-auto rounded bg-white p-2 text-xs text-zinc-700">{JSON.stringify(p.arguments ?? {}, null, 2)}</pre>
+        <div className="flex flex-wrap gap-1.5 text-xs">
+          {draft.to && (
+            <span className="max-w-full truncate rounded-md bg-[var(--surface-strong)] px-2 py-0.5 text-[var(--text-secondary)]">
+              <span className="text-[var(--text-subtle)]">To</span> {draft.to}
+            </span>
+          )}
+          {draft.subject && (
+            <span className="max-w-full truncate rounded-md bg-[var(--surface-strong)] px-2 py-0.5 text-[var(--text-secondary)]">
+              <span className="text-[var(--text-subtle)]">Subject</span> {draft.subject}
+            </span>
+          )}
         </div>
       )}
-      {busy && <Spinner className="h-4 w-4 text-amber-700" />}
-      {error && <p className="text-xs text-red-700">{error}</p>}
+
+      {editing ? (
+        <textarea
+          autoFocus
+          rows={Math.min(14, Math.max(4, body.split("\n").length + 1))}
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && body.trim() && !busy) send();
+          }}
+          aria-label="Message"
+          className="w-full resize-y rounded-xl border border-[var(--border-strong)] bg-[var(--surface-strong)] px-3 py-2.5 text-sm leading-relaxed text-[var(--text)] outline-none focus:border-[var(--accent-border)]"
+        />
+      ) : (
+        <div className="max-h-72 overflow-y-auto whitespace-pre-wrap break-words rounded-xl bg-[var(--surface-strong)] px-3 py-2.5 text-sm leading-relaxed text-[var(--text-secondary)]">
+          {body}
+        </div>
+      )}
+
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <Button size="sm" className="w-full sm:w-auto" disabled={busy || !body.trim()} onClick={send}>
+          {busy && decide.variables?.decision !== "reject" ? <Spinner className="h-4 w-4" /> : <Send />}
+          {changed ? "Send my version" : "Send"}
+        </Button>
+        <Button size="sm" variant="outline" className="w-full sm:w-auto" disabled={busy} onClick={() => decide.mutate({ decision: "reject" })}>
+          Don&apos;t send
+        </Button>
+        <div className="flex items-center justify-end gap-3 sm:ml-auto">
+          <button
+            type="button"
+            onClick={() => setEditing((e) => !e)}
+            className="flex items-center gap-1 text-xs text-[var(--text-muted)] hover:text-[var(--text)] cursor-pointer"
+          >
+            <Pencil className="h-3 w-3" /> {editing ? "Done editing" : "Edit"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setDetails((d) => !d)}
+            aria-expanded={details}
+            className="flex items-center gap-1 text-xs text-[var(--text-muted)] hover:text-[var(--text)] cursor-pointer"
+          >
+            Details <ChevronDown className={`h-3 w-3 transition-transform ${details ? "rotate-180" : ""}`} />
+          </button>
+        </div>
+      </div>
+      {editing && <p className="text-xs text-[var(--text-subtle)]">⌘/Ctrl + Enter to send</p>}
+
+      {details && (
+        <div className="space-y-1.5">
+          {p.message && <p className="text-xs text-[var(--text-muted)]">{p.message}</p>}
+          <pre className="max-h-40 overflow-auto rounded-lg bg-[var(--surface-strong)] p-2.5 font-mono text-xs text-[var(--text-muted)]">
+            {JSON.stringify(p.arguments ?? {}, null, 2)}
+          </pre>
+        </div>
+      )}
+      {error && <p className="text-xs text-[var(--danger)]">{error}</p>}
     </div>
   );
 }

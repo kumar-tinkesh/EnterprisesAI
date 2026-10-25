@@ -77,6 +77,11 @@ export function ChatStep({ draft, update }: StepProps) {
           )}
           {starters.length === 0 && <p className="text-xs text-zinc-400">None yet: the chat shows general questions instead.</p>}
         </div>
+        <Toggle
+          checked={chat.answer_general ?? true}
+          onChange={(answer_general) => setChat({ answer_general })}
+          label="Answer greetings and general questions too, then say what it can help with"
+        />
       </Category>
 
       <Category icon={Brain} tone="violet" title="Long-term memory" hint="It saves facts about each person (preferences, their project) and knows them in later chats." badge={<Badge tone={memory.enabled ? "violet" : "zinc"}>{memory.enabled ? "On" : "Off"}</Badge>}>
