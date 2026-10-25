@@ -700,10 +700,22 @@ export interface Approval {
     errors?: string[];
     requester?: string;
     step?: string;
+    /** A send tool (it sends something to other people) — it always asks first. */
+    outbound?: boolean;
+    /** What it's about to send, when its arguments carry message text. */
+    draft?: OutboundDraft | null;
   };
   created_at: string;
   /** Set when the run came in through a share link: whose request you're deciding on. */
   caller?: Caller | null;
+}
+
+export interface OutboundDraft {
+  body: string;
+  /** The argument the body came from — where an edited body goes back. */
+  body_field: string;
+  to: string | null;
+  subject: string | null;
 }
 
 /** Someone signed in who ran a share link. */

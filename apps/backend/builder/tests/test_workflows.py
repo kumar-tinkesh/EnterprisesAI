@@ -222,6 +222,22 @@ async def test_tool_step_waits_for_approval_and_passes_its_input_on(tenant_clien
     assert runtime["notes"].read_text() == "hello world\n"
 
 
+async def test_tool_step_told_not_to_send_keeps_the_message(tenant_client, demo, llm, runtime):
+    wf = await workflow(tenant_client, [INPUT, {"id": "t", "type": "tool", "tool_id": f"mcp:{demo.id}:send_note"}, OUTPUT], [("in", "t"), ("t", "out")])
+    run_id = await start(tenant_client, wf, "hello world")
+    w = worker(runtime)
+    await w.drain()
+    [ask] = (await tenant_client.get("/api/v1/builder/approvals")).json()
+    assert ask["payload"]["draft"]["body"] == "hello world"
+    await tenant_client.post(f"/api/v1/builder/approvals/{ask['id']}", json={"decision": "reject"})
+    await w.drain()
+    run = await get_run(tenant_client, run_id)
+    # Not a failure: the run finishes with the message it didn't send.
+    assert run["status"] == "succeeded"
+    assert run["output_text"].startswith("hello world") and "Not sent" in run["output_text"]
+    assert not runtime["notes"].exists()
+
+
 async def test_missing_tool_input_is_asked_for_never_invented(tenant_client, demo, llm, runtime):
     llm.when("is calling the tool", reply(json.dumps({"to": "boss@made-up.example"})))
     wf = await workflow(
@@ -335,9 +351,9 @@ async def test_join_any_goes_on_without_a_failed_branch(tenant_client, demo, llm
 
 
 async def test_crash_mid_workflow_resumes_without_redoing_finished_steps(db, tenant_client, demo, llm, runtime):
-    noter = await agent(tenant_client, "Noter", demo, ["send_note"], approvals={"read": False, "edit": False, "delete": True})
+    noter = await agent(tenant_client, "Noter", demo, ["save_note"], approvals={"read": False, "edit": False, "delete": True})
     closer = await agent(tenant_client, "Closer")
-    llm.when("You are Noter", reply(calls=[("demo__send_note", {"text": "once"})]), "noted")
+    llm.when("You are Noter", reply(calls=[("demo__save_note", {"text": "once"})]), "noted")
     llm.when("You are Closer", HANG, "closed")
     wf = await workflow(
         tenant_client,

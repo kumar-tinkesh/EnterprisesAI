@@ -10,6 +10,9 @@ and workflow tool steps.
   returned; nothing is sent again.
 * Needs a yes (the site's approval policy for the tool's risk) -> a
   ``tool_call`` approval; approved / edited -> runs, rejected -> declined.
+  An outbound tool (it sends something to other people — ``is_outbound_tool``)
+  always needs one, whatever the policy says: the person reads the draft
+  first, and a "no" keeps the draft without sending it (``OUTBOUND_DECLINED``).
 * In a test run (``site.dry_run``) a data-changing call is recorded and
   answered as if it worked, without being sent or asking anyone: testing an
   agent is no reason to change real records. Read calls run for real.
@@ -33,7 +36,9 @@ from builder.graph.schema import ToolApprovalPolicy
 from builder.models import BuilderApproval, BuilderToolCall
 from builder.runs import states
 from builder.runs.db import session_factory, utcnow
-from builder.services.tool_runtime import ToolRuntimeError, ToolUnavailable, classify_tool, invoke_tool, validate_arguments
+from builder.services.tool_runtime import (
+    ToolRuntimeError, ToolUnavailable, classify_tool, invoke_tool, is_outbound_tool, outbound_draft, validate_arguments,
+)
 
 
 class Paused(Exception):
@@ -67,6 +72,13 @@ class CallSite:
         return self.tool_owners.get(server_id, self.user)
 
 
+DECLINED = "The user declined this tool call."
+# What the agent reads after a "don't send": the answer it finishes with gets the draft added (builder.agents.runtime).
+OUTBOUND_DECLINED = (
+    "The person read this and chose not to send it, so it was NOT sent. Don't try to send it again. "
+    "Finish with a short answer; the draft is kept and shown to them."
+)
+
 DRY_RUN_RESULT = (
     "[Test run] This action was not actually performed, because this is a test. "
     "Carry on as if it succeeded."
@@ -85,6 +97,7 @@ class CallOutcome:
 async def _ask(db, site: CallSite, ledger: BuilderToolCall, tool: AgentTool, kind: str, arguments: dict) -> BuilderApproval:
     # Whoever's account the call would use decides on it.
     decider = site.owner(tool.server_id)
+    outbound = is_outbound_tool(tool.tool_name)
     approval = BuilderApproval(
         run_id=site.run_id,
         tenant_id=decider.tenant_id,
@@ -102,6 +115,9 @@ async def _ask(db, site: CallSite, ledger: BuilderToolCall, tool: AgentTool, kin
             "arguments": arguments,
             "input_schema": tool.input_schema,
             "requester": site.requester,
+            # A send tool: shown as the message it's about to send, not as raw arguments.
+            "outbound": outbound,
+            "draft": outbound_draft(arguments) if outbound else None,
             "message": (
                 f"{tool.tool_name} on {tool.server_name} may already have run before the run was interrupted. Run it again?"
                 if kind == states.KIND_UNCERTAIN_CALL
@@ -152,7 +168,7 @@ async def ledgered_call(site: CallSite, tool: AgentTool, call_key: str, argument
                                 arguments=arguments, node_id=site.node_id, simulated=True)
                 await site.emit("tool_call", phase="finished", tool=tool.tool_name, is_error=False, node_id=site.node_id, simulated=True)
                 return CallOutcome(text=DRY_RUN_RESULT)
-            needs_yes = getattr(site.approvals, risk.risk) and not site.dry_run
+            needs_yes = (getattr(site.approvals, risk.risk) or is_outbound_tool(tool.tool_name)) and not site.dry_run
             ledger = BuilderToolCall(
                 run_id=site.run_id, node_run_id=site.node_run_id, node_id=site.node_id, call_key=call_key,
                 server_id=tool.server_id, tool_name=tool.tool_name, risk=risk.risk, arguments=arguments,
@@ -171,7 +187,7 @@ async def ledgered_call(site: CallSite, tool: AgentTool, call_key: str, argument
                 raise Paused(approval.id)
             if approval.status not in states.APPROVAL_YES:
                 ledger.status, ledger.finished_at = states.CALL_DECLINED, utcnow()
-                ledger.result_text = "The user declined this tool call."
+                ledger.result_text = OUTBOUND_DECLINED if is_outbound_tool(tool.tool_name) else DECLINED
                 await db.commit()
                 await site.emit("tool_call", phase="declined", tool=tool.tool_name, node_id=site.node_id)
                 return CallOutcome(text=ledger.result_text, declined=True)
@@ -241,4 +257,4 @@ async def ledgered_call(site: CallSite, tool: AgentTool, call_key: str, argument
     return CallOutcome(text=text, is_error=is_error, error=error, structured=structured)
 
 
-__all__ = ["CallSite", "CallOutcome", "Paused", "ledgered_call"]
+__all__ = ["CallSite", "CallOutcome", "DECLINED", "OUTBOUND_DECLINED", "Paused", "ledgered_call"]

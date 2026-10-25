@@ -44,7 +44,7 @@ async def test_step_summary_and_answer_depth(tenant_client, llm, runtime):
 
 
 async def test_approval_overrides_decide_for_every_step(tenant_client, demo, runtime):
-    note = {"id": "t", "type": "tool", "tool_id": f"mcp:{demo.id}:send_note", "tool_args": {"text": "hi"}}
+    note = {"id": "t", "type": "tool", "tool_id": f"mcp:{demo.id}:save_note", "tool_args": {"text": "hi"}}
     never = await workflow(tenant_client, [INPUT, note, OUTPUT], [("in", "t"), ("t", "out")], approval_overrides={"edit": "never"})
     run_id = await start(tenant_client, never, "go")
     await worker(runtime).drain()

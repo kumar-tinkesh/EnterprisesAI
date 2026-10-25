@@ -35,8 +35,8 @@ from builder.graph.schema import ApprovalOverrides, ToolApprovalPolicy
 from builder.models import BuilderApproval, BuilderNodeRun
 from builder.runs import states
 from builder.runs.db import session_factory
-from builder.runs.tool_calls import CallSite, Paused, ledgered_call
-from builder.services.tool_runtime import classify_tool
+from builder.runs.tool_calls import OUTBOUND_DECLINED, CallSite, Paused, ledgered_call
+from builder.services.tool_runtime import classify_tool, outbound_draft
 from builder.services.tool_runtime.errors import InvalidArguments
 from builder.workflows import text as T
 from builder.workflows.scheduler import Graph
@@ -309,6 +309,11 @@ async def run_tool_step(ctx: StepContext) -> NodeOutcome:
         tool_owners=ctx.tool_owners,
     )
     outcome = await ledgered_call(site, tool, f"{ctx.node_id}:a{ctx.attempt}:tool", arguments)
+    if outcome.declined and outcome.text == OUTBOUND_DECLINED:
+        # "Don't send" keeps the message and goes on — it isn't a failure.
+        draft = outbound_draft(arguments)
+        kept = draft["body"] if draft else ctx.input_text
+        return NodeOutcome(ok=True, output=f"{kept}\n\n_Not sent — you chose not to send this._", prompt_tokens=pt, completion_tokens=ct)
     if outcome.declined:
         return NodeOutcome(ok=False, error=f"Stopped: {outcome.text}", never_skip=True, prompt_tokens=pt, completion_tokens=ct)
     if outcome.is_error:

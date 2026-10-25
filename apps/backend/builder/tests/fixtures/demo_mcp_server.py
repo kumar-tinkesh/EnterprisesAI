@@ -59,6 +59,13 @@ def send_note(text: str) -> str:
     return f"{len(notes.read_text(encoding='utf-8').splitlines())} notes"
 
 
+@server.tool()
+def save_note(text: str) -> str:
+    """Like send_note, but not a send tool (it changes data without sending
+    anything to anyone), so the approval policy alone decides whether it asks."""
+    return send_note(text)
+
+
 @server.tool(annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True))
 def wipe() -> str:
     """Remove every note."""
@@ -98,12 +105,12 @@ def email_report(to: str, body: str) -> str:
 
 
 @server.tool()
-async def post_slowly(text: str, seconds: float) -> str:
+async def write_slowly(text: str, seconds: float) -> str:
     """A data-changing tool that does its work, then takes a while to answer."""
     with (_home() / "notes.txt").open("a", encoding="utf-8") as fh:
         fh.write(text + "\n")
     await asyncio.sleep(seconds)
-    return "posted"
+    return "written"
 
 
 @server.tool()

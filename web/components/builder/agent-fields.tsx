@@ -391,6 +391,7 @@ export function AgentFields({
         <BoolParam k="approvals.read" label="Tools that only read" checked={approvals.read} onChange={(v) => setConfig({ approvals: { ...approvals, read: v } })} />
         <BoolParam k="approvals.edit" label="Tools that change data" checked={approvals.edit} onChange={(v) => setConfig({ approvals: { ...approvals, edit: v } })} />
         <BoolParam k="approvals.delete" label="Tools that delete" checked={approvals.delete} onChange={(v) => setConfig({ approvals: { ...approvals, delete: v } })} />
+        <p className="text-xs text-zinc-500">Tools that send messages (WhatsApp, email, posts) always show what they wrote and ask first.</p>
       </Section>}
 
       {show("guardrails") && <GuardrailFields

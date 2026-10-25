@@ -665,7 +665,9 @@ function Turn({
           ) : run.waiting_for === "approval" ? (
             <p className="flex items-start gap-2 text-sm text-zinc-700">
               <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
-              {own && run.approvals.length > 0 ? "It needs your OK before going on:" : "Waiting for whoever shared this to approve a step. You can leave — the answer will be under History."}
+              {own && run.approvals.length > 0
+                ? run.approvals.some((a) => a.payload.outbound) ? "Here's what it wrote. Send it?" : "It needs your OK before going on:"
+                : "Waiting for whoever shared this to approve a step. You can leave — the answer will be under History."}
             </p>
           ) : live ? (
             <MarkdownView text={live + " ▍"} />

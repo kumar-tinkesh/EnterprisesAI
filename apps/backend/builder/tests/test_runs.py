@@ -222,7 +222,31 @@ async def test_rejected_call_is_reported_to_the_model(tenant_client, demo, gatew
     run = await get_run(tenant_client, run_id)
     assert run["status"] == "succeeded" and not runtime["notes"].exists()
     assert run["tool_calls"][0]["status"] == "declined"
-    assert "declined" in gw.requests[-1].messages[-1].content
+    assert "NOT sent" in gw.requests[-1].messages[-1].content
+    # "Don't send" keeps the message: it's in the answer even though the model didn't repeat it.
+    assert run["output_text"].startswith("OK, I didn't send it.")
+    assert "**Not sent** — draft:\n\nhello" in run["output_text"]
+
+
+async def test_send_tool_shows_its_draft_and_asks_even_when_edits_dont(tenant_client, demo, gateway, runtime):
+    # Approvals off for data-changing calls — a send tool still asks first.
+    agent = await make_agent(tenant_client, demo, ["send_note"], approvals={"read": False, "edit": False, "delete": True})
+    gateway([reply(calls=[("demo__send_note", {"text": "hello"})]), reply("Sent.")])
+    run_id = await start(tenant_client, agent)
+    w = worker(runtime)
+    await w.drain()
+
+    assert (await get_run(tenant_client, run_id))["status"] == "waiting"
+    assert not runtime["notes"].exists()
+    [approval] = (await tenant_client.get("/api/v1/builder/approvals")).json()
+    assert approval["payload"]["outbound"] is True
+    assert approval["payload"]["draft"] == {"body": "hello", "body_field": "text", "to": None, "subject": None}
+
+    await tenant_client.post(f"/api/v1/builder/approvals/{approval['id']}", json={"decision": "approve"})
+    await w.drain()
+    run = await get_run(tenant_client, run_id)
+    assert run["status"] == "succeeded" and run["output_text"] == "Sent."
+    assert runtime["notes"].read_text() == "hello\n"
 
 
 async def test_edited_arguments_are_validated_and_used(tenant_client, demo, gateway, runtime):
@@ -243,8 +267,8 @@ async def test_edited_arguments_are_validated_and_used(tenant_client, demo, gate
 
 
 async def test_approval_policy_can_allow_writes(tenant_client, demo, gateway, runtime):
-    agent = await make_agent(tenant_client, demo, ["send_note"], approvals={"read": False, "edit": False, "delete": True})
-    gateway([reply(calls=[("demo__send_note", {"text": "auto"})]), reply("Done.")])
+    agent = await make_agent(tenant_client, demo, ["save_note"], approvals={"read": False, "edit": False, "delete": True})
+    gateway([reply(calls=[("demo__save_note", {"text": "auto"})]), reply("Done.")])
     run_id = await start(tenant_client, agent)
     await worker(runtime).drain()
     assert (await get_run(tenant_client, run_id))["status"] == "succeeded"
@@ -268,8 +292,8 @@ async def test_cancel_a_waiting_run(tenant_client, demo, gateway, runtime):
 
 
 async def test_crash_between_model_turns_resumes_without_repeating_a_write(db, tenant_client, demo, gateway, runtime):
-    agent = await make_agent(tenant_client, demo, ["send_note"], approvals={"read": False, "edit": False, "delete": True})
-    gw = gateway([reply(calls=[("demo__send_note", {"text": "once"})]), HANG, reply("All done.")])
+    agent = await make_agent(tenant_client, demo, ["save_note"], approvals={"read": False, "edit": False, "delete": True})
+    gw = gateway([reply(calls=[("demo__save_note", {"text": "once"})]), HANG, reply("All done.")])
     run_id = await start(tenant_client, agent)
 
     w1 = worker(runtime, "w1")
@@ -289,8 +313,8 @@ async def test_crash_between_model_turns_resumes_without_repeating_a_write(db, t
 
 
 async def test_crash_during_a_write_call_asks_before_running_it_again(db, tenant_client, demo, gateway, runtime):
-    agent = await make_agent(tenant_client, demo, ["post_slowly"], approvals={"read": False, "edit": False, "delete": True})
-    gw = gateway([reply(calls=[("demo__post_slowly", {"text": "maybe", "seconds": 30})]), reply("Finished.")])
+    agent = await make_agent(tenant_client, demo, ["write_slowly"], approvals={"read": False, "edit": False, "delete": True})
+    gw = gateway([reply(calls=[("demo__write_slowly", {"text": "maybe", "seconds": 30})]), reply("Finished.")])
     events: list[dict] = []
     run_id = await start(tenant_client, agent)
 

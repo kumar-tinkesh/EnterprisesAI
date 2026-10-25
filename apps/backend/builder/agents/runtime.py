@@ -63,7 +63,8 @@ from builder.models import BuilderAttachment, BuilderNodeRun
 from builder.pricing import add_cost, estimate_cost_usd
 from builder.runs import states
 from builder.runs.db import session_factory, utcnow
-from builder.runs.tool_calls import CallSite, Paused, ledgered_call
+from builder.runs.tool_calls import OUTBOUND_DECLINED, CallSite, Paused, ledgered_call
+from builder.services.tool_runtime.classification import outbound_draft
 from builder.services.tool_runtime.errors import InvalidArguments
 
 logger = logging.getLogger("builder.agents.runtime")
@@ -491,9 +492,29 @@ async def _run_call(
             outcome = await ledgered_call(site, tool, f"{key}:r{retry + 1}", arguments)
     except InvalidArguments as exc:
         return "Error: " + exc.message + " " + "; ".join(exc.errors)
+    if outcome.declined and outcome.text == OUTBOUND_DECLINED:
+        # "Don't send": the draft stays in the answer (see _with_kept_drafts) — keyed by
+        # the call, so a resumed run that meets this call again doesn't add it twice.
+        draft = outbound_draft(arguments)
+        if draft:
+            state.setdefault("kept_drafts", {})[key] = draft
     if outcome.is_error and not outcome.declined and ctx.config.tools.on_failure == "stop":
         raise AgentFailed(f"{tool.tool_name} failed: {outcome.error or outcome.text[:500]}")
     return await _guard_tool_result(ctx, state, tool.tool_name, _model_text(outcome.text))
+
+
+def _with_kept_drafts(text: str, state: dict) -> str:
+    """The answer, with every message the person chose not to send added under it —
+    not left to the model to repeat: "don't send" means "keep it", and it must be there."""
+    parts = [text.rstrip()] if text.strip() else []
+    for draft in (state.get("kept_drafts") or {}).values():
+        if draft["body"].strip() in text:
+            continue
+        head = f"**Not sent** — draft for {draft['to']}:" if draft.get("to") else "**Not sent** — draft:"
+        if draft.get("subject"):
+            head += f"\n\n**Subject:** {draft['subject']}"
+        parts.append(f"{head}\n\n{draft['body']}")
+    return "\n\n---\n\n".join(parts)
 
 
 def _memory_on(ctx: AgentContext) -> bool:
@@ -607,7 +628,7 @@ async def run_agent(ctx: AgentContext) -> AgentResult:
                     raise GuardrailBlocked(state["final"]["blocked"], list(state.get("guardrails") or []))
                 text = state["final"]["text"]
             return AgentResult(
-                text=text,
+                text=_with_kept_drafts(text, state),
                 prompt_tokens=state["prompt_tokens"],
                 completion_tokens=state["completion_tokens"],
                 tool_calls=state["tool_calls"],

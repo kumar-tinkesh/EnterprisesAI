@@ -179,7 +179,7 @@ function Governance({ config, token, set }: { config: WorkflowConfig; token: str
       </div>
       <div>
         <span className="mb-1 block text-xs font-medium text-zinc-600">Approval Overrides (this workflow)</span>
-        <p className="mb-1.5 text-xs text-zinc-500">Ask before tools run — Default leaves it to each step&apos;s agent.</p>
+        <p className="mb-1.5 text-xs text-zinc-500">Ask before tools run — Default leaves it to each step&apos;s agent. Tools that send messages always ask.</p>
         <div className="grid grid-cols-3 gap-2">
           {([["read", "Reads", Eye], ["edit", "Writes", Edit3], ["delete", "Deletes", Trash2]] as const).map(([kind, label, Icon]) => (
             <label key={kind} className="flex flex-col gap-1 rounded-xl border border-zinc-200 bg-zinc-50 p-2">

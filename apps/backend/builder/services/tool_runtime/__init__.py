@@ -4,7 +4,7 @@ See ``invoke.invoke_tool`` for the full call path and its guarantees.
 """
 from __future__ import annotations
 
-from builder.services.tool_runtime.classification import Risk, ToolRisk, classify_tool
+from builder.services.tool_runtime.classification import Risk, ToolRisk, classify_tool, is_outbound_tool, outbound_draft
 from builder.services.tool_runtime.errors import (
     ConfirmationRequired,
     InvalidArguments,
@@ -29,6 +29,8 @@ __all__ = [
     "Risk",
     "ToolRisk",
     "classify_tool",
+    "is_outbound_tool",
+    "outbound_draft",
     "ToolRuntimeError",
     "ConfirmationRequired",
     "InvalidArguments",
