@@ -230,7 +230,8 @@ async def test_mcp_connection(
             # Keep what "Connect via OAuth" saved (refresh token, the OAuth app's ID/secret that
             # people's own sign-ins use) — the form only re-sends the fields it shows.
             stored = await mcp_auth.load_server_credentials(db, server_id=str(server.id), tenant_id=tenant_id)
-            to_store = {**stored, **request_credentials}
+            # Blank form fields mustn't wipe what the sign-in saved (a registered client_id, the token).
+            to_store = {**stored, **{k: v for k, v in request_credentials.items() if v}}
         await mcp_auth.store_server_credentials(
             db, server_id=str(server.id), credentials=to_store, tenant_id=tenant_id
         )

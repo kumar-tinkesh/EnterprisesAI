@@ -137,6 +137,7 @@ async def _discover_oauth_metadata(
     candidates.append(_base_url(target).rstrip("/") + _PROTECTED_RESOURCE_WELLKNOWN)
 
     as_meta: dict | None = None
+    resource_doc: dict | None = None
     for candidate in candidates:
         resource_doc = await _fetch_json(client, candidate)
         if not resource_doc:
@@ -161,13 +162,19 @@ async def _discover_oauth_metadata(
         return None
 
     hints.append(f"OAuth2 token endpoint discovered: {as_meta['token_endpoint']}")
+    resource_doc = resource_doc or {}
     return {
         "authorization_server": as_meta.get("issuer"),
+        "authorization_endpoint": as_meta.get("authorization_endpoint"),
         "token_endpoint": as_meta["token_endpoint"],
         "registration_endpoint": as_meta.get("registration_endpoint"),
-        "scopes_supported": as_meta.get("scopes_supported") or [],
+        # The MCP auth spec asks for the resource's own scopes first (RFC 9728), the AS's otherwise.
+        "scopes_supported": resource_doc.get("scopes_supported") or as_meta.get("scopes_supported") or [],
         "grant_types_supported": as_meta.get("grant_types_supported")
         or ["authorization_code", "refresh_token"],
+        "code_challenge_methods_supported": as_meta.get("code_challenge_methods_supported") or [],
+        # RFC 8707 audience: sent on authorize/token requests so the token is minted for this server.
+        "resource": resource_doc.get("resource"),
     }
 
 

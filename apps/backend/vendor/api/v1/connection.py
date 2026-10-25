@@ -72,6 +72,8 @@ async def test_mcp_connection_endpoint(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found"
         )
+    # Read before the attempt: a rollback expires the row.
+    remote, oauth2 = server.transport in ("streamable_http", "sse"), server.auth_type == "oauth2"
     try:
         creds = payload.credentials if payload is not None else None
         # Vendor admins verify with the server's single shared "primary"
@@ -102,7 +104,13 @@ async def test_mcp_connection_endpoint(
                     sub_msgs.append(str(sub))
             err_msg = " | ".join(sub_msgs)
 
-        if "Connection closed" in err_msg or "MCPError" in err_msg:
+        if ("Connection closed" in err_msg or "MCPError" in err_msg or "returned an error response" in err_msg) and remote:
+            err_msg = (
+                "The server refused the request — it needs you signed in. Use Connect via OAuth first."
+                if oauth2
+                else "The server refused the request. Please verify the credentials."
+            )
+        elif "Connection closed" in err_msg or "MCPError" in err_msg:
             err_msg = "MCP server process exited (connection closed). Please verify primary credentials and server command."
 
         raise HTTPException(
@@ -126,6 +134,8 @@ async def connect_mcp_server_endpoint(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found"
         )
+    # Read before the attempt: a rollback expires the row.
+    remote, oauth2 = server.transport in ("streamable_http", "sse"), server.auth_type == "oauth2"
     try:
         creds = payload.credentials if payload is not None else None
         result = await connect_registered_server(
@@ -152,7 +162,13 @@ async def connect_mcp_server_endpoint(
                     sub_msgs.append(str(sub))
             err_msg = " | ".join(sub_msgs)
 
-        if "Connection closed" in err_msg or "MCPError" in err_msg:
+        if ("Connection closed" in err_msg or "MCPError" in err_msg or "returned an error response" in err_msg) and remote:
+            err_msg = (
+                "The server refused the request — it needs you signed in. Use Connect via OAuth first."
+                if oauth2
+                else "The server refused the request. Please verify the credentials."
+            )
+        elif "Connection closed" in err_msg or "MCPError" in err_msg:
             err_msg = "MCP server process exited (connection closed). Please verify primary credentials and server command."
 
         raise HTTPException(

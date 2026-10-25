@@ -229,7 +229,10 @@ async def _analyze_remote_http_normalized(url: str, root: Path) -> NormalizedMCP
                 location=cf.get("location", "header"),
             ))
 
-        if not auth_fields and auth_type not in ("none", "env", "unknown"):
+        if auth_type == "oauth2" and oauth.get("authorization_endpoint") and oauth.get("registration_endpoint"):
+            # Sign-in registers its own client (RFC 7591) and gets the token: nothing for anyone to type.
+            auth_fields = []
+        elif not auth_fields and auth_type not in ("none", "env", "unknown"):
             from vendor.services import repo_analyzer
             fields_fn = getattr(repo_analyzer, "_build_auth_fields_for_auth_type", _build_auth_fields_for_auth_type)
             auth_fields = fields_fn(auth_type)
@@ -244,6 +247,7 @@ async def _analyze_remote_http_normalized(url: str, root: Path) -> NormalizedMCP
             endpoint=endpoint,
             auth_type=auth_type,
             auth_fields=auth_fields,
+            oauth=oauth,
             required_env_vars=[f.name for f in auth_fields if f.location == "env"],
             hints=hints,
         )

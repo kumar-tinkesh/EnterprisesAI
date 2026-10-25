@@ -111,7 +111,7 @@ NGROK_COMPOSE := docker compose -f docker-compose.yml -f docker-compose.ngrok.ym
 
 ngrok-up: ## Full stack, public at https://$NGROK_DOMAIN via ngrok
 	@uv run python scripts/db.py check
-	$(NGROK_COMPOSE) up --build -d
+	$(NGROK_COMPOSE) up --build
 	@echo ""
 	@echo "=========================================================================="
 	@echo "  🌍  Public URL:      https://$$(grep -E '^NGROK_DOMAIN=' .env | cut -d= -f2)"

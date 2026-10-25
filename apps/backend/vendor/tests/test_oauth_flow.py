@@ -348,3 +348,149 @@ async def test_callback_from_user_flow_stores_isolated_user_credential(
     # this user's freshly-issued tokens must not have landed there.
     assert "access_token" not in shared_creds
     assert shared_creds["oauth_client_id"] == "APPCID"
+
+
+# ── Self-registering servers: RFC 7591 client + PKCE (Atlassian-style) ──
+
+
+_DCR_OAUTH = {
+    "authorization_endpoint": "https://auth.example.com/authorize",
+    "token_endpoint": "https://auth.example.com/oauth/token",
+    "registration_endpoint": "https://auth.example.com/dcr/register",
+    "code_challenge_methods_supported": ["S256"],
+    "scopes_supported": ["read:jira", "offline_access"],
+    "resource": "https://mcp.example.com/v2/mcp",
+}
+
+
+async def _verified_dcr_server(admin_client, db) -> str:
+    server_id = await _create_server(admin_client, is_global=True)
+    from vendor.services.mcp_service import get_mcp_server
+
+    server_row = await get_mcp_server(db, server_id=server_id)
+    server_row.auth_type = "oauth2"
+    server_row.auth_config = {"auth_type": "oauth2", "transport": "streamable_http", "oauth": dict(_DCR_OAUTH)}
+    server_row.status = "VERIFIED"
+    await db.commit()
+    return server_id
+
+
+def _patch_registration(monkeypatch) -> list[dict]:
+    import json
+
+    import httpx
+
+    registrations: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == _DCR_OAUTH["registration_endpoint"]
+        registrations.append(json.loads(request.content))
+        return httpx.Response(201, json={"client_id": f"DCR{len(registrations)}"})
+
+    monkeypatch.setattr(mcp_auth, "_new_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    return registrations
+
+
+@pytest.mark.asyncio
+async def test_self_registering_server_signs_in_with_pkce_and_no_app_credentials(
+    tenant_client, admin_client, anon_client, monkeypatch, db, tenant
+):
+    """No one types a client ID: the first sign-in registers a public client,
+    the authorize URL carries a PKCE S256 challenge and the RFC 8707 resource,
+    and the code is redeemed with the matching verifier and no secret."""
+    import base64
+    import hashlib
+    from urllib.parse import parse_qs, urlsplit
+
+    server_id = await _verified_dcr_server(admin_client, db)
+    registrations = _patch_registration(monkeypatch)
+
+    res = await tenant_client.post(f"{BASE}/mcp/{server_id}/oauth/authorize-as-user", json={})
+    assert res.status_code == 200, res.text
+    query = parse_qs(urlsplit(res.json()["authorization_url"]).query)
+    assert query["client_id"] == ["DCR1"]
+    assert query["code_challenge_method"] == ["S256"]
+    assert query["resource"] == [_DCR_OAUTH["resource"]]
+    assert query["scope"] == ["read:jira offline_access"]
+    assert registrations[0]["redirect_uris"][0].endswith("/mcp/oauth/callback")
+    assert registrations[0]["token_endpoint_auth_method"] == "none"
+
+    seen: dict = {}
+
+    async def fake_exchange(oauth, credentials, *, code, redirect_uri, code_verifier=None):
+        seen.update(credentials=credentials, code_verifier=code_verifier)
+        return {"access_token": "ATL-ACCESS", "refresh_token": "ATL-REFRESH"}
+
+    monkeypatch.setattr(mcp_auth, "exchange_authorization_code", fake_exchange)
+    callback_res = await anon_client.get(
+        f"{BASE}/mcp/oauth/callback", params={"code": "C1", "state": res.json()["state"]}
+    )
+    assert callback_res.status_code == 200, callback_res.text
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(seen["code_verifier"].encode()).digest()).rstrip(b"=").decode()
+    assert query["code_challenge"] == [challenge]
+    assert seen["credentials"] == {"client_id": "DCR1", "client_secret": ""}
+
+    user_creds = await mcp_auth.load_server_credentials(db, server_id=server_id, tenant_id=tenant.id, user_id="tu_1")
+    assert user_creds["refresh_token"] == "ATL-REFRESH"
+
+    # The next person reuses the registered client.
+    again = await tenant_client.post(f"{BASE}/mcp/{server_id}/oauth/authorize-as-user", json={})
+    assert "client_id=DCR1" in again.json()["authorization_url"]
+    assert len(registrations) == 1
+
+
+@pytest.mark.asyncio
+async def test_self_registering_server_registers_again_when_callback_url_moves(
+    tenant_client, admin_client, monkeypatch, db
+):
+    """A new public URL (another ngrok address) can't use a client registered
+    for the old redirect_uri, so the next sign-in registers a fresh one."""
+    from apps.backend.config import get_backend_settings
+
+    server_id = await _verified_dcr_server(admin_client, db)
+    registrations = _patch_registration(monkeypatch)
+    await tenant_client.post(f"{BASE}/mcp/{server_id}/oauth/authorize-as-user", json={})
+
+    monkeypatch.setattr(get_backend_settings(), "BACKEND_PUBLIC_URL", "https://moved.example.com")
+    res = await tenant_client.post(f"{BASE}/mcp/{server_id}/oauth/authorize-as-user", json={})
+    assert "client_id=DCR2" in res.json()["authorization_url"]
+    assert registrations[1]["redirect_uris"] == ["https://moved.example.com/api/v1/vendor/resources/mcp/oauth/callback"]
+
+
+@pytest.mark.asyncio
+async def test_admin_configured_app_is_not_replaced_by_registration(tenant_client, admin_client, monkeypatch, db):
+    server_id = await _verified_dcr_server(admin_client, db)
+    await mcp_auth.store_server_credentials(
+        db, server_id=server_id, credentials={"oauth_client_id": "APPCID", "oauth_client_secret": "APPSEC"}, tenant_id=None
+    )
+    await db.commit()
+    registrations = _patch_registration(monkeypatch)
+    res = await tenant_client.post(f"{BASE}/mcp/{server_id}/oauth/authorize-as-user", json={})
+    assert "client_id=APPCID" in res.json()["authorization_url"]
+    assert registrations == []
+
+
+@pytest.mark.asyncio
+async def test_public_client_token_requests_send_client_id_verifier_and_resource(monkeypatch):
+    import httpx
+    from urllib.parse import parse_qs
+
+    sent: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(200, json={"access_token": "AT", "refresh_token": "RT"})
+
+    monkeypatch.setattr(mcp_auth, "_new_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    creds = {"client_id": "DCR1", "client_secret": ""}
+    await mcp_auth.exchange_authorization_code(
+        _DCR_OAUTH, creds, code="C1", redirect_uri="https://b.example.com/cb", code_verifier="V" * 50
+    )
+    await mcp_auth._refresh_token_grant(_DCR_OAUTH, creds, "RT")
+
+    for request in sent:
+        form = parse_qs(request.content.decode())
+        assert "authorization" not in request.headers
+        assert form["client_id"] == ["DCR1"]
+        assert form["resource"] == [_DCR_OAUTH["resource"]]
+    assert parse_qs(sent[0].content.decode())["code_verifier"] == ["V" * 50]

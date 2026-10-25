@@ -131,15 +131,18 @@ async def start_mcp_oauth_authorize_as_user(
             status_code=status.HTTP_409_CONFLICT,
             detail="This server hasn't been verified by the vendor yet",
         )
+    backend_public_url = get_backend_settings().BACKEND_PUBLIC_URL
     try:
+        await oauth_flow.prepare_server(db, server=server, backend_public_url=backend_public_url)
+        await db.commit()
         client_id, client_secret = await oauth_flow.resolve_app_credentials(
-            db, server_id=server.id
+            db, server_id=server.id, server=server
         )
         url, state = oauth_flow.build_authorize_url(
             server,
             client_id=client_id,
             client_secret=client_secret,
-            backend_public_url=get_backend_settings().BACKEND_PUBLIC_URL,
+            backend_public_url=backend_public_url,
             tenant_id=user.tenant_id,
             user_id=user.id,
             scope_override=payload.scope,

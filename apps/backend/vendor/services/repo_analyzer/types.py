@@ -66,6 +66,8 @@ class NormalizedMCPConfig:
     # --- auth ---
     auth_type: str = "none"
     auth_fields: list[AuthField] = field(default_factory=list)
+    # Discovered OAuth metadata for a remote server (mcp_detect: endpoints, PKCE, resource, scopes).
+    oauth: dict[str, Any] = field(default_factory=dict)
     # Env vars the server provably can't start without (see
     # inference._classify_env_vars) — checked before spawning it.
     required_env: list[str] = field(default_factory=list)

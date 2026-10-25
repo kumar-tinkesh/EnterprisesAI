@@ -161,6 +161,8 @@ async def test_detect_oauth_metadata_discovery(monkeypatch):
         "refresh_token",
     ]
     assert result["oauth_scopes"] == ["mcp:tools", "email.read"]
+    # Kept for the sign-in: RFC 8707 audience of the token.
+    assert result["oauth"]["resource"] == "https://mcp.example.com"
     field_names = [f["name"] for f in result["credential_fields"]]
     assert "client_id" in field_names and "client_secret" in field_names
 

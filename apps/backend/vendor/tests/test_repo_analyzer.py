@@ -426,3 +426,31 @@ class TestRawManifestSubpath:
         assert "README.md" not in scanned
         assert scanned["_server_subdir"] == "src/slack"
         assert scanned["_source_files"]["index.ts"] == "process.env.SLACK_BOT_TOKEN"
+
+
+@pytest.mark.asyncio
+async def test_remote_server_that_registers_clients_asks_for_nothing_and_keeps_its_oauth(monkeypatch):
+    """A remote MCP server with RFC 7591 registration (Atlassian's) needs no
+    typed client ID/secret/token: its OAuth metadata goes into the config
+    so "Connect via OAuth" can register and sign in by itself."""
+    from vendor.services import mcp_detect
+    from vendor.services.repo_analyzer.analyzer import _analyze_remote_http_normalized
+
+    oauth = {
+        "authorization_endpoint": "https://auth.example.com/authorize",
+        "token_endpoint": "https://auth.example.com/oauth/token",
+        "registration_endpoint": "https://auth.example.com/dcr/register",
+        "resource": "https://mcp.example.com/v2/mcp",
+    }
+
+    async def fake_detect(url, **_kwargs):
+        return {
+            "transport": "streamable_http", "endpoint": url, "auth_type": "oauth2", "oauth": oauth, "hints": [],
+            "credential_fields": [{"name": "access_token", "label": "Access token", "type": "password"}],
+        }
+
+    monkeypatch.setattr(mcp_detect, "detect_mcp_server", fake_detect)
+    config = await _analyze_remote_http_normalized("https://mcp.example.com/v2/mcp", None)
+    assert config.auth_type == "oauth2"
+    assert config.auth_fields == []
+    assert config.oauth == oauth

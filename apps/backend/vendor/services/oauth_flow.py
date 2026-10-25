@@ -25,9 +25,17 @@ Design notes (why this works for ANY provider, not just one):
   are captured generically as extra query params and fuzzy-matched against
   this *server's own* detected credential field names (see
   ``_match_declared_field``) rather than hardcoded per vendor.
+* **Servers that follow the MCP auth spec need no OAuth app at all.** A
+  remote server (Atlassian's, …) advertises its authorization server via
+  RFC 9728; ``prepare_server`` registers a client there itself (RFC 7591,
+  once per callback URL), and the sign-in uses PKCE (RFC 7636) plus the
+  RFC 8707 ``resource`` — so neither the admin nor anyone else types a
+  client ID or secret.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import logging
 import secrets
 import time
@@ -59,6 +67,8 @@ class _PendingAuthorization:
     # the callback persists the resulting tokens as the vendor's shared
     # primary credential or as this one user's isolated row.
     user_id: Optional[str] = None
+    # PKCE (RFC 7636): sent with the code, proves this backend started the sign-in.
+    code_verifier: Optional[str] = None
     created_at: float = field(default_factory=time.monotonic)
 
 
@@ -90,12 +100,93 @@ def callback_redirect_uri(backend_public_url: str) -> str:
     return f"{backend_public_url.rstrip('/')}/api/v1/vendor/resources/mcp/oauth/callback"
 
 
+def _registered_client(server: VendorMCPServer) -> dict:
+    return ((server.auth_config or {}).get("oauth") or {}).get("registered_client") or {}
+
+
+async def _discover(server: VendorMCPServer) -> dict:
+    """OAuth metadata for a remote server registered before discovery kept it (mcp_detect)."""
+    from vendor.services import mcp_service
+
+    url = server.endpoint or server.server_url or ""
+    if not url.startswith(("http://", "https://")):
+        return {}
+    try:
+        detection = await mcp_service.detect_mcp_server(url)
+    except Exception as exc:  # noqa: BLE001 — an unreachable server just stays unconfigured
+        logger.warning("OAuth discovery failed for %s: %s", url, exc)
+        return {}
+    return detection.get("oauth") or {}
+
+
+async def _register_client(oauth: dict, *, server_name: str, redirect_uri: str) -> dict[str, str]:
+    """RFC 7591: register this backend as a sign-in (authorization_code) client."""
+    payload = {
+        "client_name": f"{server_name or 'MCP'} connector",
+        "redirect_uris": [redirect_uri],
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        # A public client: PKCE stands in for the secret; a server that insists on one still returns it.
+        "token_endpoint_auth_method": "none",
+    }
+    if oauth.get("scopes_supported"):
+        payload["scope"] = " ".join(oauth["scopes_supported"])
+    try:
+        async with mcp_auth._new_client() as client:
+            response = await client.post(oauth["registration_endpoint"], json=payload)
+    except httpx.HTTPError as exc:
+        raise OAuthFlowError(f"Could not reach the client registration endpoint: {exc}") from exc
+    if response.status_code not in (200, 201):
+        raise OAuthFlowError(
+            f"Client registration failed ({response.status_code}): {response.text[:200]}"
+        )
+    body = response.json()
+    if not body.get("client_id"):
+        raise OAuthFlowError("Client registration response is missing client_id.")
+    # Honour the method the server settled on: a "none" client sends no secret even if one came back.
+    public = body.get("token_endpoint_auth_method", "none") == "none"
+    return {"client_id": body["client_id"], "client_secret": "" if public else body.get("client_secret") or ""}
+
+
+async def prepare_server(db: AsyncSession, *, server: VendorMCPServer, backend_public_url: str) -> None:
+    """Make a server ready for "Connect via OAuth" without anyone typing an OAuth app:
+    discover its endpoints if they were never saved, and register a client with its
+    authorization server (RFC 7591) when it offers that and none is registered for
+    this callback URL yet. Does nothing for servers set up by hand. Flushes; the
+    caller commits."""
+    auth_config = dict(server.auth_config or {})
+    oauth = dict(auth_config.get("oauth") or {})
+    if not oauth.get("authorization_endpoint") and server.source_type == "remote":
+        oauth = {**await _discover(server), **{k: v for k, v in oauth.items() if v}}
+    if not (oauth.get("authorization_endpoint") and oauth.get("registration_endpoint")):
+        return
+    stored = await mcp_auth.load_server_credentials(db, server_id=server.id, tenant_id=None)
+    redirect_uri = callback_redirect_uri(backend_public_url)
+    registered = oauth.get("registered_client") or {}
+    if stored.get("oauth_client_id") and registered.get("client_id") != stored["oauth_client_id"]:
+        return  # an OAuth app the admin configured themselves wins
+    if not registered.get("client_id") or registered.get("redirect_uri") != redirect_uri:
+        # First sign-in, or the callback URL moved (a new ngrok address): the old client can't redirect here.
+        client = await _register_client(oauth, server_name=server.name, redirect_uri=redirect_uri)
+        oauth["registered_client"] = {"client_id": client["client_id"], "redirect_uri": redirect_uri}
+        await mcp_auth.store_server_credentials(
+            db,
+            server_id=server.id,
+            credentials={**stored, "oauth_client_id": client["client_id"], "oauth_client_secret": client["client_secret"]},
+            tenant_id=None,
+        )
+    auth_config["oauth"] = oauth
+    server.auth_config = auth_config
+    await db.flush()
+
+
 async def resolve_app_credentials(
     db: AsyncSession,
     *,
     server_id: str,
     override_client_id: Optional[str] = None,
     override_client_secret: Optional[str] = None,
+    server: Optional[VendorMCPServer] = None,
 ) -> tuple[str, str]:
     """Resolve the OAuth app's (client_id, client_secret) for a server.
 
@@ -113,6 +204,10 @@ async def resolve_app_credentials(
     stored = await mcp_auth.load_server_credentials(db, server_id=server_id, tenant_id=None)
     client_id = override_client_id or stored.get("oauth_client_id")
     client_secret = override_client_secret or stored.get("oauth_client_secret")
+    # A client prepare_server registered may be public (no secret): PKCE covers it.
+    registered = server is not None and client_id and _registered_client(server).get("client_id") == client_id
+    if registered:
+        return client_id, client_secret or ""
     if not client_id or not client_secret:
         raise OAuthFlowError(
             "No OAuth client_id/client_secret configured for this server. "
@@ -156,6 +251,10 @@ def build_authorize_url(
     _purge_expired()
     state = secrets.token_urlsafe(32)
     redirect_uri = callback_redirect_uri(backend_public_url)
+    # PKCE whenever the provider advertises it, and always for a client without a secret.
+    code_verifier = None
+    if "S256" in (oauth.get("code_challenge_methods_supported") or []) or not client_secret:
+        code_verifier = secrets.token_urlsafe(64)
     _pending[state] = _PendingAuthorization(
         server_id=server.id,
         tenant_id=tenant_id,
@@ -163,6 +262,7 @@ def build_authorize_url(
         client_secret=client_secret,
         redirect_uri=redirect_uri,
         user_id=user_id,
+        code_verifier=code_verifier,
     )
 
     scope = scope_override or " ".join(oauth.get("scopes_supported") or [])
@@ -175,6 +275,12 @@ def build_authorize_url(
     }
     if scope:
         params["scope"] = scope
+    if code_verifier:
+        digest = hashlib.sha256(code_verifier.encode()).digest()
+        params["code_challenge"] = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+        params["code_challenge_method"] = "S256"
+    if oauth.get("resource"):
+        params["resource"] = oauth["resource"]
 
     return f"{authorization_endpoint}?{urlencode(params)}", state
 
@@ -229,8 +335,9 @@ async def complete_authorization(
 
     credentials = {"client_id": pending.client_id, "client_secret": pending.client_secret}
     try:
+        pkce = {"code_verifier": pending.code_verifier} if pending.code_verifier else {}
         token_response = await mcp_auth.exchange_authorization_code(
-            oauth, credentials, code=code, redirect_uri=pending.redirect_uri
+            oauth, credentials, code=code, redirect_uri=pending.redirect_uri, **pkce
         )
     except mcp_auth.McpAuthError as exc:
         raise OAuthFlowError(f"Token exchange failed: {exc}") from exc
@@ -266,6 +373,7 @@ async def complete_authorization(
 __all__ = [
     "OAuthFlowError",
     "callback_redirect_uri",
+    "prepare_server",
     "resolve_app_credentials",
     "build_authorize_url",
     "complete_authorization",

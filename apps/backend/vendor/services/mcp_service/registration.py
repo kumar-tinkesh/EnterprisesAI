@@ -63,7 +63,7 @@ async def add_mcp_server(
         "required_env": list(normalized.required_env),
         "confidence": str(normalized.transport_confidence),
         "hints": normalized.hints,
-        "oauth": {},
+        "oauth": dict(normalized.oauth),
     }
 
     # 3. Determine endpoint for remote transports

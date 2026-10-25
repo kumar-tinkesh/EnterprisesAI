@@ -742,9 +742,11 @@ function ConnectCredentialModal({
 
   // ── OAuth "Connect via provider" bootstrap (see oauth_flow.py backend) ──
   const isOAuth = server.auth_type === "oauth2";
-  const oauthCfg: { authorization_endpoint?: string; token_endpoint?: string } =
+  const oauthCfg: { authorization_endpoint?: string; token_endpoint?: string; registration_endpoint?: string } =
     (server.auth_config as any)?.oauth || {};
   const oauthConfigured = !!(oauthCfg.authorization_endpoint && oauthCfg.token_endpoint);
+  // The server registers our client itself (RFC 7591): no OAuth app to fill in.
+  const oauthSelfRegisters = !!(oauthCfg.authorization_endpoint && oauthCfg.registration_endpoint);
 
   const [showOAuthConfig, setShowOAuthConfig] = useState(false);
   const [authEndpoint, setAuthEndpoint] = useState("");
@@ -799,6 +801,11 @@ function ConnectCredentialModal({
   const handleOAuthConnect = () => {
     const clientId = findCredBySuffix("CLIENT_ID");
     const clientSecret = findCredBySuffix("CLIENT_SECRET");
+    if (oauthSelfRegisters && !(clientId && clientSecret)) {
+      setOauthMessage(null);
+      oauthAuthorizeMutation.mutate({});
+      return;
+    }
     if (!clientId || !clientSecret) {
       setOauthMessage("Fill in the Client ID and Client Secret fields above first.");
       return;
@@ -973,8 +980,9 @@ function ConnectCredentialModal({
               ) : (
                 <div className="space-y-2">
                   <p className="text-xs text-indigo-700">
-                    Fill in Client ID/Secret above, then connect via the provider&apos;s consent
-                    screen — it fills in the rest (refresh token, etc.) automatically.
+                    {oauthSelfRegisters
+                      ? "Sign in on the provider's consent screen — no OAuth app needed, it registers itself."
+                      : "Fill in Client ID/Secret above, then connect via the provider's consent screen — it fills in the rest (refresh token, etc.) automatically."}
                   </p>
                   <Button
                     type="button"

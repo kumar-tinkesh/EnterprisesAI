@@ -84,18 +84,23 @@ async def start_mcp_oauth_authorize(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found"
         )
+    backend_public_url = get_backend_settings().BACKEND_PUBLIC_URL
     try:
+        if not (payload.client_id and payload.client_secret):
+            await oauth_flow.prepare_server(db, server=server, backend_public_url=backend_public_url)
+            await db.commit()
         client_id, client_secret = await oauth_flow.resolve_app_credentials(
             db,
             server_id=server.id,
             override_client_id=payload.client_id,
             override_client_secret=payload.client_secret,
+            server=server,
         )
         url, state = oauth_flow.build_authorize_url(
             server,
             client_id=client_id,
             client_secret=client_secret,
-            backend_public_url=get_backend_settings().BACKEND_PUBLIC_URL,
+            backend_public_url=backend_public_url,
             scope_override=payload.scope,
         )
     except oauth_flow.OAuthFlowError as exc:
