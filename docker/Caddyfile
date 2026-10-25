@@ -1,0 +1,37 @@
+# ---------------------------------------------------------------------------
+# One origin for the whole app, so a single ngrok domain can carry it
+# (see docker-compose.ngrok.yml). ngrok terminates TLS and forwards plain
+# HTTP here; Caddy splits it by path:
+#
+#   /auth-api/*     -> auth:8001     (prefix stripped: auth sees /api/v1/...)
+#   /backend-api/*  -> backend:8002  (prefix stripped)
+#   everything else -> web:3001
+#
+# Auth and backend both serve /api/v1, hence the prefixes. A redirect they
+# send (e.g. a trailing-slash 307) names /api/... — header_down puts the
+# prefix back so the browser doesn't land on the web app instead.
+# ---------------------------------------------------------------------------
+{
+	auto_https off
+	admin off
+}
+
+:80 {
+	handle_path /auth-api/* {
+		reverse_proxy auth:8001 {
+			header_down Location "^(?:https?://[^/]+)?/api/" "/auth-api/api/"
+		}
+	}
+
+	handle_path /backend-api/* {
+		reverse_proxy backend:8002 {
+			# Live run events are SSE — pass each chunk on as it arrives.
+			flush_interval -1
+			header_down Location "^(?:https?://[^/]+)?/api/" "/backend-api/api/"
+		}
+	}
+
+	handle {
+		reverse_proxy web:3001
+	}
+}

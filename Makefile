@@ -11,7 +11,7 @@ PNPM := $(shell command -v pnpm >/dev/null 2>&1 && echo pnpm || echo "npx --yes 
 
 .PHONY: help install install-api install-web upgrade downgrade stamp revision \
         seed-admin api web test test-api test-web docker-up docker-dev docker-down clean help \
-        db-status db-check db-backup db-local db-supabase
+        db-status db-check db-backup db-local db-supabase ngrok-up ngrok-down
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -105,6 +105,22 @@ urls: ## Show all active service URLs
 
 docker-down: ## Stop containers (data volumes are kept)
 	docker compose down
+
+# Public: the full stack behind one ngrok domain (NGROK_AUTHTOKEN / NGROK_DOMAIN in .env).
+NGROK_COMPOSE := docker compose -f docker-compose.yml -f docker-compose.ngrok.yml
+
+ngrok-up: ## Full stack, public at https://$NGROK_DOMAIN via ngrok
+	@uv run python scripts/db.py check
+	$(NGROK_COMPOSE) up --build -d
+	@echo ""
+	@echo "=========================================================================="
+	@echo "  🌍  Public URL:      https://$$(grep -E '^NGROK_DOMAIN=' .env | cut -d= -f2)"
+	@echo "  🔎  ngrok inspector: http://localhost:4040"
+	@echo "  📜  Logs:            $(NGROK_COMPOSE) logs -f ngrok proxy"
+	@echo "=========================================================================="
+
+ngrok-down: ## Stop the ngrok stack (data volumes are kept)
+	$(NGROK_COMPOSE) down
 
 clean: ## Remove local SQLite db and caches
 	rm -f auth.db && rm -rf .pytest_cache apps/auth/.pytest_cache
