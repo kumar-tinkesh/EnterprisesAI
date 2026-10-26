@@ -14,6 +14,11 @@ from typing import Any, Optional
 class Role(str, Enum):
     SYSTEM = "system"
     USER = "user"
+    # Multi-turn tool calling: the model's own turn (possibly asking for tool
+    # calls) and the result of one of those calls, in OpenAI's message format
+    # (litellm translates it for every other provider).
+    ASSISTANT = "assistant"
+    TOOL = "tool"
 
 
 # ── Message ──────────────────────────────────────────────────────────────────
@@ -23,9 +28,14 @@ class Message:
     """A single chat message."""
 
     role: Role
-    content: str
+    # Text, or OpenAI-style parts for a message with images:
+    # [{"type": "text", "text": ...}, {"type": "image_url", "image_url": {"url": "data:..."}}]
+    content: str | list[dict[str, Any]]
     name: Optional[str] = None
     tool_call_id: Optional[str] = None
+    # Set on an ASSISTANT message that asked for tool calls; each answer then
+    # follows as a TOOL message with the matching tool_call_id.
+    tool_calls: Optional[list["ToolCall"]] = None
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"role": self.role.value, "content": self.content}
@@ -33,6 +43,11 @@ class Message:
             d["name"] = self.name
         if self.tool_call_id:
             d["tool_call_id"] = self.tool_call_id
+        if self.tool_calls:
+            d["tool_calls"] = [tc.to_dict() for tc in self.tool_calls]
+            # OpenAI wants null, not "", for a turn that only calls tools.
+            if not self.content:
+                d["content"] = None
         return d
 
 
@@ -66,6 +81,11 @@ class ToolCall:
     id: str
     name: str
     arguments: str  # JSON string
+    # In a stream: which call a delta belongs to (several can be built at once).
+    index: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"id": self.id, "type": "function", "function": {"name": self.name, "arguments": self.arguments}}
 
 
 # ── Token usage ──────────────────────────────────────────────────────────────
@@ -102,7 +122,8 @@ class StreamChunk:
     content: str = ""
     reasoning: Optional[str] = None  # Thinking/reasoning delta (if inside <think>)
     finish_reason: Optional[str] = None
-    tool_calls: list[ToolCall] = field(default_factory=list)
+    tool_calls: list[ToolCall] = field(default_factory=list)  # deltas: id/name once, arguments in pieces
+    usage: Optional[TokenUsage] = None  # the whole call's, on the last chunk (when the provider reports it)
 
 
 # ── Thinking / Reasoning Parsing Helpers ────────────────────────────────────
@@ -166,6 +187,8 @@ class ReasoningStreamParser:
                     if not partial:
                         new_content += self.buffer
                         self.buffer = ""
+                    else:
+                        break  # what's left may be the start of a tag: wait for the next chunk
             else:
                 if "</think>" in self.buffer:
                     idx = self.buffer.find("</think>")
@@ -184,13 +207,23 @@ class ReasoningStreamParser:
                     if not partial:
                         new_reasoning += self.buffer
                         self.buffer = ""
+                    else:
+                        break  # what's left may be the start of "</think>": wait for the next chunk
 
         return StreamChunk(
             content=new_content,
             reasoning=new_reasoning if new_reasoning else None,
             finish_reason=chunk.finish_reason,
             tool_calls=chunk.tool_calls,
+            usage=chunk.usage,
         )
+
+    def flush(self) -> StreamChunk | None:
+        """What's still held back at the end (a "<" that never became a tag)."""
+        held, self.buffer = self.buffer, ""
+        if not held:
+            return None
+        return StreamChunk(reasoning=held) if self.in_think else StreamChunk(content=held)
 
 
 # ── Embedding response ──────────────────────────────────────────────────────
@@ -221,5 +254,8 @@ class CompletionRequest:
     tools: Optional[list[ToolDefinition]] = None
     tool_choice: Optional[str | dict[str, Any]] = None
     response_format: Optional[dict[str, Any]] = None
+    # "low" / "medium" / "high": how hard a reasoning model thinks. Only sent
+    # to models that reason; the rest ignore it.
+    reasoning_effort: Optional[str] = None
     stream: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)  # tenant_id, trace_id etc.

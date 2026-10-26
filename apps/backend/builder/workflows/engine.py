@@ -1,0 +1,325 @@
+"""Execute a workflow run: schedule steps, run them in parallel, save after each.
+
+    await execute_workflow(run, user, worker_id)   # called by runs.executor with the lease held
+
+Each pass: start every ready step (up to ``PARALLEL_STEPS`` at once), wait
+for the first to finish, apply its outcome to the schedule, save. A step is
+marked running — and saved — *before* it starts, with its attempt number, so
+a run resumed after a crash restarts exactly the steps that were in flight,
+under the same attempt: their checkpoints and tool-call records carry over.
+
+Failure policy (workflow config, per-step ``retry`` override):
+  retry    try the step again, up to its attempts
+  tolerate every line out of it feeds a join that can do without it
+  skip     ``on_node_failure: skip`` — pass its input on as if it ran
+           (never for a person's "no": a rejected approval always stops)
+  abort    otherwise: the run fails, steps still running are stopped
+
+A step waiting on a person doesn't hold up the others: everything that can
+still run does, and only then does the run go to ``waiting``.
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+
+from sqlalchemy import select, update
+
+from src.api.deps import CurrentUser
+
+from builder.graph.schema import TRIGGER_TYPES, WorkflowConfig
+from builder.models import BuilderNodeRun, BuilderRun
+from builder.pricing import add_cost
+from builder.runs import lease, states
+from builder.runs.db import session_factory, utcnow
+from builder.runs.events import emit
+from builder.runs.tool_calls import Paused
+from builder.workflows import front_desk
+from builder.workflows import scheduler as S
+from builder.workflows.nodes import RUNNERS, NodeOutcome, StepContext, run_trigger
+
+logger = logging.getLogger("builder.workflows.engine")
+
+PARALLEL_STEPS = 8
+
+
+class LostLease(Exception):
+    pass
+
+
+async def _save(run_id: str, worker_id: str, state: dict) -> None:
+    async with session_factory() as db:
+        result = await db.execute(
+            update(BuilderRun)
+            .where(BuilderRun.id == run_id, BuilderRun.lease_owner == worker_id, BuilderRun.status == states.RUNNING)
+            .values(state=state)
+        )
+        await db.commit()
+    if result.rowcount != 1:
+        raise LostLease()
+
+
+async def _node_run(run_id: str, node: dict, attempt: int, input_text: str) -> str:
+    async with session_factory() as db:
+        row = (
+            await db.execute(
+                select(BuilderNodeRun).where(
+                    BuilderNodeRun.run_id == run_id, BuilderNodeRun.node_id == node["id"], BuilderNodeRun.attempt == attempt
+                )
+            )
+        ).scalars().first()
+        if row is None:
+            row = BuilderNodeRun(
+                run_id=run_id, node_id=node["id"], node_type=node["type"], attempt=attempt,
+                status=states.RUNNING, input_text=input_text, started_at=utcnow(), state={},
+            )
+            db.add(row)
+        else:
+            row.status = states.RUNNING
+        await db.commit()
+        return row.id
+
+
+async def _finish_node(node_run_id: str, status: str, outcome: NodeOutcome | None = None, error: str | None = None) -> None:
+    async with session_factory() as db:
+        row = await db.get(BuilderNodeRun, node_run_id)
+        row.status = status
+        if outcome is not None:
+            row.output_text = outcome.output if outcome.ok else None
+            row.error = outcome.error
+            # An agent step already checkpointed its running totals here; the
+            # outcome carries the same totals, so this sets rather than adds.
+            row.prompt_tokens = outcome.prompt_tokens or row.prompt_tokens
+            row.completion_tokens = outcome.completion_tokens or row.completion_tokens
+            if outcome.guardrails:
+                row.output = {**(row.output or {}), "guardrails": outcome.guardrails}
+        if error:
+            row.error = error
+        if status != states.WAITING:
+            row.finished_at = utcnow()
+        await db.commit()
+
+
+def _step_summary(state: dict, graph: S.Graph, agents: dict) -> str:
+    """WorkflowConfig.include_step_summary: each agent/tool step's output, in graph order, under the answer."""
+    parts = []
+    for node_id, node in graph.nodes.items():
+        n = state["nodes"].get(node_id) or {}
+        if node.get("type") not in ("agent", "tool") or n.get("status") != S.DONE or not n.get("output"):
+            continue
+        name = node.get("label") or (agents.get(node.get("agent_id") or "") or {}).get("name") or node.get("type").title()
+        parts.append(f"**{name}**\n{n['output'][:2000]}")
+    return "\n\n---\n**Step by step**\n\n" + "\n\n".join(parts) if parts else ""
+
+
+def _asks_front_desk(run: BuilderRun, config: WorkflowConfig, variables: dict) -> bool:
+    """Only a message someone typed (app chat, a share link) — never a schedule,
+    a webhook, a test, or a run given its inputs as fields."""
+    return (
+        config.answer_general_questions and run.purpose in ("run", "public")
+        and not run.schedule_id and not run.webhook_id and not variables
+    )
+
+
+async def execute_workflow(run: BuilderRun, user: CurrentUser, worker_id: str, *, tool_owners: dict[str, CurrentUser] | None = None) -> None:
+    definition = run.definition["workflow"]
+    config = WorkflowConfig.model_validate(definition.get("config") or {})
+    graph = S.build_graph(definition["nodes"], definition["edges"])
+    agents = run.definition.get("agents") or {}
+    variables = (run.input or {}).get("variables") or {}
+    original = (run.input or {}).get("text") or ""
+
+    state = dict(run.state or {})
+    if not state.get("nodes"):
+        state = S.init_state(graph, original)
+    S.resume_interrupted(state)
+    await _save(run.id, worker_id, state)
+    await emit(run.id, "run_status", status=states.RUNNING)
+
+    # Decided once and saved: a resumed run doesn't ask again.
+    if "front_desk" not in state and _asks_front_desk(run, config, variables):
+        desk = await front_desk.decide(run.definition, original, (run.input or {}).get("history") or [])
+        state["prompt_tokens"] += desk.pop("prompt_tokens", 0)
+        state["completion_tokens"] += desk.pop("completion_tokens", 0)
+        state["front_desk"] = desk
+        await _save(run.id, worker_id, state)
+    if (state.get("front_desk") or {}).get("route") == "general":
+        answer = state["front_desk"]["answer"]
+        for n in state["nodes"].values():
+            n["status"] = S.PRUNED  # no step ran: shown as skipped
+        await _save(run.id, worker_id, state)
+        await emit(run.id, "output", text=answer, sources=[])
+        if await lease.release(
+            run.id, worker_id, status=states.SUCCEEDED, output_text=answer,
+            output={"text": answer, "sources": [], "final_node": None, "guardrails": [], "front_desk": "general"},
+            prompt_tokens=state["prompt_tokens"], completion_tokens=state["completion_tokens"], cost_usd=state.get("cost_usd"),
+        ):
+            await emit(run.id, "run_status", status=states.SUCCEEDED)
+        return
+
+    session_started = time.monotonic()
+    active_before = state.get("active_seconds", 0.0)
+    tasks: dict[asyncio.Task, tuple[str, str]] = {}
+
+    async def emit_event(type_: str, **data) -> None:
+        await emit(run.id, type_, **data)
+
+    dry_run = run.purpose == "test"
+    # Agent steps whose answer goes straight to an output get the asked-for answer depth.
+    feeds_output = {e["source"] for e in graph.edges.values() if graph.nodes.get(e["target"], {}).get("type") == "output"}
+    depth = (run.input or {}).get("depth") or "auto"
+    step_extras = dict(
+        dry_run=dry_run, approval_overrides=config.approval_overrides,
+        knowledge_base_ids=config.knowledge_base_ids(), sub_agents=run.definition.get("sub_agents") or {},
+        # As for an agent's run: someone else's request (public, webhook) doesn't touch the owner's memory.
+        memory=run.purpose in ("run", "test") and not run.webhook_id,
+        knowledge_tenant_id=run.definition.get("home_tenant_id"),
+        tool_owners=tool_owners or {},
+    )
+    stream = (run.input or {}).get("stream", True) and not dry_run
+
+    async def run_step(node_id: str, node_run_id: str, attempt: int) -> NodeOutcome:
+        node = graph.nodes[node_id]
+        n = state["nodes"][node_id]
+        if node["type"] in TRIGGER_TYPES:
+            return await run_trigger(StepContext(
+                run_id=run.id, node=node, node_run_id=node_run_id, attempt=attempt, user=user, graph=graph,
+                input_text=n["input"], parts=[tuple(p) for p in n["parts"]], original_input=original,
+                failed_inputs=[], agents=agents, approvals=config.approvals, emit=emit_event, **step_extras,
+            ), variables)
+        ctx = StepContext(
+            run_id=run.id, node=node, node_run_id=node_run_id, attempt=attempt, user=user, graph=graph,
+            input_text=n["input"] or "", parts=[tuple(p) for p in n["parts"]], original_input=original,
+            failed_inputs=state["failed_inputs"].get(node_id, []), agents=agents, approvals=config.approvals,
+            emit=emit_event, **step_extras, depth=depth if node_id in feeds_output else "auto",
+            # Only a step whose answer is the run's answer is worth watching being written.
+            stream=stream and node_id in feeds_output,
+        )
+        return await RUNNERS[node["type"]](ctx)
+
+    def allowed_tries(node: dict) -> int:
+        if node.get("retry"):
+            return max(1, int(node["retry"].get("max_attempts") or 1))
+        return config.node_retry_count + 1 if config.on_node_failure == "retry" else 1
+
+    async def stop_all() -> None:
+        for task in tasks:
+            task.cancel()
+        for task in list(tasks):
+            try:
+                await task
+            except BaseException:  # noqa: BLE001 — cancelled siblings
+                pass
+        tasks.clear()
+
+    async def fail_run(message: str) -> None:
+        await stop_all()
+        state["active_seconds"] = active_before + (time.monotonic() - session_started)
+        await _save(run.id, worker_id, state)
+        # What the guardrails found stays visible on a failed run too.
+        extra = {"output": {"text": None, "guardrails": state["guardrails"]}} if state.get("guardrails") else {}
+        if await lease.release(run.id, worker_id, status=states.FAILED, error=message, **extra):
+            await emit(run.id, "run_status", status=states.FAILED, error=message)
+
+    try:
+        while True:
+            elapsed = active_before + (time.monotonic() - session_started)
+            if config.max_run_seconds and elapsed > config.max_run_seconds:
+                await fail_run(f"Stopped: the workflow ran longer than its limit of {config.max_run_seconds}s.")
+                return
+
+            for node_id in S.ready(state):
+                if len(tasks) >= PARALLEL_STEPS:
+                    break
+                state["steps"] += 1
+                if state["steps"] > config.max_steps:
+                    await fail_run(f"Stopped after {config.max_steps} steps — a loop may never be exiting.")
+                    return
+                n = state["nodes"][node_id]
+                n["status"] = S.RUNNING
+                node = graph.nodes[node_id]
+                await _save(run.id, worker_id, state)
+                node_run_id = await _node_run(run.id, node, n["attempt"], n["input"] or "")
+                await emit(run.id, "node_status", node_id=node_id, status="running", attempt=n["attempt"])
+                task = asyncio.create_task(run_step(node_id, node_run_id, n["attempt"]), name=f"step:{node_id}")
+                tasks[task] = (node_id, node_run_id)
+
+            if not tasks:
+                break
+            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                node_id, node_run_id = tasks.pop(task)
+                node = graph.nodes[node_id]
+                n = state["nodes"][node_id]
+                try:
+                    outcome = task.result()
+                except Paused:
+                    n["status"] = S.PAUSED
+                    await _finish_node(node_run_id, states.WAITING)
+                    await emit(run.id, "node_status", node_id=node_id, status="waiting")
+                    continue
+                except Exception as exc:  # noqa: BLE001 — a bug in one step fails that step, not the worker
+                    logger.exception("workflow step crashed run=%s node=%s", run.id, node_id)
+                    outcome = NodeOutcome(ok=False, error=f"Unexpected error: {exc}")
+
+                state["prompt_tokens"] += outcome.prompt_tokens
+                state["completion_tokens"] += outcome.completion_tokens
+                state["cost_usd"] = add_cost(state.get("cost_usd"), outcome.cost_usd)
+                if outcome.guardrails:
+                    state.setdefault("guardrails", []).extend({**f, "node_id": node_id} for f in outcome.guardrails)
+                if outcome.ok:
+                    await _finish_node(node_run_id, states.SUCCEEDED, outcome)
+                    state["sources"] = list(dict.fromkeys(state["sources"] + outcome.sources))
+                    if outcome.final:
+                        state["final"] = {"text": outcome.output, "node_id": node_id}
+                    S.complete(state, graph, node_id, outcome.output, take=outcome.take)
+                    await emit(run.id, "node_status", node_id=node_id, status="succeeded", preview=outcome.output[:300])
+                    continue
+
+                await _finish_node(node_run_id, states.FAILED, outcome)
+                await emit(run.id, "node_status", node_id=node_id, status="failed", error=outcome.error)
+                if not outcome.never_skip and n["tries"] < allowed_tries(node):
+                    S.retry(state, node_id)
+                elif S.tolerant(graph, node_id) and not outcome.never_skip:
+                    S.fail_tolerated(state, graph, node_id, outcome.error or "failed")
+                elif not outcome.never_skip and (
+                    config.on_node_failure == "skip"
+                    or (config.on_node_failure == "retry" and config.node_retry_fallback == "skip")
+                ):
+                    S.complete(state, graph, node_id, n["input"] or "")
+                else:
+                    await fail_run(f'Step "{graph.label(node_id)}" failed: {outcome.error}')
+                    return
+            state["active_seconds"] = active_before + (time.monotonic() - session_started)
+            await _save(run.id, worker_id, state)
+    except (LostLease, asyncio.CancelledError):
+        await stop_all()
+        raise asyncio.CancelledError()
+
+    state["active_seconds"] = active_before + (time.monotonic() - session_started)
+    await _save(run.id, worker_id, state)
+    if S.paused(state):
+        if await lease.release(run.id, worker_id, status=states.WAITING):
+            await emit(run.id, "run_status", status=states.WAITING)
+        from builder.runs.executor import requeue_if_decided
+
+        await requeue_if_decided(run.id)
+        return
+
+    final = state.get("final") or {}
+    text = final.get("text")
+    if text is None:
+        text = "\n\n".join(t for _, t in S.sinks_done(state, graph) if t)
+    if config.include_step_summary:
+        text = (text or "") + _step_summary(state, graph, agents)
+    output = {"text": text, "sources": state["sources"], "final_node": final.get("node_id"), "guardrails": state.get("guardrails") or []}
+    await emit(run.id, "output", text=text, sources=state["sources"])
+    if await lease.release(
+        run.id, worker_id, status=states.SUCCEEDED, output_text=text, output=output,
+        prompt_tokens=state["prompt_tokens"], completion_tokens=state["completion_tokens"], cost_usd=state.get("cost_usd"),
+    ):
+        await emit(run.id, "run_status", status=states.SUCCEEDED)
+
+
+__all__ = ["execute_workflow", "PARALLEL_STEPS"]

@@ -168,7 +168,7 @@ new system needs exactly three steps:
 ```bash
 cp .env.example .env        # 1. create your local env file (defaults work)
 make install                # 2. uv sync + pnpm install (lockfiles pinned)
-make dev                    # 3. run API :8001 + Web :3000 together
+make docker-dev             # 3. backend in Docker + Web :3001 with hot reload
 ```
 
 **Tables are created automatically.** On startup the API runs Alembic to bring
@@ -184,13 +184,30 @@ in the `alembic_version` table, so later `make upgrade` calls are safe no-ops.
 | Command | What it does |
 | :------ | :----------- |
 | `make install` | backend (`uv sync --frozen`) + frontend (`pnpm install --frozen-lockfile`) |
-| `make dev` | API + Web with hot reload, one command |
+| `make docker-dev` | backend (auth :8001, API :8002) in Docker + Web :3001 with hot reload |
 | `make upgrade` / `make downgrade` | migrate forward / back one step |
 | `make revision m="add x"` | autogenerate a new migration |
 | `make test` | pytest + vitest |
 | `make docker-up` | same stack inside Docker |
 
 ---
+
+## Supabase or the local database
+
+`.env` keeps both: `SUPABASE_DATABASE_URL` (where Supabase is) and
+`AUTH_DATABASE_URL` (what the app uses — set = Supabase, absent = `data/auth.db`).
+The app never switches by itself: if the active database can't be reached,
+`make docker-dev` stops and says what to do (a free Supabase project pauses
+after 7 days unused — restore it from the dashboard).
+
+| Command | What it does |
+| :------ | :----------- |
+| `make db-status` | which database is active, and whether Supabase answers |
+| `make db-backup` | all of Supabase → `data/backup/supabase-<time>.db` |
+| `make db-local` | run on `data/auth.db`, refreshed from Supabase first when it answers (old file kept in `data/backup/`) |
+| `make db-supabase` | run on Supabase again; warns if the local file changed meanwhile (those changes stay local) |
+
+Restart after switching: `make docker-down && make docker-dev`. `YES=1` skips the questions.
 
 ## Switching databases (SQLite → Postgres → …)
 

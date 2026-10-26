@@ -23,10 +23,12 @@ from apps.llm_gateway.exceptions import (
     AuthenticationError,
     ContentFilterError,
     ProviderAPIError,
+    ProviderNotConfiguredError,
     RateLimitError,
 )
 from apps.llm_gateway.gateway import LLMGateway
 from apps.llm_gateway.providers import (
+    AzureOpenAIClient,
     GeminiClient,
     GroqClient,
     OpenAIClient,
@@ -84,6 +86,67 @@ def test_groq_prefix():
     assert client._litellm_model("llama-3.3-70b-versatile") == "groq/llama-3.3-70b-versatile"
 
 
+def _azure_config(**overrides):
+    cfg = dict(
+        api_key="az-key", base_url="https://dev.openai.azure.com/", api_version="2025-01-01-preview",
+        default_model="gpt-4.1-mini", azure_chat_deployment="gpt-4.1-mini", force_azure=True,
+    )
+    cfg.update(overrides)
+    return ProviderConfig(**cfg)
+
+
+def test_azure_routes_every_model_to_the_deployment():
+    client = AzureOpenAIClient(_azure_config())
+    assert client._litellm_model("gpt-4o") == "azure/gpt-4.1-mini"
+    assert client._litellm_model("gpt-4.1-mini") == "azure/gpt-4.1-mini"
+
+
+def test_azure_needs_key_and_endpoint():
+    with pytest.raises(ProviderNotConfiguredError):
+        AzureOpenAIClient(_azure_config(base_url=None))
+
+
+@pytest.mark.asyncio
+async def test_azure_without_embedding_deployment_refuses_fast():
+    client = AzureOpenAIClient(_azure_config())
+    with patch("litellm.aembedding", new=AsyncMock()) as called, pytest.raises(ProviderNotConfiguredError):
+        await client.embed(["x"])
+    called.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_azure_complete_passes_endpoint_and_version():
+    client = AzureOpenAIClient(_azure_config())
+    captured: dict = {}
+
+    async def fake_acompletion(**kwargs):
+        captured.update(kwargs)
+        return _completion_resp(content="ok", model="azure/gpt-4.1-mini")
+
+    with patch("litellm.acompletion", new=fake_acompletion):
+        resp = await client.complete(CompletionRequest(messages=[Message(role=Role.USER, content="Hi")]))
+
+    assert captured["model"] == "azure/gpt-4.1-mini"
+    assert captured["api_base"] == "https://dev.openai.azure.com/"
+    assert captured["api_version"] == "2025-01-01-preview"
+    assert captured["api_key"] == "az-key"
+    assert resp.provider == "azure"
+
+
+@pytest.mark.asyncio
+async def test_gateway_uses_azure_as_default():
+    settings = GatewaySettings(azure=_azure_config(), default_provider="azure")
+    gw = LLMGateway(settings)
+    assert gw.configured_providers == ["azure"]
+
+    async def fake_acompletion(**kwargs):
+        return _completion_resp(content="from azure", model=kwargs["model"])
+
+    with patch("litellm.acompletion", new=fake_acompletion):
+        resp = await gw.complete(CompletionRequest(messages=[Message(role=Role.USER, content="Hi")]))
+    assert resp.provider == "azure" and resp.content == "from azure"
+
+
 # ── completion: passthrough + response mapping ───────────────────────────────
 
 @pytest.mark.asyncio
@@ -111,6 +174,23 @@ async def test_complete_calls_litellm_with_prefix_and_api_key():
     assert resp.provider == "openai"
     assert resp.model == "openai/gpt-4o"
     assert resp.usage.total_tokens == 8
+
+
+@pytest.mark.asyncio
+async def test_reasoning_effort_goes_only_to_models_that_reason():
+    sent: dict[str, dict] = {}
+
+    async def fake_acompletion(**kwargs):
+        sent[kwargs["model"]] = kwargs
+        return _completion_resp(model=kwargs["model"])
+
+    with patch("litellm.acompletion", new=fake_acompletion):
+        for model in ("o4-mini", "gpt-4.1-mini"):
+            client = OpenAIClient(ProviderConfig(api_key="sk", default_model=model))
+            await client.complete(CompletionRequest(messages=[Message(role=Role.USER, content="Hi")], reasoning_effort="high"))
+
+    assert sent["openai/o4-mini"]["reasoning_effort"] == "high"
+    assert "reasoning_effort" not in sent["openai/gpt-4.1-mini"]  # it would reject the parameter
 
 
 @pytest.mark.asyncio

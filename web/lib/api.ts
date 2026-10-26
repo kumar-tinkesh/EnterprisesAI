@@ -13,14 +13,17 @@ const API_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8001/api/v1";
 
 // Base URL of the EnterpriseAI Backend (Vendor Resources / AI Compiler).
-const BACKEND_API_URL =
+export const BACKEND_API_URL =
   process.env.NEXT_PUBLIC_BACKEND_API_URL ?? "http://localhost:8002/api/v1";
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** The parsed error body, when there was one (e.g. a builder 422's `problems`). */
+  body: unknown;
+  constructor(status: number, message: string, body?: unknown) {
     super(message);
     this.status = status;
+    this.body = body;
   }
 }
 
@@ -52,14 +55,16 @@ async function tryRefreshToken(): Promise<string | null> {
   return data.access_token;
 }
 
-async function request<T>(
+export async function request<T>(
   path: string,
   init: RequestInit = {},
   token?: string,
   base: string = API_URL,
 ): Promise<T> {
+  // A FormData body (file upload) must let the browser set its own
+  // multipart Content-Type, boundary included.
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
+    ...(init.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
     ...(init.headers as Record<string, string> | undefined),
   };
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -77,13 +82,16 @@ async function request<T>(
 
   if (!res.ok) {
     let detail: string = `Request failed (${res.status})`;
+    let body: unknown;
     try {
-      const body = await res.json();
-      if (typeof body?.detail === "string") detail = body.detail;
+      body = await res.json();
+      const d = (body as { detail?: unknown })?.detail;
+      if (typeof d === "string") detail = d;
+      else if (d && typeof (d as { message?: unknown }).message === "string") detail = (d as { message: string }).message;
     } catch {
       /* ignore parse errors */
     }
-    throw new ApiError(res.status, detail);
+    throw new ApiError(res.status, detail, body);
   }
   if (res.status === 204) return {} as T;
   return (await res.json()) as T;
@@ -335,9 +343,25 @@ export interface OAuthConfigBody {
 }
 
 export interface OAuthAuthorizeBody {
-  client_id: string;
-  client_secret: string;
+  client_id?: string;
+  client_secret?: string;
   scope?: string;
+}
+
+// No client_id/client_secret — those are the vendor's shared OAuth app
+// credentials (set once by an admin via oauth-config); an end-user only
+// ever supplies their own consent, never the app secret.
+export interface OAuthAuthorizeAsUserBody {
+  scope?: string;
+}
+
+// Native per-user device-pairing bridge (e.g. WhatsApp) — see
+// apps/backend/vendor/services/whatsapp_bridge/manager.py.
+export interface BridgeStatus {
+  status: "not_connected" | "starting" | "awaiting_qr" | "connected" | "error";
+  qr?: string | null;
+  pair_code?: string | null;
+  error?: string | null;
 }
 
 export interface OAuthAuthorizeResponse {
@@ -352,6 +376,9 @@ export interface MCPServerEntry {
   transport: string;
   server_url: string;
   bound_tools: string[];
+  auth_type?: string | null;
+  credential_fields?: string[];
+  connected?: boolean;
 }
 
 export interface CatalogResponse {
@@ -389,6 +416,9 @@ export interface ToolSearchResult {
 export interface ToolSearchResponse {
   results: ToolSearchResult[];
   count: number;
+  // Servers with a matching tool that were left out of `results` because
+  // the caller hasn't connected their own credential for them yet.
+  needs_connection_server_ids?: string[];
 }
 
 // GET /catalog/plan-tool-call — an LLM picks one tool from the search above
@@ -407,6 +437,9 @@ export interface ToolCallPlanResponse {
   plan: PlannedToolCall | null;
   candidates_considered: string[];
   message: string | null;
+  // Set when `message` is specifically "you haven't connected this server
+  // yet" — the client can use it to render a "Connect" call to action.
+  needs_connection_server_id?: string | null;
 }
 
 /** Client for the Vendor Resources / AI Compiler backend (port 8002). */
@@ -430,6 +463,61 @@ export const vendorApi = {
     }, token, BACKEND_API_URL),
   disconnectMCPServer: (token: string, serverId: string) =>
     request<VendorMCPServer>(`${VR}/mcp/${serverId}/disconnect`, { method: "POST" }, token, BACKEND_API_URL),
+  // End-user self-service connect — stores *this user's own* isolated
+  // credential for an already vendor-verified server (see
+  // apps/backend/vendor/api/v1/router.py::connect_mcp_server_as_user_endpoint).
+  connectMCPServerAsUser: (token: string, serverId: string, credentials?: Record<string, string> | null) =>
+    request<ConnectMCPServerResponse>(`${VR}/mcp/${serverId}/connect-as-user`, {
+      method: "POST",
+      body: JSON.stringify(credentials ? { credentials } : {}),
+    }, token, BACKEND_API_URL),
+  // End-user self-service disconnect — removes only *this user's own*
+  // isolated credential (see
+  // apps/backend/vendor/api/v1/router.py::disconnect_mcp_server_as_user_endpoint).
+  disconnectMCPServerAsUser: (token: string, serverId: string) =>
+    request<void>(`${VR}/mcp/${serverId}/disconnect-as-user`, {
+      method: "POST",
+    }, token, BACKEND_API_URL),
+  // End-user self-service "Connect via OAuth" — builds *this user's own*
+  // consent URL for an oauth2 server; the resulting tokens land in this
+  // user's own isolated credential row, never the vendor's shared one
+  // (see apps/backend/vendor/api/v1/user_connection.py::start_mcp_oauth_authorize_as_user).
+  startMCPOAuthAuthorizeAsUser: (token: string, serverId: string, body: OAuthAuthorizeAsUserBody) =>
+    request<OAuthAuthorizeResponse>(`${VR}/mcp/${serverId}/oauth/authorize-as-user`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }, token, BACKEND_API_URL),
+  // Native per-user device-pairing bridge (e.g. WhatsApp) — start/poll/stop
+  // *this user's own* long-running bridge process. See
+  // apps/backend/vendor/api/v1/bridge.py.
+  startBridgeAsUser: (token: string, serverId: string) =>
+    request<BridgeStatus>(`${VR}/mcp/${serverId}/bridge/connect-as-user`, {
+      method: "POST",
+    }, token, BACKEND_API_URL),
+  getBridgeStatusAsUser: (token: string, serverId: string) =>
+    request<BridgeStatus>(`${VR}/mcp/${serverId}/bridge/status-as-user`, {
+      method: "GET",
+    }, token, BACKEND_API_URL),
+  // Link by phone number instead of the QR — for someone on the same phone
+  // WhatsApp runs on. Returns the code to type into WhatsApp.
+  pairPhoneBridgeAsUser: (token: string, serverId: string, phone: string) =>
+    request<BridgeStatus>(`${VR}/mcp/${serverId}/bridge/pair-phone-as-user`, {
+      method: "POST",
+      body: JSON.stringify({ phone }),
+    }, token, BACKEND_API_URL),
+  disconnectBridgeAsUser: (token: string, serverId: string) =>
+    request<void>(`${VR}/mcp/${serverId}/bridge/disconnect-as-user`, {
+      method: "POST",
+    }, token, BACKEND_API_URL),
+  forgetBridgeAsUser: (token: string, serverId: string) =>
+    request<void>(`${VR}/mcp/${serverId}/bridge/forget-as-user`, {
+      method: "POST",
+    }, token, BACKEND_API_URL),
+  setMCPServerGlobal: (token: string, serverId: string, isGlobal: boolean) =>
+    request<VendorMCPServer>(`${VR}/mcp/${serverId}/global`, {
+      method: "PATCH",
+      body: JSON.stringify({ is_global: isGlobal }),
+    }, token, BACKEND_API_URL),
   // "Connect via OAuth" bootstrap — see apps/backend/vendor/services/oauth_flow.py
   setMCPOAuthConfig: (token: string, serverId: string, body: OAuthConfigBody) =>
     request<VendorMCPServer>(`${VR}/mcp/${serverId}/oauth-config`, {
@@ -492,4 +580,91 @@ export const vendorApi = {
       method: "GET",
     }, token, BACKEND_API_URL);
   },
+};
+
+// ─── Knowledge bases (backend /api/v1/knowledge-bases) ──────────────────────
+
+export interface KnowledgeBase {
+  id: string;
+  name: string;
+  description: string;
+  owner_id: string;
+  document_count: number;
+  // True for the knowledge base's creator and tenant admins (rename / delete).
+  can_manage: boolean;
+  created_at: string;
+}
+
+export type KnowledgeDocumentStatus = "processing" | "ready" | "error";
+
+export interface KnowledgeDocument {
+  id: string;
+  filename: string;
+  status: KnowledgeDocumentStatus;
+  error_message: string | null;
+  chunk_count: number;
+  // Typed text or an uploaded .md/.txt file: can be opened and edited.
+  editable: boolean;
+  created_at: string;
+}
+
+export interface KnowledgeDocumentText {
+  id: string;
+  filename: string;
+  title: string;
+  content: string;
+}
+
+export interface KnowledgeSearchHit {
+  id: string;
+  content: string;
+  filename: string;
+  document_id: string;
+  chunk_index: number;
+  score: number;
+  retrieval_method: "hybrid" | "semantic" | "keyword";
+  metadata: Record<string, string | number>;
+}
+
+export interface KnowledgeSearchResponse {
+  query: string;
+  results: KnowledgeSearchHit[];
+}
+
+const KB = "/knowledge-bases";
+
+export const knowledgeApi = {
+  list: (token: string) =>
+    request<KnowledgeBase[]>(KB, { method: "GET" }, token, BACKEND_API_URL),
+  create: (token: string, body: { name: string; description?: string }) =>
+    request<KnowledgeBase>(KB, { method: "POST", body: JSON.stringify(body) }, token, BACKEND_API_URL),
+  update: (token: string, kbId: string, body: { name?: string; description?: string }) =>
+    request<KnowledgeBase>(`${KB}/${kbId}`, { method: "PATCH", body: JSON.stringify(body) }, token, BACKEND_API_URL),
+  remove: (token: string, kbId: string) =>
+    request<void>(`${KB}/${kbId}`, { method: "DELETE" }, token, BACKEND_API_URL),
+
+  listDocuments: (token: string, kbId: string) =>
+    request<KnowledgeDocument[]>(`${KB}/${kbId}/documents`, { method: "GET" }, token, BACKEND_API_URL),
+  uploadDocument: (token: string, kbId: string, file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    return request<KnowledgeDocument>(`${KB}/${kbId}/documents`, { method: "POST", body }, token, BACKEND_API_URL);
+  },
+  addText: (token: string, kbId: string, body: { title: string; content: string }) =>
+    request<KnowledgeDocument>(`${KB}/${kbId}/text`, { method: "POST", body: JSON.stringify(body) }, token, BACKEND_API_URL),
+  getText: (token: string, kbId: string, docId: string) =>
+    request<KnowledgeDocumentText>(`${KB}/${kbId}/documents/${docId}/text`, { method: "GET" }, token, BACKEND_API_URL),
+  updateText: (token: string, kbId: string, docId: string, body: { title: string; content: string }) =>
+    request<KnowledgeDocument>(`${KB}/${kbId}/documents/${docId}/text`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }, token, BACKEND_API_URL),
+  removeDocument: (token: string, kbId: string, docId: string) =>
+    request<void>(`${KB}/${kbId}/documents/${docId}`, { method: "DELETE" }, token, BACKEND_API_URL),
+
+  search: (token: string, kbId: string, body: { query: string; top_k?: number }) =>
+    request<KnowledgeSearchResponse>(`${KB}/${kbId}/search`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }, token, BACKEND_API_URL),
 };

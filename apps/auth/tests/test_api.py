@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
+from src.core.roles import Roles
+from src.core.security import hash_password
+from src.db.session import SessionLocal
 from src.models import RefreshToken, Tenant, VendorUser
 
 
@@ -29,8 +32,18 @@ async def _token(resp):
     return resp.json()["access_token"]
 
 
+async def _create_vendor_admin(email, password="str0ng!pass"):
+    """Vendor admins can't sign up; insert one the way the startup bootstrap does."""
+    async with SessionLocal() as session:
+        session.add(VendorUser(
+            email=email, hashed_password=hash_password(password),
+            full_name="Platform Admin", role=Roles.VENDOR_ADMIN, is_active=True,
+        ))
+        await session.commit()
+
+
 async def _create_vendor_admin_access(client):
-    await _signup(client, email="vendor@platform.io", role="vendor_admin")
+    await _create_vendor_admin("vendor@platform.io")
     return await _token(await _login(client, email="vendor@platform.io"))
 
 
@@ -147,12 +160,13 @@ async def test_tenant_member_crud(client):
     assert stats_res3.json()["member_count"] == 0
 
 
-async def test_signup_vendor_admin(client, db):
+async def test_signup_vendor_admin_disabled(client, db):
+    """Vendor admin self-signup is disabled; the platform admin comes from env."""
     resp = await _signup(client, email="priya@enterpriseai.io", role="vendor_admin")
-    assert resp.status_code == 201, resp.text
-    assert resp.json()["user"]["role"] == "vendor_admin"
+    assert resp.status_code == 400
+    assert "disabled" in resp.json()["detail"].lower()
     vendors = list((await db.execute(select(VendorUser))).scalars())
-    assert len(vendors) == 1
+    assert vendors == []
 
 
 async def test_signup_invalid_role(client):
@@ -213,7 +227,9 @@ async def test_logout_revokes(client):
 
 async def _signup_and_login(client, role):
     email = f"{role}@example.com"
-    if role == "vendor_admin" or role == "solo_user":
+    if role == "vendor_admin":
+        await _create_vendor_admin(email)
+    elif role == "solo_user":
         await _signup(client, email=email, role=role)
     elif role == "tenant_admin":
         v_access = await _create_vendor_admin_access(client)

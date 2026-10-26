@@ -146,6 +146,40 @@ async def test_delete_mcp_cascades_grants(admin_client, tenant_client, tenant):
 
 
 @pytest.mark.asyncio
+async def test_new_mcp_is_global_by_default(admin_client, solo_client):
+    payload = {k: v for k, v in _mcp_payload("mcp.default.global").items() if k != "is_global"}
+    res = await admin_client.post(f"{BASE}/mcp", json=payload)
+    assert res.status_code == 201, res.text
+    assert res.json()["is_global"] is True
+    cat = await solo_client.get(f"{BASE}/catalog")
+    assert "mcp.default.global" in {s["name"] for s in cat.json()["servers"]}
+
+
+@pytest.mark.asyncio
+async def test_set_mcp_global_toggles_user_visibility(admin_client, solo_client):
+    server_id = (await admin_client.post(f"{BASE}/mcp", json=_mcp_payload("mcp.toggle"))).json()["id"]
+    names = lambda r: {s["name"] for s in r.json()["servers"]}
+    assert "mcp.toggle" not in names(await solo_client.get(f"{BASE}/catalog"))
+
+    res = await admin_client.patch(f"{BASE}/mcp/{server_id}/global", json={"is_global": True})
+    assert res.status_code == 200, res.text
+    assert res.json()["is_global"] is True
+    assert "mcp.toggle" in names(await solo_client.get(f"{BASE}/catalog"))
+
+    await admin_client.patch(f"{BASE}/mcp/{server_id}/global", json={"is_global": False})
+    assert "mcp.toggle" not in names(await solo_client.get(f"{BASE}/catalog"))
+
+
+@pytest.mark.asyncio
+async def test_set_mcp_global_admin_only(admin_client, solo_client):
+    server_id = (await admin_client.post(f"{BASE}/mcp", json=_mcp_payload("mcp.toggle.rbac"))).json()["id"]
+    res = await solo_client.patch(f"{BASE}/mcp/{server_id}/global", json={"is_global": True})
+    assert res.status_code == 403
+    res = await admin_client.patch(f"{BASE}/mcp/nope/global", json={"is_global": True})
+    assert res.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_delete_mcp_not_found(admin_client):
     res = await admin_client.delete(f"{BASE}/nonexistent-server-id")
     assert res.status_code == 404

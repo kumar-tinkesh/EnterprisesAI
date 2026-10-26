@@ -108,6 +108,57 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     return dot / (na * nb)
 
 
+# Minimum token length eligible for compound-split / substring matching
+# (below). A short token ("at", "app") would trivially appear inside or
+# alongside half the vocabulary, turning this into noise rather than a
+# real signal — 4 chars keeps it to genuinely distinctive words.
+_SUBSTRING_MATCH_MIN_LEN = 4
+
+
+def _split_compound(token: str, vocabulary: set[str]) -> Optional[list[str]]:
+    """If ``token`` is the exact concatenation of two vocabulary words
+    (e.g. query "filesystem" against a corpus that only ever writes "file
+    system" as two words), return those two words so BM25 credits both.
+
+    Without this, a compound-vs-spaced mismatch contributes *zero*
+    lexical signal even though a human reading "filesystem" next to "file
+    system tools" would obviously call them the same thing — and unlike a
+    misspelling, edit-distance typo correction can't catch it (the two
+    spellings differ by exactly one space, which tanks the character-level
+    similarity ratio well below the typo cutoff).
+    """
+    for i in range(_SUBSTRING_MATCH_MIN_LEN, len(token) - _SUBSTRING_MATCH_MIN_LEN + 1):
+        left, right = token[:i], token[i:]
+        if left in vocabulary and right in vocabulary:
+            return [left, right]
+    return None
+
+
+def _substring_match(token: str, vocabulary: set[str]) -> Optional[str]:
+    """The longest vocabulary word that ``token`` contains, or that
+    contains ``token``, as a whole substring — catches an
+    abbreviation/expansion mismatch exact-token BM25 matching misses
+    (query "wikipedia" vs a server literally named "wiki"). Like
+    :func:`_split_compound`, this is a different failure mode from a
+    misspelling: "wikipedia" and "wiki" are genuinely different-length
+    words, not typos of each other, so their edit-distance ratio sits well
+    below the typo cutoff by design.
+
+    Guarded by ``_SUBSTRING_MATCH_MIN_LEN`` on the shorter side so a short
+    token doesn't spuriously "contain-match" half the vocabulary.
+    """
+    if len(token) < _SUBSTRING_MATCH_MIN_LEN:
+        return None
+    best: Optional[str] = None
+    for word in vocabulary:
+        shorter, longer = (word, token) if len(word) <= len(token) else (token, word)
+        if len(shorter) < _SUBSTRING_MATCH_MIN_LEN:
+            continue
+        if shorter in longer and (best is None or len(word) > len(best)):
+            best = word
+    return best
+
+
 def _correct_typos(query_tokens: list[str], vocabulary: set[str]) -> list[str]:
     """Fuzzy-correct query tokens against the candidate corpus's own
     vocabulary before BM25 lookup.
@@ -122,21 +173,31 @@ def _correct_typos(query_tokens: list[str], vocabulary: set[str]) -> list[str]:
     needs no per-word or per-vendor rules.
 
     A token already in the vocabulary is used as-is (exact match is always
-    preferred over a fuzzy guess); a token that's absent is replaced with
-    the closest vocabulary word only above ``_TYPO_MATCH_CUTOFF`` — below
-    that, it's left alone rather than risk conflating two genuinely
-    different words (see the cutoff's own docstring for the measured
-    typo-vs-real-word ratios behind that threshold).
+    preferred over a fuzzy guess). An absent token is corrected by, in
+    order: the closest vocabulary word above ``_TYPO_MATCH_CUTOFF`` (a
+    likely misspelling); else an exact two-word compound split (a likely
+    spacing difference, see :func:`_split_compound`); else a substring
+    match (a likely abbreviation/expansion, see :func:`_substring_match`).
+    Failing all three, it's left alone rather than risk conflating two
+    genuinely different words.
     """
     corrected = []
     for token in query_tokens:
         if token in vocabulary:
             corrected.append(token)
             continue
-        match = difflib.get_close_matches(
+        typo_match = difflib.get_close_matches(
             token, vocabulary, n=1, cutoff=_TYPO_MATCH_CUTOFF
         )
-        corrected.append(match[0] if match else token)
+        if typo_match:
+            corrected.append(typo_match[0])
+            continue
+        compound = _split_compound(token, vocabulary)
+        if compound:
+            corrected.extend(compound)
+            continue
+        substring = _substring_match(token, vocabulary)
+        corrected.append(substring if substring else token)
     return corrected
 
 
@@ -230,6 +291,41 @@ def _rerank_scores(query: str, texts: list[str]) -> Optional[list[float]]:
         return None
 
 
+def _apply_relevance_floor(
+    order: list[int], *, bm25_matched: set[int], top_k: int
+) -> list[int]:
+    """Trim the tail of ``order`` (best-first indices) to ``top_k``, but
+    when at least one candidate in this ranking call has real lexical
+    (BM25) evidence, also drop any trailing candidate ranked *after* the
+    last BM25-matched one that itself has zero BM25 evidence — instead of
+    always forcing exactly ``top_k`` results regardless of whether the
+    tail candidates cleared any real relevance bar.
+
+    Why: when the corpus text is generic/interchangeable (e.g. every
+    candidate merely described as "<name> tools"), the vector signal alone
+    often can't reliably separate a genuine match from an unrelated
+    candidate that just happens to embed nearby, and a fixed slot count
+    silently fills with noise (verified live: a 4-intent query correctly
+    BM25-matched exactly 4 servers, but the unfilled 5th slot kept going
+    to an unrelated server on vector-score noise alone — the two scores
+    were 0.011 apart, well within that noise). A candidate ranked *between*
+    two BM25-matched ones is left in place (it's genuinely competitive,
+    not tail noise) — only the trailing run past the last real match is
+    cut.
+
+    Deliberately a no-op when BM25 found *no* matches at all for this
+    call (``bm25_matched`` empty) — that's the genuine "vector caught a
+    paraphrase BM25 has zero lexical overlap with" case hybrid search
+    exists for, and it's left fully alone (existing pure-vector-ranked
+    behavior, unchanged).
+    """
+    window = order[:top_k]
+    if not bm25_matched:
+        return window
+    last_matched = max((i for i, idx in enumerate(window) if idx in bm25_matched), default=-1)
+    return window[: last_matched + 1] if last_matched >= 0 else window
+
+
 def rank(
     items: list[T],
     *,
@@ -263,10 +359,12 @@ def rank(
             scored.sort(key=lambda s: s[0], reverse=True)
             rankings.append([idx for _, idx in scored])
 
+    bm25_order: list[int] = []
     if query:
         bm25_order = _bm25_rank_indices(query, texts)
         if bm25_order:
             rankings.append(bm25_order)
+    bm25_matched = set(bm25_order)
 
     if not rankings:
         return items[:top_k]
@@ -281,7 +379,8 @@ def rank(
     rerank_scores = _rerank_scores(query, [texts[i] for i in shortlist])
 
     if rerank_scores is None:
-        return [items[i] for i in fused[:top_k]]
+        floored = _apply_relevance_floor(fused, bm25_matched=bm25_matched, top_k=top_k)
+        return [items[i] for i in floored]
 
     rerank_order = [
         shortlist[i]
@@ -300,7 +399,8 @@ def rank(
     # bug-report query, and ranking a "move page" tool above the actual
     # "create page" tool for a create-page query.
     final = _rrf_fuse([fused, rerank_order], size=n, weights=[1.0, _RERANK_WEIGHT])
-    return [items[i] for i in final[:top_k]]
+    floored = _apply_relevance_floor(final, bm25_matched=bm25_matched, top_k=top_k)
+    return [items[i] for i in floored]
 
 
 __all__ = ["rank", "cosine_similarity"]

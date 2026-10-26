@@ -1,0 +1,53 @@
+{"id": "gmail-send-en", "query": "Send an email to rahul@acme.com with subject Invoice and say the invoice is attached", "expect": {"server": "Gmail", "tool": "send_email"}, "args": {"to": "rahul@acme.com", "subject": "invoice"}, "tags": ["en"]}
+{"id": "gmail-send-hi", "query": "rahul@acme.com ko mail bhejo ki kal ki meeting 4 baje hai", "expect": {"server": "Gmail", "tool": "send_email"}, "args": {"to": "rahul@acme.com"}, "tags": ["hinglish"]}
+{"id": "gmail-search-en", "query": "find unread emails from priya sent this week", "expect": {"server": "Gmail", "tool": "search_emails"}, "args": {"query": "priya"}, "tags": ["en"]}
+{"id": "gmail-search-hi", "query": "meri inbox me amazon ke saare mail dhundo", "expect": {"server": "Gmail", "tool": "search_emails"}, "args": {"query": "amazon"}, "tags": ["hinglish"]}
+{"id": "gmail-draft", "query": "prepare a draft reply to the client but don't send it yet", "expect": {"server": "Gmail", "tool": "draft_email"}, "tags": ["en", "lookalike"]}
+{"id": "gmail-archive", "query": "archive the email with id 18c2f and mark it as read", "expect": {"server": "Gmail", "tool": "modify_labels"}, "args": {"message_id": "18c2f"}, "tags": ["en", "paraphrase"]}
+{"id": "gmail-typo", "query": "snd emial to hr@acme.com about my leave", "expect": {"server": "Gmail", "tool": "send_email"}, "args": {"to": "hr@acme.com"}, "tags": ["typo"]}
+{"id": "slack-post-en", "query": "post in #engineering that the deploy is done", "expect": {"server": "Slack", "tool": "post_message"}, "args": {"channel": "engineering", "text": "deploy"}, "tags": ["en", "lookalike"]}
+{"id": "slack-post-hi", "query": "slack ke #sales channel me bolo ki target poora ho gaya", "expect": {"server": "Slack", "tool": "post_message"}, "args": {"channel": "sales"}, "tags": ["hinglish", "lookalike"]}
+{"id": "slack-history", "query": "what has been discussed in the #support channel recently", "expect": {"server": "Slack", "tool": "get_channel_history"}, "args": {"channel": "support"}, "tags": ["en", "paraphrase"]}
+{"id": "slack-thread", "query": "reply in the thread 1712.33 in #design saying looks good", "expect": {"server": "Slack", "tool": "reply_to_thread"}, "args": {"thread_ts": "1712.33"}, "tags": ["en"]}
+{"id": "slack-react", "query": "add a thumbs up emoji to that slack message", "expect": {"server": "Slack", "tool": "add_reaction"}, "tags": ["en"]}
+{"id": "slack-channels", "query": "which slack channels do we have", "expect": {"server": "Slack", "tool": "list_channels"}, "tags": ["en"]}
+{"id": "wa-send-en", "query": "whatsapp +919876543210 that I will be late by 10 minutes", "expect": {"server": "WhatsApp", "tool": "send_message"}, "args": {"recipient": "9876543210"}, "tags": ["en", "lookalike"]}
+{"id": "wa-send-hi", "query": "mummy ko whatsapp pe message karo ki main ghar aa raha hoon", "expect": {"server": "WhatsApp", "tool": "send_message"}, "args": {"recipient": "mummy"}, "tags": ["hinglish", "lookalike"]}
+{"id": "wa-read", "query": "show me the last messages in my chat with Amit on whatsapp", "expect": {"server": "WhatsApp", "tool": "list_messages"}, "args": {"chat": "amit"}, "tags": ["en"]}
+{"id": "wa-file", "query": "send the brochure pdf to +14155550100 on whatsapp", "expect": {"server": "WhatsApp", "tool": "send_file"}, "tags": ["en"]}
+{"id": "gh-issue-en", "query": "open a bug in acme/webapp repo titled Login button broken", "expect": {"server": "GitHub", "tool": "create_issue"}, "args": {"owner": "acme", "repo": "webapp", "title": "login"}, "tags": ["en", "lookalike"]}
+{"id": "gh-issue-hi", "query": "github pe acme/api repo me issue banao ki rate limit kaam nahi kar raha", "expect": {"server": "GitHub", "tool": "create_issue"}, "args": {"repo": "api"}, "tags": ["hinglish", "lookalike"]}
+{"id": "gh-list-issues", "query": "list open issues in acme/webapp", "expect": {"server": "GitHub", "tool": "list_issues"}, "args": {"owner": "acme", "repo": "webapp"}, "tags": ["en"]}
+{"id": "gh-pr", "query": "create a PR from feature/login into main in acme/webapp", "expect": {"server": "GitHub", "tool": "create_pull_request"}, "args": {"head": "feature/login", "base": "main"}, "tags": ["en"]}
+{"id": "gh-merge", "query": "merge pull request 42 in acme/webapp", "expect": {"server": "GitHub", "tool": "merge_pull_request"}, "args": {"pull_number": 42}, "tags": ["en"]}
+{"id": "gh-file", "query": "show me the README.md of acme/webapp", "expect": {"server": "GitHub", "tool": "get_file_contents"}, "args": {"path": "readme"}, "tags": ["en", "paraphrase"]}
+{"id": "gh-comment", "query": "comment on issue 17 in acme/api that a fix is coming", "expect": {"server": "GitHub", "tool": "add_issue_comment"}, "args": {"issue_number": 17}, "tags": ["en"]}
+{"id": "jira-create-en", "query": "create a jira bug in project PAY: refund fails for UPI", "expect": {"server": "Jira", "tool": "create_issue"}, "args": {"project_key": "PAY", "issue_type": "bug"}, "tags": ["en", "lookalike"]}
+{"id": "jira-create-hi", "query": "OPS project me ek task ticket banao server migration ke liye", "expect": {"server": "Jira", "tool": "create_issue"}, "args": {"project_key": "OPS"}, "tags": ["hinglish", "lookalike"]}
+{"id": "jira-move", "query": "move PAY-231 to Done", "expect": {"server": "Jira", "tool": "transition_issue"}, "args": {"issue_key": "PAY-231", "status": "done"}, "tags": ["en"]}
+{"id": "jira-assign", "query": "assign ticket OPS-12 to neha", "expect": {"server": "Jira", "tool": "assign_issue"}, "args": {"issue_key": "OPS-12", "assignee": "neha"}, "tags": ["en"]}
+{"id": "jira-sprint", "query": "what is in the current sprint on board 7", "expect": {"server": "Jira", "tool": "get_sprint"}, "args": {"board_id": 7}, "tags": ["en", "paraphrase"]}
+{"id": "notion-create", "query": "make a notion page called Q3 Roadmap", "expect": {"server": "Notion", "tool": "create_page"}, "args": {"title": "Q3 Roadmap"}, "tags": ["en"]}
+{"id": "notion-search-hi", "query": "notion me onboarding wala doc dhundo", "expect": {"server": "Notion", "tool": "search"}, "args": {"query": "onboarding"}, "tags": ["hinglish", "lookalike"]}
+{"id": "notion-append", "query": "add today's standup notes to the end of the Notion page abc123", "expect": {"server": "Notion", "tool": "append_block"}, "args": {"page_id": "abc123"}, "tags": ["en"]}
+{"id": "drive-search", "query": "find the Q2 budget file in google drive", "expect": {"server": "Google Drive", "tool": "search_files"}, "args": {"query": "budget"}, "tags": ["en", "lookalike"]}
+{"id": "drive-share", "query": "share file 1AbC with ankit@acme.com as editor", "expect": {"server": "Google Drive", "tool": "share_file"}, "args": {"email": "ankit@acme.com", "role": "writer"}, "tags": ["en", "paraphrase"]}
+{"id": "drive-upload-hi", "query": "ye notes drive pe upload kar do meeting-notes.txt naam se", "expect": {"server": "Google Drive", "tool": "upload_file"}, "args": {"name": "meeting-notes"}, "tags": ["hinglish"]}
+{"id": "sheets-append", "query": "add a row to the expenses sheet: 7 Oct, taxi, 450", "expect": {"server": "Google Sheets", "tool": "append_rows"}, "tags": ["en"]}
+{"id": "sheets-read", "query": "read A1:D20 from spreadsheet 1xYz", "expect": {"server": "Google Sheets", "tool": "read_range"}, "args": {"range": "A1:D20"}, "tags": ["en"]}
+{"id": "sheets-create-hi", "query": "ek nayi spreadsheet banao Attendance October", "expect": {"server": "Google Sheets", "tool": "create_spreadsheet"}, "args": {"title": "attendance"}, "tags": ["hinglish"]}
+{"id": "cal-create", "query": "schedule a meeting with ravi@acme.com tomorrow 3pm to 4pm about hiring", "expect": {"server": "Google Calendar", "tool": "create_event"}, "args": {"attendees": "ravi@acme.com"}, "tags": ["en"]}
+{"id": "cal-create-hi", "query": "kal subah 10 baje design review ki meeting calendar me daal do", "expect": {"server": "Google Calendar", "tool": "create_event"}, "tags": ["hinglish"]}
+{"id": "cal-list", "query": "what's on my calendar next week", "expect": {"server": "Google Calendar", "tool": "list_events"}, "tags": ["en", "paraphrase"]}
+{"id": "cal-free", "query": "when are me and sara both free for 30 minutes this week", "expect": {"server": "Google Calendar", "tool": "find_free_time"}, "args": {"duration_minutes": 30}, "tags": ["en", "paraphrase"]}
+{"id": "cal-cancel", "query": "cancel the event evt_991", "expect": {"server": "Google Calendar", "tool": "delete_event"}, "args": {"event_id": "evt_991"}, "tags": ["en"]}
+{"id": "crm-lead", "query": "add a new lead Meera Shah, meera@zen.io, from Zen Labs to the CRM", "expect": {"server": "HubSpot", "tool": "create_contact"}, "args": {"email": "meera@zen.io"}, "tags": ["en"]}
+{"id": "crm-search-lookalike", "query": "look up the customer Zen Labs in our CRM", "expect": {"server": "HubSpot", "tool": "search_contacts"}, "args": {"query": "zen"}, "tags": ["en", "lookalike"]}
+{"id": "crm-deal-hi", "query": "Zen Labs ka 5 lakh ka deal pipeline me daalo", "expect": {"server": "HubSpot", "tool": "create_deal"}, "args": {"amount": 500000}, "tags": ["hinglish"]}
+{"id": "crm-won", "query": "mark deal 8812 as closed won", "expect": {"server": "HubSpot", "tool": "update_deal_stage"}, "args": {"deal_id": "8812"}, "tags": ["en"]}
+{"id": "weather-now", "query": "how hot is it in Pune right now", "expect": {"server": "Weather", "tool": "get_current_weather"}, "args": {"city": "pune"}, "tags": ["en", "paraphrase"]}
+{"id": "weather-forecast-hi", "query": "agle 3 din Mumbai me barish hogi kya", "expect": {"server": "Weather", "tool": "get_forecast"}, "args": {"city": "mumbai", "days": 3}, "tags": ["hinglish", "paraphrase"]}
+{"id": "weather-typo", "query": "wether forcast for delhi this weekend", "expect": {"server": "Weather", "tool": "get_forecast"}, "args": {"city": "delhi"}, "tags": ["typo"]}
+{"id": "neg-joke", "query": "tell me a joke about cats", "expect": null, "tags": ["negative"]}
+{"id": "neg-math", "query": "what is 17 times 23", "expect": null, "tags": ["negative"]}
+{"id": "neg-hi", "query": "aaj tum kaise ho", "expect": null, "tags": ["negative", "hinglish"]}

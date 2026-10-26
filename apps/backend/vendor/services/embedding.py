@@ -82,4 +82,32 @@ async def embed_tool(tool: MCPTool, *, provider: Optional[str] = None) -> bool:
     return True
 
 
-__all__ = ["embed_text", "embed_server", "embed_tool"]
+async def reembed_stale() -> tuple[int, int]:
+    """Embed every server/tool that has no vector, or one from a model other
+    than the current embedding provider's (e.g. after switching provider), so
+    catalog search never compares vectors from two models. Runs at startup;
+    returns ``(servers, tools)`` re-embedded. A no-op when embedding is down.
+    """
+    from sqlalchemy import or_, select
+
+    from src.db.session import SessionLocal
+
+    probe = await embed_text("probe")
+    if probe is None:
+        return 0, 0
+    model = probe[1]
+    counts = []
+    async with SessionLocal() as db:
+        for cls, embed in ((VendorMCPServer, embed_server), (MCPTool, embed_tool)):
+            rows = (await db.execute(select(cls).where(or_(
+                cls.embedding.is_(None), cls.embedding_model.is_(None), cls.embedding_model != model,
+            )))).scalars().all()
+            done = 0
+            for row in rows:
+                done += await embed(row)
+            counts.append(done)
+        await db.commit()
+    return counts[0], counts[1]
+
+
+__all__ = ["embed_text", "embed_server", "embed_tool", "reembed_stale"]

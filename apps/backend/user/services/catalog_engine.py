@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.deps import CurrentUser
 from src.core.roles import Roles
 
-from vendor.models import MCPTool, TenantResourceGrant, VendorMCPServer
+from vendor.models import MCPTool, TenantResourceGrant, VendorMCPCredential, VendorMCPServer
 from vendor.services.embedding import embed_text
 from vendor.services.text_repr import server_text, tool_text
 
@@ -169,6 +169,33 @@ async def get_relevant_tools_semantic(
     if not ranked_tools:
         ranked_tools = list(tools)[:top_k_tools]
 
+    # Diversity floor: ranking every selected server's tools together in one
+    # pool lets a server with many tools (e.g. 20+) statistically crowd out
+    # a server with only a couple, especially for a multi-intent query whose
+    # single combined embedding is blurry (verified live: a 5-server pool
+    # for a 4-intent query returned zero tools from two of the servers
+    # Stage 1 itself had just ranked as relevant). Guarantee each Stage-1
+    # server its own best-matching tool a slot, so a server Stage 1 already
+    # judged relevant can't be silently dropped here purely because a
+    # bigger sibling server crowded the pool.
+    seen_servers = {t.mcp_server_id for t in ranked_tools}
+    missing_servers = [s for s in servers if s.id not in seen_servers]
+    if missing_servers:
+        tools_by_server: dict[str, list[MCPTool]] = {}
+        for t in tools:
+            tools_by_server.setdefault(t.mcp_server_id, []).append(t)
+        floor_tools: list[MCPTool] = []
+        for s in missing_servers:
+            server_tools = tools_by_server.get(s.id) or []
+            if not server_tools:
+                continue
+            top1 = _rank_tools(server_tools, query=query, q_vec=q_vec, top_k=1)
+            floor_tools.extend(top1 or server_tools[:1])
+        floor_tools = floor_tools[:top_k_tools]
+        if floor_tools:
+            keep = max(0, top_k_tools - len(floor_tools))
+            ranked_tools = ranked_tools[:keep] + floor_tools
+
     return [
         (
             server_map[t.mcp_server_id],
@@ -179,6 +206,63 @@ async def get_relevant_tools_semantic(
     ]
 
 
+async def has_user_credential(db: AsyncSession, *, server_id: str, user_id: str) -> bool:
+    """Whether the calling user has connected their own credential for a
+    server — used to gate tool-call planning on "connect first" instead of
+    silently returning nothing. Queries ``vendor.models`` directly (a
+    whitelisted read-only exception in the repo's import-linter contracts)
+    rather than ``vendor.services.mcp_auth``, which this package must never
+    import."""
+    row = (
+        await db.execute(
+            select(VendorMCPCredential.id).where(
+                VendorMCPCredential.server_id == server_id,
+                VendorMCPCredential.user_id == user_id,
+            )
+        )
+    ).scalars().first()
+    return row is not None
+
+
+async def get_user_connected_server_ids(
+    db: AsyncSession, *, server_ids: list[str], user_id: str
+) -> set[str]:
+    """Bulk version of :func:`has_user_credential` — which of these servers
+    the calling user has already connected their own credential for. Used
+    to annotate the catalog listing so the client can render "Connect" vs
+    "Connected" per server without one query each."""
+    if not server_ids:
+        return set()
+    from vendor.services.whatsapp_bridge.manager import drop_dead_bridges
+
+    await drop_dead_bridges(db, user_id=user_id, server_ids=server_ids)
+    rows = (
+        await db.execute(
+            select(VendorMCPCredential.server_id).where(
+                VendorMCPCredential.server_id.in_(server_ids),
+                VendorMCPCredential.user_id == user_id,
+            )
+        )
+    ).scalars().all()
+    return set(rows)
+
+
+def credential_field_names(server: VendorMCPServer) -> list[str]:
+    """Names (never values) of the credential fields a caller must supply to
+    connect to ``server`` — mirrors the vendor admin's own credential-field
+    resolution (see ``ConnectCredentialModal`` in the vendor tools UI):
+    prefer the structured ``auth_schema.fields``, else fall back to
+    ``env_vars`` keys that don't already have a stored (vendor-level)
+    value."""
+    auth_schema = getattr(server, "auth_schema", None) or {}
+    schema_fields = auth_schema.get("fields") if isinstance(auth_schema, dict) else None
+    if schema_fields:
+        return [f["name"] for f in schema_fields if isinstance(f, dict) and f.get("name")]
+    if server.env_vars:
+        return [k for k, v in server.env_vars.items() if not v]
+    return []
+
+
 # Re-exported for backward compatibility — this used to be defined here.
 cosine_similarity = hybrid_search.cosine_similarity
 
@@ -187,5 +271,8 @@ __all__ = [
     "get_authorized_vendor_catalog",
     "get_authorized_vendor_catalog_semantic",
     "get_relevant_tools_semantic",
+    "has_user_credential",
+    "get_user_connected_server_ids",
+    "credential_field_names",
     "cosine_similarity",
 ]

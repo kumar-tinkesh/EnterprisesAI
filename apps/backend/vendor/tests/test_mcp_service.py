@@ -297,3 +297,42 @@ async def test_mcp_connection_self_heals_go_stdio_args(db, monkeypatch):
     assert res["status"] == "VERIFIED"
     assert "stdio" in captured_config["args"]
     assert captured_config["args"] == ["run", ".", "stdio"]
+
+@pytest.mark.asyncio
+async def test_mcp_connection_rejects_missing_required_env(db, monkeypatch):
+    """Required env vars (auth_config.required_env) are checked before spawning the server."""
+    import vendor.services.mcp_service as ms
+    from vendor.services.mcp_auth import McpAuthError
+
+    server = await _make_mcp(db, "slack-test", is_global=True)
+    server.transport = "stdio"
+    server.command = "npx"
+    server.args = ["-y", "@modelcontextprotocol/server-slack"]
+    server.auth_config = {
+        "auth_type": "env",
+        "transport": "stdio",
+        "credential_fields": [],
+        "required_env": ["SLACK_BOT_TOKEN", "SLACK_TEAM_ID"],
+    }
+
+    spawned = False
+
+    async def _fake_connect(self, config):
+        nonlocal spawned
+        spawned = True
+        return {"transport": "stdio", "bound_tools": [], "tools": [], "auth_type": "env"}
+
+    monkeypatch.setattr("vendor.services.mcp_service.MCPClient.connect", _fake_connect)
+
+    with pytest.raises(McpAuthError, match="SLACK_TEAM_ID is required"):
+        await ms.test_mcp_connection(
+            db, server=server, request_credentials={"SLACK_BOT_TOKEN": "xoxb-1"}
+        )
+    assert spawned is False
+
+    res = await ms.test_mcp_connection(
+        db, server=server,
+        request_credentials={"SLACK_BOT_TOKEN": "xoxb-1", "SLACK_TEAM_ID": "T123"},
+    )
+    assert res["status"] == "VERIFIED"
+    assert spawned is True

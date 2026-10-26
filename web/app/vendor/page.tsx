@@ -318,7 +318,7 @@ function StatCard({
   return (
     <div className="rounded-xl border border-zinc-200 bg-white p-5 shadow-xs">
       <div className="flex items-center gap-2 text-zinc-500">{icon}{label}</div>
-      <p className="mt-2 text-3xl font-bold text-zinc-900">{value}</p>
+      <p className="mt-2 text-3xl font-semibold text-zinc-900">{value}</p>
     </div>
   );
 }

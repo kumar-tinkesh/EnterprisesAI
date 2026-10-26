@@ -37,6 +37,7 @@ from sqlalchemy import (
     JSON,
     String,
     Text,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -222,18 +223,44 @@ class VendorMCPServer(Base, TimestampMixin):
 # ---------------------------------------------------------------------------
 
 class VendorMCPCredential(Base, TimestampMixin):
-    """Encrypted credentials for an MCP server (vendor-level or per-tenant).
+    """Encrypted credentials for an MCP server (vendor-level, per-tenant, or
+    per-user).
 
     ``encrypted_credentials`` holds a Fernet-encrypted JSON blob of the
     credential fields (API keys, basic passwords, OAuth client secrets and
-    refresh tokens). ``tenant_id IS NULL`` marks vendor-level credentials;
-    a per-tenant row overrides the vendor-level fallback. Managed by
-    ``vendor.services.mcp_auth``.
+    refresh tokens).
+
+    Two distinct row "kinds" share this table, distinguished by ``user_id``:
+
+    * ``user_id IS NULL`` — a shared row (vendor-level when ``tenant_id`` is
+      also ``NULL``, or a tenant-wide fallback otherwise). This is the only
+      kind that existed before per-user isolation; ``ix_vmc_server_tenant_shared``
+      keeps it unique per ``(server_id, tenant_id)``, unchanged.
+    * ``user_id IS NOT NULL`` — a single end user's own credential for a
+      server, isolated from every other user (even within the same tenant).
+      ``ix_vmc_server_user`` keeps it unique per ``(server_id, user_id)``.
+
+    Managed by ``vendor.services.mcp_auth``.
     """
 
     __tablename__ = "vendor_mcp_credentials"
     __table_args__ = (
-        Index("ix_vmc_server_tenant", "server_id", "tenant_id", unique=True),
+        Index(
+            "ix_vmc_server_tenant_shared",
+            "server_id",
+            "tenant_id",
+            unique=True,
+            postgresql_where=text("user_id IS NULL"),
+            sqlite_where=text("user_id IS NULL"),
+        ),
+        Index(
+            "ix_vmc_server_user",
+            "server_id",
+            "user_id",
+            unique=True,
+            postgresql_where=text("user_id IS NOT NULL"),
+            sqlite_where=text("user_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
@@ -243,6 +270,7 @@ class VendorMCPCredential(Base, TimestampMixin):
         index=True,
     )
     tenant_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    user_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     encrypted_credentials: Mapped[str] = mapped_column(Text, nullable=False)
 
 
@@ -306,6 +334,10 @@ class MCPTool(Base, TimestampMixin):
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     input_schema: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     output_schema: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    # The server's own behaviour hints from tools/list (``read_only_hint``,
+    # ``destructive_hint``, ``idempotent_hint``, ``open_world_hint``). Hints,
+    # not guarantees — the builder combines them with the tool's name.
+    annotations: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
     # Semantic search — embedding of "name. description" (+ input_schema
     # property names) for tool-level catalog matching. See VendorMCPServer
@@ -313,3 +345,53 @@ class MCPTool(Base, TimestampMixin):
     embedding: Mapped[Optional[list]] = mapped_column(JSON, nullable=True, default=None)
     embedding_model: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     dim: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=None)
+
+
+# ---------------------------------------------------------------------------
+# VendorMCPBridgeInstance  (new — native per-user device-pairing bridges,
+# e.g. WhatsApp)
+# ---------------------------------------------------------------------------
+
+class VendorMCPBridgeInstance(Base, TimestampMixin):
+    """Tracks one bridge for a ``device_pairing``-auth server (e.g. WhatsApp),
+    owned by exactly one end user. The bridge itself runs in its own
+    container (``eai-wa-bridge-<id>``, started by the whatsapp-orchestrator
+    service — see ``vendor.services.whatsapp_bridge.manager``) with its own
+    session volume, so this row — not any process's memory — is the source
+    of truth every backend/worker process reads.
+
+    ``status`` values: ``not_connected`` | ``starting`` | ``awaiting_qr`` |
+    ``connected`` | ``error``. Unique per ``(server_id, user_id)`` — exactly
+    one bridge per user per server, matching WhatsApp's own one-account
+    one-linked-session-per-app model.
+    """
+
+    __tablename__ = "vendor_mcp_bridge_instances"
+    __table_args__ = (
+        Index(
+            "ix_bridge_server_user",
+            "server_id",
+            "user_id",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    server_id: Mapped[str] = mapped_column(
+        ForeignKey("vendor_mcp_servers.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    tenant_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    user_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="not_connected")
+    # Name of this instance's session volume (store/{messages,whatsapp}.db),
+    # mounted only into its own bridge container.
+    data_dir: Mapped[str] = mapped_column(String(512), nullable=False)
+    # The bridge container's REST API port (on its own network address).
+    port: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Fernet-encrypted token the bridge's REST API requires on every request.
+    token_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    last_connected_at: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)

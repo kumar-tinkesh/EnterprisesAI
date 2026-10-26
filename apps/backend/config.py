@@ -39,6 +39,21 @@ class BackendSettings(BaseSettings):
     # per most providers' rules); localhost is fine for sandbox testing.
     BACKEND_PUBLIC_URL: str = "http://localhost:8002"
 
+    # Per-user device-pairing bridges (see vendor.services.whatsapp_bridge):
+    # each user's bridge runs in its own container, started/stopped only by
+    # the whatsapp-orchestrator service (the one holding docker.sock).
+    WHATSAPP_ORCHESTRATOR_URL: str = "http://whatsapp-orchestrator:8090"
+    WHATSAPP_ORCHESTRATOR_API_KEY: str = ""
+    # The vendored+patched MCP server (see vendor_src/README.md) that talks
+    # to a user's bridge container over HTTP — run with the app's own
+    # interpreter (its httpx/mcp/requests deps are already installed there).
+    WHATSAPP_MCP_SERVER_SCRIPT: str = (
+        "/app/apps/backend/vendor/services/whatsapp_bridge/vendor_src/server/main.py"
+    )
+    # Added to a bare 10-digit number someone sends to ("8789977380" -> "918789977380"); WhatsApp needs
+    # the country code. Empty = such a number is refused with a clear error instead.
+    WHATSAPP_DEFAULT_COUNTRY_CODE: str = "91"
+
 
 @lru_cache
 def get_backend_settings() -> BackendSettings:

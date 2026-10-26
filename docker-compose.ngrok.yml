@@ -1,0 +1,61 @@
+# ---------------------------------------------------------------------------
+# EnterpriseAI — public over ngrok (free plan: one static domain)
+#
+#   make ngrok-up
+#   (= docker compose -f docker-compose.yml -f docker-compose.ngrok.yml up --build -d)
+#
+#   app       -> https://$NGROK_DOMAIN
+#   inspector -> http://localhost:4040   (ngrok's request log, local only)
+#
+# Needs NGROK_AUTHTOKEN and NGROK_DOMAIN in .env (dashboard.ngrok.com →
+# Your Authtoken / Domains). Everything goes through one domain: the
+# `proxy` service (docker/Caddyfile) routes /auth-api and /backend-api to
+# the two APIs and the rest to the web app, so the browser sees one origin.
+# ---------------------------------------------------------------------------
+
+services:
+  web:
+    build:
+      args:
+        # Inlined at build time — changing NGROK_DOMAIN means rebuilding web.
+        NEXT_PUBLIC_API_URL: https://${NGROK_DOMAIN:?set NGROK_DOMAIN in .env}/auth-api/api/v1
+        NEXT_PUBLIC_BACKEND_API_URL: https://${NGROK_DOMAIN}/backend-api/api/v1
+
+  auth:
+    environment:
+      BACKEND_CORS_ORIGINS: '["https://${NGROK_DOMAIN}","http://localhost:3001"]'
+      # Add this exact URL to the Google OAuth client's redirect URIs.
+      SSO_REDIRECT_URI: https://${NGROK_DOMAIN}/auth/callback
+
+  backend:
+    environment:
+      BACKEND_CORS_ORIGINS: '["https://${NGROK_DOMAIN}","http://localhost:3001"]'
+      # Vendor-OAuth callback becomes
+      # https://$NGROK_DOMAIN/backend-api/api/v1/vendor/resources/mcp/oauth/callback
+      # — add that exact URL to each provider's OAuth client too.
+      BACKEND_PUBLIC_URL: https://${NGROK_DOMAIN}/backend-api
+
+  # --- Path router: one origin for web + auth + backend ---------------------
+  proxy:
+    image: caddy:2-alpine
+    container_name: enterpriseai-proxy
+    restart: unless-stopped
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - web
+      - auth
+      - backend
+
+  # --- ngrok agent: public HTTPS -> proxy:80 --------------------------------
+  ngrok:
+    image: ngrok/ngrok:3-alpine
+    container_name: enterpriseai-ngrok
+    restart: unless-stopped
+    command: ["http", "proxy:80", "--url=${NGROK_DOMAIN}"]
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:?set NGROK_AUTHTOKEN in .env}
+    ports:
+      - "127.0.0.1:4040:4040"
+    depends_on:
+      - proxy

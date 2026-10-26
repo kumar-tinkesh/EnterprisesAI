@@ -12,7 +12,7 @@ class SignupRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
     full_name: str = Field(default="", max_length=255)
-    # vendor_admin | tenant_admin | tenant_user
+    # Only solo_user can self-sign-up; the other roles are rejected by the service.
     role: str = Roles.TENANT_USER
     tenant_name: str = Field(default="Default", min_length=1, max_length=255)
 

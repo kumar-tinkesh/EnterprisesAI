@@ -1,53 +1,113 @@
 # ---------------------------------------------------------------------------
 # Backend Service Dockerfile
 # Builds the EnterpriseAI backend service for MCP server management
+#
+# Build speed: layers are ordered from "almost never changes" to "changes
+# every commit", and base images are pinned by digest, so an ordinary code
+# change only re-runs the final COPY. Bump a digest (and uv's version)
+# deliberately to pick up base-image updates:
+#   docker pull python:3.12-slim && docker image inspect --format '{{index .RepoDigests 0}}' python:3.12-slim
 # ---------------------------------------------------------------------------
-FROM python:3.12-slim
+ARG PYTHON_IMAGE=python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
+ARG NODE_IMAGE=node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.12.24
+
+FROM ${UV_IMAGE} AS uv
+FROM ${NODE_IMAGE} AS node
+
+# --- Stage 1 (Parallel): Python dependencies --------------------------------
+# Instruction-for-instruction the same as Dockerfile.auth's deps stage, so
+# BuildKit runs this `uv sync` once and both images reuse it.
+FROM ${PYTHON_IMAGE} AS base
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy
+
+COPY --from=uv /uv /uvx /bin/
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
+FROM base AS deps
+COPY pyproject.toml uv.lock .python-version ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --no-install-project
+
+# --- Stage 2 (Parallel): ONNX models (~210MB) -------------------------------
+# The hybrid-search reranker and the knowledge-base embedder. Downloaded into
+# a cache mount, so a dependency change (new uv.lock) re-copies them from
+# disk instead of downloading them again.
+FROM deps AS models
+RUN --mount=type=cache,target=/root/.cache/fastembed-models \
+    FASTEMBED_CACHE_PATH=/root/.cache/fastembed-models .venv/bin/python -c "\
+from fastembed import TextEmbedding; \
+from fastembed.rerank.cross_encoder import TextCrossEncoder; \
+TextCrossEncoder(model_name='Xenova/ms-marco-MiniLM-L-6-v2'); \
+TextEmbedding(model_name='BAAI/bge-small-en-v1.5')" \
+    && mkdir -p /app/.cache \
+    && cp -r /root/.cache/fastembed-models /app/.cache/fastembed
+
+# --- Stage 3: Runtime --------------------------------------------------------
+FROM ${PYTHON_IMAGE} AS runtime
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PATH="/app/.venv/bin:$PATH" \
+    PYTHONPATH=/app \
+    FASTEMBED_CACHE_PATH=/app/.cache/fastembed
+
+WORKDIR /app
+
+# System tools first: they change least, so this layer stays cached.
+# (Node comes from the official image below, not Debian's nodejs/npm, which
+# pulls in ~300 extra packages.)
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean \
+    && apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
-    nodejs \
-    npm \
-    golang-go \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+    tesseract-ocr
 
-# Copy uv configuration and install dependencies
-COPY pyproject.toml uv.lock ./
-RUN pip install uv
-RUN uv sync --frozen
+# Node + npm/npx for stdio MCP servers launched with `npx`.
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
 
-# Copy source code
+# uv/uvx for stdio MCP servers launched with `uvx`.
+COPY --from=uv /uv /uvx /bin/
+
+# LinkedIn (vendor/services/mcp_auth/linkedin.py): stickerdaniel/linkedin-mcp-server
+# drives a real headless Chromium, so it's a pinned uv tool on the image's
+# Python 3.12 with its browser installed here — a connect never waits on a
+# download. Bump the version together with linkedin.PACKAGE.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/patchright
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    UV_TOOL_DIR=/opt/uv-tools UV_TOOL_BIN_DIR=/usr/local/bin UV_PYTHON_PREFERENCE=only-system \
+    uv tool install --compile-bytecode --python 3.12 mcp-server-linkedin==4.26.0 \
+    && /opt/uv-tools/mcp-server-linkedin/bin/patchright install-deps chromium \
+    && rm -rf /root/.cache/uv
+# Separate layer + retries: the browser download is the flaky part, and a
+# failure here shouldn't throw away the layer above.
+RUN for i in 1 2 3 4 5; do \
+        /opt/uv-tools/mcp-server-linkedin/bin/patchright install chromium --no-shell && exit 0; \
+        echo "patchright install failed (attempt $i), retrying in 10s..."; sleep 10; \
+    done; exit 1
+
+# Python venv and the downloaded models
+COPY --from=deps /app/.venv /app/.venv
+COPY --from=models /app/.cache /app/.cache
+
+# Entrypoint script
+COPY docker/entrypoint.backend.sh entrypoint.sh
+RUN sed -i 's/\r$//' entrypoint.sh && chmod +x entrypoint.sh
+
+# Application code last: an ordinary change re-runs only these layers.
+COPY pyproject.toml uv.lock .python-version alembic.ini ./
 COPY apps/ apps/
-COPY alembic.ini ./
-
-# Pre-download the hybrid-search reranker's ONNX model at build time (~80MB)
-# so the first real query doesn't pay for a HuggingFace Hub download, and
-# the container works without internet egress at runtime.
-RUN uv run python -c "from fastembed.rerank.cross_encoder import TextCrossEncoder; TextCrossEncoder(model_name='Xenova/ms-marco-MiniLM-L-6-v2')"
-
-# Create entrypoint script
-RUN cat > entrypoint.sh << 'EOF'
-#!/bin/bash
-set -e
-
-echo "[backend] Starting EnterpriseAI Backend Service..."
-
-# Run database migrations (shared with auth service)
-echo "[backend] Running database migrations..."
-uv run alembic upgrade head 2>/dev/null || echo "[backend] Migration skipped (auth service handles it)"
-
-# Start the backend service
-echo "[backend] Starting uvicorn server on port 8002..."
-cd apps/backend && uv run uvicorn main:app --host 0.0.0.0 --port 8002
-EOF
-
-RUN chmod +x entrypoint.sh
 
 EXPOSE 8002
 

@@ -11,6 +11,7 @@ from apps.llm_gateway.providers.litellm_client import LiteLLMClient
 from apps.llm_gateway.providers.openai_client import OpenAIClient
 from apps.llm_gateway.providers.groq_client import GroqClient
 from apps.llm_gateway.providers.gemini_client import GeminiClient
+from apps.llm_gateway.providers.azure_client import AzureOpenAIClient
 
 __all__ = [
     "BaseLLMClient",
@@ -18,4 +19,5 @@ __all__ = [
     "OpenAIClient",
     "GroqClient",
     "GeminiClient",
+    "AzureOpenAIClient",
 ]

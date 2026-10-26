@@ -8,7 +8,9 @@ Responsibilities:
     back to ``create_db_tables()`` if Alembic is unavailable.
   * Mount the vendor and user routers, both under ``/api/v1/vendor/resources``
     (unchanged from before the vendor/user package split — see those routers'
-    docstrings for why the prefix stays shared).
+    docstrings for why the prefix stays shared), the knowledge router
+    under ``/api/v1/knowledge-bases`` and the builder router under
+    ``/api/v1/builder``.
 
 The backend reuses the Auth service's engine/session (``src.db.session``) and
 JWT guards (``src.api.deps``) — there is no second engine and no duplicate auth.
@@ -16,6 +18,7 @@ JWT guards (``src.api.deps``) — there is no second engine and no duplicate aut
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import sys
 from contextlib import asynccontextmanager
@@ -27,7 +30,7 @@ for _p in (ROOT, ROOT / "apps" / "auth", ROOT / "apps" / "backend"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from fastapi import FastAPI  # noqa: E402
+from fastapi import FastAPI, Response  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
 from src.config import get_settings as get_auth_settings  # noqa: E402
@@ -35,6 +38,11 @@ from src.db.session import create_db_tables  # noqa: E402
 
 from vendor.api.v1.router import router as vendor_router  # noqa: E402
 from user.api.v1.router import router as user_router  # noqa: E402
+from knowledge.api.v1.router import router as knowledge_router  # noqa: E402
+from builder.api.v1.public import router as public_router  # noqa: E402
+from builder.api.v1.router import router as builder_router  # noqa: E402
+from builder.api.v1.shared import router as shared_router  # noqa: E402
+from builder.services.tool_runtime import shutdown_pool  # noqa: E402
 
 from apps.backend.config import get_backend_settings  # noqa: E402
 
@@ -59,7 +67,51 @@ async def lifespan(app: FastAPI):
         except Exception as exc2:  # pragma: no cover
             logger.error("DB init skipped: %s", exc2)
 
-    yield
+    from knowledge.services.ingest import fail_interrupted_documents
+
+    try:
+        interrupted = await fail_interrupted_documents()
+        if interrupted:
+            logger.info("marked %d interrupted knowledge document(s) as failed", interrupted)
+    except Exception as exc:  # pragma: no cover - best-effort startup path
+        logger.warning("knowledge startup cleanup skipped: %s", exc)
+
+    from vendor.services.embedding import reembed_stale
+
+    async def _reembed():
+        try:
+            servers, tools = await reembed_stale()
+            if servers or tools:
+                logger.info("embedded %d MCP server(s) and %d tool(s) for catalog search", servers, tools)
+        except Exception as exc:  # pragma: no cover - best-effort startup path
+            logger.warning("MCP embedding backfill skipped: %s", exc)
+
+    reembed_task = asyncio.create_task(_reembed())
+
+    # Builder runs: with BUILDER_QUEUE_BACKEND=inline this process is also the
+    # worker (local dev); with redis, separate `python -m builder.worker`
+    # processes run them and this one only enqueues and streams events.
+    from builder.config import get_builder_settings
+    from builder.runs.events import get_event_bus
+    from builder.runs.queue import get_run_queue
+    from builder.runs.worker import Worker
+
+    run_worker = None
+    if get_builder_settings().BUILDER_QUEUE_BACKEND == "inline":
+        run_worker = Worker()
+        await run_worker.start()
+        with contextlib.suppress(Exception):
+            await run_worker.reap()  # resume runs a previous process left behind
+    try:
+        yield
+    finally:
+        if run_worker is not None:
+            await run_worker.stop()
+        await get_run_queue().close()
+        await get_event_bus().close()
+        reembed_task.cancel()
+        # Stop every pooled MCP tool session (and its stdio process).
+        await shutdown_pool()
 
 
 def create_app() -> FastAPI:
@@ -79,6 +131,27 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # The public API is called from any website (the chat widget) with a
+    # publishable key, not a cookie: answer its CORS here, before the
+    # credentialed CORSMiddleware above (each key enforces its own origins).
+    public_prefix = f"{_backend_settings.BACKEND_API_V1_PREFIX}/public"
+
+    @app.middleware("http")
+    async def public_cors(request, call_next):
+        if not request.url.path.startswith(public_prefix):
+            return await call_next(request)
+        headers = {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Authorization, Content-Type",
+            "Access-Control-Max-Age": "600",
+        }
+        if request.method == "OPTIONS":
+            return Response(status_code=204, headers=headers)
+        response = await call_next(request)
+        response.headers.update(headers)
+        return response
+
     @app.get("/health", tags=["system"])
     async def health():
         return {"status": "ok", "service": "backend", "version": "0.1.0"}
@@ -93,6 +166,18 @@ def create_app() -> FastAPI:
         prefix=f"{_backend_settings.BACKEND_API_V1_PREFIX}/vendor/resources",
         tags=["vendor-resources"],
     )
+    app.include_router(
+        knowledge_router,
+        prefix=f"{_backend_settings.BACKEND_API_V1_PREFIX}/knowledge-bases",
+        tags=["knowledge-bases"],
+    )
+    app.include_router(
+        builder_router,
+        prefix=f"{_backend_settings.BACKEND_API_V1_PREFIX}/builder",
+        tags=["builder"],
+    )
+    app.include_router(public_router, prefix=public_prefix, tags=["public"])
+    app.include_router(shared_router, prefix=f"{_backend_settings.BACKEND_API_V1_PREFIX}/shared", tags=["shared"])
     return app
 
 

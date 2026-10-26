@@ -1,0 +1,297 @@
+"""Starting, cancelling and steering runs — what the API calls.
+
+These write the database first and only then nudge the queue, so a crash
+between the two leaves a queued run the reaper will send again, never a
+message for a run that doesn't exist.
+"""
+from __future__ import annotations
+
+from sqlalchemy import func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.api.deps import CurrentUser
+from src.models import User
+
+from builder.agents.runtime import message_text
+from builder.models import BuilderAgent, BuilderApproval, BuilderNodeRun, BuilderRun, BuilderToolCall
+from builder.runs import states
+from builder.runs.db import as_utc, utcnow
+from builder.runs.events import emit
+from builder.runs.queue import enqueue_run
+from builder.services.tool_runtime import validate_arguments
+
+TRANSCRIPT_CHARS = 4000
+RESULT_PREVIEW_CHARS = 1000
+INPUT_PREVIEW_CHARS = 20000
+
+
+class RunActionError(Exception):
+    def __init__(self, status_code: int, message: str, errors: list[str] | None = None):
+        super().__init__(message)
+        self.status_code, self.message, self.errors = status_code, message, errors or []
+
+
+def agent_snapshot(agent: BuilderAgent) -> dict:
+    return {
+        "id": agent.id,
+        "name": agent.name,
+        "role": agent.role,
+        "goal": agent.goal,
+        "instructions": agent.instructions or "",
+        "llm_provider": agent.llm_provider or "",
+        "llm_model": agent.llm_model or "",
+        "config": agent.config or {},
+        "version": agent.version,
+    }
+
+
+async def create_run(
+    db: AsyncSession, user: CurrentUser, kind: str, target_id: str, *, definition: dict, version: int, text: str,
+    variables: dict | None = None, schedule_id: str | None = None, purpose: str = "run", public_key_id: str | None = None,
+    depth: str = "auto", conversation_id: str | None = None, history: list[dict] | None = None,
+    attachments: list[dict] | None = None, webhook_id: str | None = None, caller_user_id: str | None = None,
+    stream: bool = True,
+) -> BuilderRun:
+    """Queue a run of an already-frozen ``definition`` (see agent_snapshot /
+    workflow_definition), executing as ``user``. The agents it may hand tasks
+    to are frozen with it here (builder.agents.handoff)."""
+    from builder.agents.handoff import freeze_sub_agents
+
+    definition = await freeze_sub_agents(db, user.tenant_id, definition)
+    run = BuilderRun(
+        tenant_id=user.tenant_id,
+        owner_id=user.id,
+        kind=kind,
+        **({"agent_id": target_id} if kind == "agent" else {"workflow_id": target_id}),
+        definition_version=version,
+        definition=definition,
+        input={
+            "text": text, "variables": variables or {},
+            **({"depth": depth} if depth != "auto" else {}),
+            # The chat's earlier turns (builder.runs.conversations) — context for an agent run.
+            **({"history": history} if history else {}),
+            # Files sent with it: [{id, filename, kind}] (the content stays in builder_attachments).
+            **({"attachments": attachments} if attachments else {}),
+            # Streaming is the default; only "off" is written down.
+            **({"stream": False} if not stream else {}),
+        },
+        status=states.QUEUED,
+        state={},
+        schedule_id=schedule_id,
+        purpose=purpose,
+        public_key_id=public_key_id,
+        caller_user_id=caller_user_id,
+        conversation_id=conversation_id,
+        webhook_id=webhook_id,
+    )
+    db.add(run)
+    await db.commit()
+    await db.refresh(run)
+    await enqueue_run(run.id)
+    await emit(run.id, "run_status", status=states.QUEUED)
+    return run
+
+
+async def create_agent_run(
+    db: AsyncSession, user: CurrentUser, agent: BuilderAgent, *, text: str, variables: dict | None = None,
+    schedule_id: str | None = None, purpose: str = "run", depth: str = "auto",
+    conversation_id: str | None = None, history: list[dict] | None = None,
+    attachments: list[dict] | None = None, webhook_id: str | None = None, stream: bool = True,
+) -> BuilderRun:
+    return await create_run(
+        db, user, "agent", agent.id, definition={"agent": agent_snapshot(agent)}, version=agent.version,
+        text=text, variables=variables, schedule_id=schedule_id, purpose=purpose, depth=depth,
+        conversation_id=conversation_id, history=history, attachments=attachments, webhook_id=webhook_id, stream=stream,
+    )
+
+
+def workflow_snapshot(workflow) -> dict:
+    return {
+        "id": workflow.id,
+        "name": workflow.name,
+        "nodes": workflow.nodes or [],
+        "edges": workflow.edges or [],
+        "config": workflow.config or {},
+        "version": workflow.version,
+    }
+
+
+async def workflow_definition(db: AsyncSession, tenant_id: str, workflow: dict, frozen_agents: dict | None = None) -> dict:
+    """A workflow (as a snapshot dict) plus every agent its steps use, frozen:
+    the ones in ``frozen_agents`` as given (a saved version's own agents),
+    the rest as they are now."""
+    frozen_agents = dict(frozen_agents or {})
+    agent_ids = {n.get("agent_id") for n in workflow.get("nodes") or [] if n.get("type") == "agent" and n.get("agent_id")}
+    missing = agent_ids - set(frozen_agents)
+    agents = (
+        await db.execute(select(BuilderAgent).where(BuilderAgent.id.in_(missing), BuilderAgent.tenant_id == tenant_id))
+    ).scalars().all() if missing else []
+    return {"workflow": workflow, "agents": {**{a.id: agent_snapshot(a) for a in agents}, **frozen_agents}}
+
+
+async def create_workflow_run(
+    db: AsyncSession, user: CurrentUser, workflow, *, text: str, variables: dict | None = None,
+    schedule_id: str | None = None, purpose: str = "run", depth: str = "auto", conversation_id: str | None = None,
+    stream: bool = True,
+) -> BuilderRun:
+    """Freezes the workflow and every agent its steps use, so edits made while
+    it runs (or before a resume) don't change what this run does."""
+    definition = await workflow_definition(db, user.tenant_id, workflow_snapshot(workflow))
+    return await create_run(
+        db, user, "workflow", workflow.id, definition=definition, version=workflow.version,
+        text=text, variables=variables, schedule_id=schedule_id, purpose=purpose, depth=depth,
+        conversation_id=conversation_id, stream=stream,
+    )
+
+
+async def cancel_run(db: AsyncSession, run: BuilderRun) -> bool:
+    if run.status in states.TERMINAL:
+        return False
+    # A worker still executing it notices on its next heartbeat (status is no
+    # longer "running") and stops; its later writes are lease-guarded.
+    run.status, run.finished_at, run.error = states.CANCELLED, utcnow(), "Cancelled by the user."
+    run.lease_owner = run.lease_expires_at = None
+    await db.execute(
+        update(BuilderApproval)
+        .where(BuilderApproval.run_id == run.id, BuilderApproval.status == states.APPROVAL_PENDING)
+        .values(status=states.APPROVAL_EXPIRED, resolved_at=utcnow())
+    )
+    await db.commit()
+    await emit(run.id, "run_status", status=states.CANCELLED)
+    return True
+
+
+async def decide_approval(
+    db: AsyncSession, user: CurrentUser, approval: BuilderApproval, *, decision: str, arguments: dict | None
+) -> BuilderApproval:
+    if approval.status != states.APPROVAL_PENDING:
+        raise RunActionError(409, "This was already decided.")
+    run = await db.get(BuilderRun, approval.run_id)
+    if run is None or run.status in states.TERMINAL:
+        raise RunActionError(409, "This run has already finished.")
+
+    payload = approval.payload or {}
+    if decision == "edit":
+        if not isinstance(arguments, dict):
+            raise RunActionError(422, "Give the edit as an object.")
+        if approval.kind == states.KIND_HUMAN_STEP:
+            if not isinstance(arguments.get("text"), str) or not arguments["text"].strip():
+                raise RunActionError(422, 'An approval step\'s edit is {"text": "..."}: the text the workflow continues with.')
+        elif approval.kind in (states.KIND_TOOL_CALL, states.KIND_MISSING_INPUT):
+            # Missing details are merged into what the step already had.
+            full = {**(payload.get("arguments") or {}), **arguments} if approval.kind == states.KIND_MISSING_INPUT else arguments
+            try:
+                validate_arguments(payload.get("input_schema"), full)
+            except Exception as exc:  # InvalidArguments
+                raise RunActionError(422, getattr(exc, "message", str(exc)), getattr(exc, "errors", [])) from exc
+        else:
+            raise RunActionError(422, "This decision can only be approved or rejected.")
+        approval.status, approval.edited_input = states.APPROVAL_EDITED, arguments
+    elif decision == "approve":
+        if approval.kind == states.KIND_MISSING_INPUT:
+            raise RunActionError(422, "Fill in the missing details (decision \"edit\" with the arguments) or reject.")
+        approval.status = states.APPROVAL_APPROVED
+    elif decision == "reject":
+        approval.status = states.APPROVAL_REJECTED
+    else:
+        raise RunActionError(422, "decision must be approve, reject or edit.")
+    approval.resolved_by, approval.resolved_at = user.id, utcnow()
+
+    still_pending = (
+        await db.execute(
+            select(func.count(BuilderApproval.id)).where(
+                BuilderApproval.run_id == run.id,
+                BuilderApproval.status == states.APPROVAL_PENDING,
+                BuilderApproval.id != approval.id,
+            )
+        )
+    ).scalar_one()
+    resume = run.status == states.WAITING and not still_pending
+    if resume:
+        run.status = states.QUEUED
+    await db.commit()
+    await emit(run.id, "approval_resolved", approval_id=approval.id, status=approval.status)
+    if resume:
+        await enqueue_run(run.id)
+        await emit(run.id, "run_status", status=states.QUEUED)
+    return approval
+
+
+def _cap(text: str | None, limit: int) -> str | None:
+    if text is None or len(text) <= limit:
+        return text
+    return text[:limit] + "…"
+
+
+async def callers_of(db: AsyncSession, user_ids) -> dict[str, dict]:
+    """Who started share-link runs: {user_id: {id, name, email}} (a deleted account keeps its id, blank otherwise)."""
+    ids = {i for i in user_ids if i}
+    if not ids:
+        return {}
+    rows = (await db.execute(select(User.id, User.full_name, User.email).where(User.id.in_(ids)))).all()
+    found = {r.id: {"id": r.id, "name": (r.full_name or "").strip(), "email": r.email} for r in rows}
+    return {i: found.get(i, {"id": i, "name": "", "email": ""}) for i in ids}
+
+
+def approval_view(a: BuilderApproval, caller: dict | None = None) -> dict:
+    """``caller``: who started the run through a share link — the publisher
+    decides, so they should see whose request this is."""
+    payload = dict(a.payload or {})
+    payload.pop("input_schema", None)
+    return {
+        "id": a.id, "run_id": a.run_id, "kind": a.kind, "node_id": a.node_id, "tool_name": a.tool_name, "risk": a.risk,
+        "status": a.status, "payload": payload, "edited_input": a.edited_input,
+        "created_at": a.created_at, "resolved_at": a.resolved_at, "caller": caller,
+    }
+
+
+async def run_view(db: AsyncSession, run: BuilderRun, *, detail: bool = True) -> dict:
+    view = {
+        "id": run.id, "kind": run.kind, "agent_id": run.agent_id, "workflow_id": run.workflow_id,
+        "definition_version": run.definition_version, "status": run.status, "input": run.input,
+        "output_text": run.output_text, "output": run.output, "error": run.error,
+        "prompt_tokens": run.prompt_tokens, "completion_tokens": run.completion_tokens, "cost_usd": run.cost_usd,
+        "recoveries": run.attempts, "created_at": as_utc(run.created_at), "started_at": as_utc(run.started_at),
+        "finished_at": as_utc(run.finished_at),
+        "name": ((run.definition or {}).get("agent") or (run.definition or {}).get("workflow") or {}).get("name"),
+        "schedule_id": run.schedule_id,
+        "purpose": run.purpose,
+        "conversation_id": run.conversation_id,
+        "webhook_id": run.webhook_id,
+        "public_key_id": run.public_key_id,
+        "caller": (await callers_of(db, [run.caller_user_id])).get(run.caller_user_id) if run.caller_user_id else None,
+    }
+    if not detail:
+        return view
+    node_runs = (await db.execute(select(BuilderNodeRun).where(BuilderNodeRun.run_id == run.id).order_by(BuilderNodeRun.created_at))).scalars().all()
+    calls = (await db.execute(select(BuilderToolCall).where(BuilderToolCall.run_id == run.id).order_by(BuilderToolCall.created_at))).scalars().all()
+    approvals = (await db.execute(select(BuilderApproval).where(BuilderApproval.run_id == run.id).order_by(BuilderApproval.created_at))).scalars().all()
+    view["nodes"] = [
+        {
+            "node_id": n.node_id, "node_type": n.node_type, "attempt": n.attempt, "status": n.status,
+            # What reached the step (its sources' outputs), for "what did it get?" next to its answer.
+            "input_text": _cap(n.input_text, INPUT_PREVIEW_CHARS),
+            "output_text": n.output_text, "error": n.error, "prompt_tokens": n.prompt_tokens,
+            "completion_tokens": n.completion_tokens, "started_at": n.started_at, "finished_at": n.finished_at,
+            "transcript": [
+                {k: (_cap(message_text(v), TRANSCRIPT_CHARS) if k == "content" else v) for k, v in m.items()}
+                for m in (n.state or {}).get("messages", []) if m.get("role") != "system"
+            ],
+        }
+        for n in node_runs
+    ]
+    view["tool_calls"] = [
+        {
+            "id": c.id, "node_id": c.node_id, "tool_name": c.tool_name, "server_id": c.server_id, "risk": c.risk,
+            "status": c.status, "arguments": c.arguments, "result_preview": _cap(c.result_text, RESULT_PREVIEW_CHARS),
+            "is_error": c.is_error, "error": c.error, "duration_ms": c.duration_ms, "created_at": c.created_at,
+        }
+        for c in calls
+    ]
+    view["approvals"] = [approval_view(a, view["caller"]) for a in approvals]
+    return view
+
+
+__all__ = [
+    "RunActionError", "agent_snapshot", "workflow_snapshot", "workflow_definition", "create_run", "create_agent_run", "create_workflow_run", "cancel_run", "decide_approval", "run_view", "approval_view", "callers_of",
+]

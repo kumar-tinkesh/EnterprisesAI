@@ -144,6 +144,11 @@ export default function VendorMCPPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["vendor-mcp-servers"] }),
   });
 
+  const globalMutation = useMutation({
+    mutationFn: ({ id, isGlobal }: { id: string; isGlobal: boolean }) => vendorApi.setMCPServerGlobal(accessToken, id, isGlobal),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["vendor-mcp-servers"] }),
+  });
+
   const grantMutation = useMutation({
     mutationFn: (vals: { tenant_id: string; resource_id: string }) =>
       vendorApi.grantResource(accessToken, {
@@ -214,7 +219,25 @@ export default function VendorMCPPage() {
                       </span>
                     </td>
                     <td className="px-4 py-3">
-                      {s.status === "VERIFIED" ? (
+                      {connectMutation.isPending && (connectMutation.variables as any)?.id === s.id ? (
+                        <div className="space-y-1.5 min-w-[130px]">
+                          <span className="inline-flex items-center gap-1.5 rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-semibold text-indigo-700">
+                            <Spinner className="h-3 w-3 text-indigo-600" /> Connecting...
+                          </span>
+                          <div className="h-1.5 w-full overflow-hidden rounded-full bg-indigo-100">
+                            <div className="h-full bg-gradient-to-r from-indigo-500 via-sky-500 to-emerald-500 animate-pulse rounded-full w-full" />
+                          </div>
+                        </div>
+                      ) : disconnectMutation.isPending && (disconnectMutation.variables as any) === s.id ? (
+                        <div className="space-y-1.5 min-w-[130px]">
+                          <span className="inline-flex items-center gap-1.5 rounded-full bg-red-50 px-2 py-0.5 text-xs font-semibold text-red-700">
+                            <Spinner className="h-3 w-3 text-red-600" /> Disconnecting...
+                          </span>
+                          <div className="h-1.5 w-full overflow-hidden rounded-full bg-red-100">
+                            <div className="h-full bg-gradient-to-r from-red-400 via-red-500 to-amber-500 animate-pulse rounded-full w-full" />
+                          </div>
+                        </div>
+                      ) : s.status === "VERIFIED" ? (
                         <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
                           <CheckCircle2 className="h-3 w-3 text-emerald-600" /> Connected
                         </span>
@@ -225,34 +248,55 @@ export default function VendorMCPPage() {
                       )}
                     </td>
                     <td className="px-4 py-3">
-                      {s.is_global ? (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
-                          <Globe className="h-3 w-3" /> Global
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
-                          <Lock className="h-3 w-3" /> Granted
-                        </span>
-                      )}
+                      <button
+                        type="button"
+                        disabled={globalMutation.isPending && globalMutation.variables?.id === s.id}
+                        onClick={() => globalMutation.mutate({ id: s.id, isGlobal: !s.is_global })}
+                        title={
+                          s.is_global
+                            ? "Every user can see and use this server. Click to restrict it to tenants you grant it to."
+                            : "Hidden from users until you grant it to their tenant. Click to make it available to every user."
+                        }
+                        className={
+                          s.is_global
+                            ? "inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-50 cursor-pointer"
+                            : "inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 hover:bg-amber-100 disabled:opacity-50 cursor-pointer"
+                        }
+                      >
+                        {globalMutation.isPending && globalMutation.variables?.id === s.id ? (
+                          <Spinner className="h-3 w-3" />
+                        ) : s.is_global ? (
+                          <Globe className="h-3 w-3" />
+                        ) : (
+                          <Lock className="h-3 w-3" />
+                        )}
+                        {s.is_global ? "All users" : "Restricted"}
+                      </button>
                     </td>
                     <td className="px-4 py-3 text-xs text-zinc-500">
                       {s.server_url || <span className="text-zinc-400">—</span>}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-2">
-                        <button
-                          onClick={() => {
-                            setConnectServer(s);
-                            setCredKey("");
-                            setCredValue("");
-                            setShowConnectModal(true);
-                          }}
-                          className="p-1 text-zinc-400 hover:text-emerald-600 cursor-pointer"
-                          title="Test Connection & Discover Tools"
-                          disabled={connectMutation.isPending}
-                        >
-                          <Link className="h-4 w-4" />
-                        </button>
+                        {connectMutation.isPending && (connectMutation.variables as any)?.id === s.id ? (
+                          <span className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600">
+                            <Spinner className="h-4 w-4 text-indigo-600" /> Testing connection...
+                          </span>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => {
+                                setConnectServer(s);
+                                setCredKey("");
+                                setCredValue("");
+                                setShowConnectModal(true);
+                              }}
+                              className="p-1 text-zinc-400 hover:text-emerald-600 cursor-pointer disabled:opacity-30"
+                              title="Test Connection & Discover Tools"
+                              disabled={connectMutation.isPending}
+                            >
+                              <Link className="h-4 w-4" />
+                            </button>
                         <button
                           onClick={() => {
                             setToolsServer({
@@ -319,6 +363,8 @@ export default function VendorMCPPage() {
                         >
                           <Trash2 className="h-4 w-4" />
                         </button>
+                          </>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -418,7 +464,7 @@ function CreateMCPModal({
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [serverUrl, setServerUrl] = useState("");
-  const [isGlobal, setIsGlobal] = useState(false);
+  const [isGlobal, setIsGlobal] = useState(true);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -477,7 +523,7 @@ function CreateMCPModal({
               onChange={(e) => setIsGlobal(e.target.checked)}
               className="h-4 w-4 rounded border-zinc-300"
             />
-            Global (available to all solo users without a tenant grant)
+            Available to all users (untick to show it only to tenants you grant it to)
           </label>
 
           {error && <p className="text-xs text-red-600">{error}</p>}
@@ -686,12 +732,21 @@ function ConnectCredentialModal({
     detectedFields.length > 0 ? detectedFields : envFields;
   const isStdio = server.transport === "stdio";
   const needsNoCreds = credentialFields.length === 0 && isStdio;
+  // device_pairing (e.g. WhatsApp): there is no vendor-wide account to
+  // verify here — the test below runs our vendored MCP server with no
+  // bridge, which discovers its tools; each user then pairs their own phone
+  // by QR before those tools can run. Read from auth_config directly
+  // (not the top-level auth_type) so this can't silently go stale again
+  // the way it did before (see the c8e2a6f13d90 backfill migration).
+  const isDevicePairing = (server.auth_config as any)?.auth_type === "device_pairing";
 
   // ── OAuth "Connect via provider" bootstrap (see oauth_flow.py backend) ──
   const isOAuth = server.auth_type === "oauth2";
-  const oauthCfg: { authorization_endpoint?: string; token_endpoint?: string } =
+  const oauthCfg: { authorization_endpoint?: string; token_endpoint?: string; registration_endpoint?: string } =
     (server.auth_config as any)?.oauth || {};
   const oauthConfigured = !!(oauthCfg.authorization_endpoint && oauthCfg.token_endpoint);
+  // The server registers our client itself (RFC 7591): no OAuth app to fill in.
+  const oauthSelfRegisters = !!(oauthCfg.authorization_endpoint && oauthCfg.registration_endpoint);
 
   const [showOAuthConfig, setShowOAuthConfig] = useState(false);
   const [authEndpoint, setAuthEndpoint] = useState("");
@@ -746,6 +801,11 @@ function ConnectCredentialModal({
   const handleOAuthConnect = () => {
     const clientId = findCredBySuffix("CLIENT_ID");
     const clientSecret = findCredBySuffix("CLIENT_SECRET");
+    if (oauthSelfRegisters && !(clientId && clientSecret)) {
+      setOauthMessage(null);
+      oauthAuthorizeMutation.mutate({});
+      return;
+    }
     if (!clientId || !clientSecret) {
       setOauthMessage("Fill in the Client ID and Client Secret fields above first.");
       return;
@@ -778,7 +838,18 @@ function ConnectCredentialModal({
         </div>
 
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
-          {needsNoCreds ? (
+          {isDevicePairing ? (
+            <div className="rounded-lg bg-amber-50 border border-amber-200 p-3">
+              <p className="text-xs font-medium text-amber-900">
+                No credentials needed — each user pairs their own phone.
+              </p>
+              <p className="mt-1 text-xs text-amber-700">
+                Testing discovers this server&apos;s tools and makes it available to users.
+                Each user then connects from their own dashboard by scanning a QR code with
+                their phone; until they do, the tools can&apos;t run for them.
+              </p>
+            </div>
+          ) : needsNoCreds ? (
             <div className="rounded-lg bg-emerald-50 border border-emerald-100 p-3">
               <p className="text-xs font-medium text-emerald-800">
                 No credentials required.
@@ -795,10 +866,18 @@ function ConnectCredentialModal({
             </p>
           )}
 
+          {(server.auth_config as any)?.auth_type === "linkedin_cookie" && (
+            <p className="rounded-lg bg-sky-50 border border-sky-100 p-3 text-xs text-sky-800">
+              Paste a LinkedIn <span className="font-mono">li_at</span> cookie to test it: sign in to linkedin.com,
+              open DevTools → Application → Cookies → https://www.linkedin.com and copy the value of li_at. Each
+              user still connects their own cookie; runs always use the runner&apos;s.
+            </p>
+          )}
+
           {credentialFields.length > 0 ? (
             <div className="space-y-3">
               <label className="text-xs font-semibold text-zinc-700">
-                Required Credentials{isStdio ? " (passed as environment variables)" : ""}
+                Required Credentials{isStdio && (server.auth_config as any)?.auth_type !== "linkedin_cookie" ? " (passed as environment variables)" : ""}
               </label>
               {credentialFields.map((field) => (
                 <Field key={field} label={labelsMap[field] || field}>
@@ -901,8 +980,9 @@ function ConnectCredentialModal({
               ) : (
                 <div className="space-y-2">
                   <p className="text-xs text-indigo-700">
-                    Fill in Client ID/Secret above, then connect via the provider&apos;s consent
-                    screen — it fills in the rest (refresh token, etc.) automatically.
+                    {oauthSelfRegisters
+                      ? "Sign in on the provider's consent screen — no OAuth app needed, it registers itself."
+                      : "Fill in Client ID/Secret above, then connect via the provider's consent screen — it fills in the rest (refresh token, etc.) automatically."}
                   </p>
                   <Button
                     type="button"
@@ -919,10 +999,36 @@ function ConnectCredentialModal({
             </div>
           )}
 
+          {isPending && (
+            <div className="rounded-lg border border-indigo-200 bg-indigo-50/90 p-3.5 space-y-2">
+              <div className="flex items-center justify-between text-xs font-semibold text-indigo-900">
+                <span className="flex items-center gap-2">
+                  <Spinner className="h-4 w-4 text-indigo-600" />
+                  Testing connection & discovering tools...
+                </span>
+                <span className="text-xs font-mono text-indigo-600 uppercase">Connecting</span>
+              </div>
+              <div className="h-2 w-full overflow-hidden rounded-full bg-indigo-200">
+                <div className="h-full bg-gradient-to-r from-indigo-500 via-sky-500 to-emerald-500 animate-pulse rounded-full w-full" />
+              </div>
+              <p className="text-xs text-indigo-700">Running MCP protocol handshake and discovering tools list...</p>
+            </div>
+          )}
+
           <div className="flex justify-end gap-2 pt-2">
-            <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+            <Button type="button" variant="outline" onClick={onClose} disabled={isPending}>Cancel</Button>
             <Button type="submit" disabled={isPending}>
-              {isPending ? <Spinner /> : <Link className="h-4 w-4 mr-1" />} Test Connection & Discover Tools
+              {isPending ? (
+                <>
+                  <Spinner className="mr-1" />
+                  {isDevicePairing ? "Checking..." : "Connecting..."}
+                </>
+              ) : (
+                <>
+                  <Link className="h-4 w-4 mr-1" />
+                  {isDevicePairing ? "Check Server Reachability" : "Test Connection & Discover Tools"}
+                </>
+              )}
             </Button>
           </div>
         </form>
@@ -952,7 +1058,7 @@ function AnalyzeRepoModal({
   const [activeTab, setActiveTab] = useState<"remote" | "github">("github");
   const [serverName, setServerName] = useState("");
   const [description, setDescription] = useState("");
-  const [isGlobal, setIsGlobal] = useState(false);
+  const [isGlobal, setIsGlobal] = useState(true);
 
   const handleAnalyze = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1040,7 +1146,7 @@ function AnalyzeRepoModal({
                 </p>
               )}
               {analyzeResult.required_env_vars.length > 0 && (
-                <p className="text-[11px] text-indigo-700 font-medium pt-1">
+                <p className="text-xs text-indigo-700 font-medium pt-1">
                   Detected Credentials needed: {analyzeResult.required_env_vars.join(", ")} (Prompted on Test Connection)
                 </p>
               )}
@@ -1070,7 +1176,7 @@ function AnalyzeRepoModal({
                 onChange={(e) => setIsGlobal(e.target.checked)}
                 className="h-4 w-4 rounded border-zinc-300"
               />
-              Global (available to all solo users without tenant grant)
+              Available to all users (untick to show it only to tenants you grant it to)
             </label>
 
             {error && <p className="text-xs text-red-600">{error}</p>}

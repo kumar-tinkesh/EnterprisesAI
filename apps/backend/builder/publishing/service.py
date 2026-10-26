@@ -1,0 +1,311 @@
+"""Publishable keys: what a published agent/workflow runs, as whom, and how often.
+
+* A key runs ONE agent or workflow, as the person who created it (their
+  connected tools), from a pinned saved version or the latest saved one —
+  except a share-link run on a ``tool_mode = "visitor"`` key, which runs as the
+  signed-in visitor with THEIR connections (and their approvals); the
+  agent's knowledge still comes from the publisher's workspace
+  (``definition["home_tenant_id"]``). A "mixed" key runs as the visitor too,
+  but its ``publisher_server_ids`` use the publisher's account — and those
+  calls wait for the publisher's approval (``definition["tool_owners"]``).
+  Callers never see run internals — only status, the answer and its sources.
+* Only a SHA-256 hash of the key is stored. Keys are long random tokens, so a
+  plain hash (no salt/stretching) is the standard choice here, as for API
+  keys elsewhere; the key itself is shown exactly once.
+* Limits are counted from the runs themselves (per minute, per UTC day), so
+  they hold across any number of API processes without shared memory.
+"""
+from __future__ import annotations
+
+import hashlib
+import secrets
+from datetime import datetime, timedelta
+
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.api.deps import CurrentUser
+from src.models import User
+
+from vendor.models import VendorMCPServer
+from vendor.services import mcp_auth
+from vendor.services.mcp_service.crud import is_server_visible_to_user
+
+from builder.agents.config import AgentConfig, ToolNeed
+from builder.agents.needs import need_problems, resolve_needs
+from builder.agents.tools import resolve_agent_tools
+from builder.graph.validation import GraphProblem
+from builder.models import BuilderAgent, BuilderPublicKey, BuilderRun, BuilderVersion, BuilderWorkflow
+from builder.runs.db import utcnow
+from builder.runs.service import agent_snapshot, create_run, workflow_definition, workflow_snapshot
+from builder.graph.schema import parse_tool_id
+from builder.services.references import tool_problems
+from builder.services.tool_runtime import classify_tool
+
+KEY_PREFIX = "eai_pk_"
+
+
+class PublishError(Exception):
+    def __init__(self, status_code: int, message: str, problems: list[str] | None = None):
+        super().__init__(message)
+        self.status_code, self.message, self.problems = status_code, message, problems or []
+
+
+def new_key() -> tuple[str, str, str]:
+    """-> (the key, its hash, a display prefix)."""
+    key = KEY_PREFIX + secrets.token_urlsafe(32)
+    return key, hash_key(key), key[: len(KEY_PREFIX) + 4]
+
+
+def hash_key(key: str) -> str:
+    return hashlib.sha256(key.encode()).hexdigest()
+
+
+def new_share_slug() -> str:
+    """The /r/{slug} part of a share link: random, so links can't be guessed."""
+    return secrets.token_urlsafe(9)
+
+
+# ── what gets run ───────────────────────────────────────────────────────────
+
+
+async def definition_for(db: AsyncSession, kind: str, target: BuilderAgent | BuilderWorkflow, version: int | None) -> tuple[dict, int]:
+    """The frozen definition a key runs -> (definition, version number).
+    ``version`` None = the latest saved; else that saved version's snapshot.
+    Includes the agents its agents may hand tasks to."""
+    from builder.agents.handoff import freeze_sub_agents
+
+    definition, number = await _definition_for(db, kind, target, version)
+    return await freeze_sub_agents(db, target.tenant_id, definition), number
+
+
+async def _definition_for(db: AsyncSession, kind: str, target: BuilderAgent | BuilderWorkflow, version: int | None) -> tuple[dict, int]:
+    if version is None or version == target.version:
+        if kind == "agent":
+            return {"agent": agent_snapshot(target)}, target.version
+        return await workflow_definition(db, target.tenant_id, workflow_snapshot(target)), target.version
+    column = BuilderVersion.agent_id if kind == "agent" else BuilderVersion.workflow_id
+    row = (await db.execute(select(BuilderVersion).where(column == target.id, BuilderVersion.version == version))).scalars().first()
+    if row is None:
+        raise PublishError(409, f"Version {version} is no longer kept; publish a newer one.")
+    snap = row.snapshot or {}
+    if kind == "agent":
+        fields = {k: snap.get(k) for k in ("name", "role", "goal", "instructions", "llm_provider", "llm_model", "config")}
+        return {"agent": {"id": target.id, **fields, "version": version}}, version
+    workflow = {"id": target.id, "name": snap.get("name") or target.name, "nodes": snap.get("nodes") or [],
+                "edges": snap.get("edges") or [], "config": snap.get("config") or {}, "version": version}
+    own = {aid: {"id": aid, **{k: a.get(k) for k in ("name", "role", "goal", "instructions", "llm_provider", "llm_model", "config")}}
+           for aid, a in (snap.get("agents") or {}).items()}
+    return await workflow_definition(db, target.tenant_id, workflow, frozen_agents=own), version
+
+
+def _agents_in(definition: dict) -> list[dict]:
+    agents = [definition["agent"]] if "agent" in definition else list((definition.get("agents") or {}).values())
+    return agents + list((definition.get("sub_agents") or {}).values())
+
+
+def tool_ids_in(definition: dict) -> list[str]:
+    ids: list[str] = []
+    for agent in _agents_in(definition):
+        ids += AgentConfig.model_validate(agent.get("config") or {}).tool_ids
+    for n in (definition.get("workflow") or {}).get("nodes") or []:
+        if n.get("type") == "tool" and n.get("tool_id"):
+            ids.append(n["tool_id"])
+    return list(dict.fromkeys(ids))
+
+
+async def write_tools(db: AsyncSession, definition: dict) -> list[str]:
+    """"Server.tool" for every data-changing tool a caller could make it use."""
+    tools = await resolve_agent_tools(db, tool_ids_in(definition))
+    return sorted(f"{t.server_name}.{t.tool_name}" for t in tools if classify_tool(t.tool_name, t.annotations).risk != "read")
+
+
+def input_fields(definition: dict) -> list[dict]:
+    fields: list[dict] = []
+    for n in (definition.get("workflow") or {}).get("nodes") or []:
+        for v in n.get("variables") or []:
+            fields.append({k: v.get(k) for k in ("name", "label", "type", "required", "description")})
+    return fields
+
+
+def _needs_in(definition: dict) -> list[list[ToolNeed]]:
+    """Each agent's ``tool_needs`` (systems it gets tools from once connected)."""
+    return [AgentConfig.model_validate(a.get("config") or {}).tool_needs for a in _agents_in(definition)]
+
+
+async def connection_problems(
+    db: AsyncSession, user: CurrentUser, definition: dict, owners: dict[str, CurrentUser] | None = None,
+) -> list[str]:
+    """What must be connected (or can't be used) before this frozen definition
+    can run as ``user`` — with ``owners``' account for their servers (a mixed
+    share link), whose missing connections are theirs to fix, not ``user``'s."""
+    owners = owners or {}
+    ids = tool_ids_in(definition)
+    mine = [t for t in ids if (parse_tool_id(t) or ("",))[0] not in owners]
+    problems: list[GraphProblem] = await tool_problems(db, user, mine, check_connection=True)
+    by_owner: dict[str, tuple[CurrentUser, list[str]]] = {}
+    for t in ids:
+        sid = (parse_tool_id(t) or ("",))[0]
+        if sid in owners:
+            by_owner.setdefault(owners[sid].id, (owners[sid], []))[1].append(t)
+    theirs: list[GraphProblem] = []
+    for owner, tids in by_owner.values():
+        theirs += await tool_problems(db, owner, tids, check_connection=True)
+    for needs in _needs_in(definition):
+        for p in need_problems(await resolve_needs(db, user, needs, user_for=lambda sid: owners.get(sid, user))):
+            (theirs if p.server_id in owners else problems).append(p)
+    names = {s.id: s.name for s in (await db.execute(select(VendorMCPServer).where(VendorMCPServer.id.in_(list(owners) or [""])))).scalars()}
+    messages = [p.message for p in problems] + [
+        f"Whoever shared this hasn't connected {names.get(p.server_id, 'one of its apps')} yet." if p.code == "not_connected"
+        else f"Whoever shared this can't use one of its apps right now ({p.message})"
+        for p in theirs
+    ]
+    return list(dict.fromkeys(messages))
+
+
+async def connection_needs(
+    db: AsyncSession, user: CurrentUser, definition: dict, owners: dict[str, CurrentUser] | None = None,
+) -> list[dict]:
+    """Every system this definition uses and where it stands, in the shape of
+    builder.agents.needs.NeedState.as_dict (so one list can offer Connect), plus
+    ``owner``: "you" (``user`` connects it) or "publisher" (``owners``' account)."""
+    owners = owners or {}
+    out: list[dict] = []
+    server_ids = list(dict.fromkeys(p[0] for p in map(parse_tool_id, tool_ids_in(definition)) if p))
+    servers = {s.id: s for s in (await db.execute(select(VendorMCPServer).where(VendorMCPServer.id.in_(server_ids or [""])))).scalars()}
+    for sid in server_ids:
+        server, who = servers.get(sid), owners.get(sid, user)
+        owner = "publisher" if sid in owners else "you"
+        if server is None or not await is_server_visible_to_user(db, user=who, server=server):
+            out.append({"system": server.name if server else "A tool", "required": True, "match": [], "status": "missing",
+                        "server_id": None, "server_name": None, "tools": [], "owner": owner})
+            continue
+        connected = await mcp_auth.has_user_credential(db, server_id=sid, user_id=who.id)
+        out.append({"system": server.name, "required": True, "match": [], "status": "ready" if connected else "not_connected",
+                    "server_id": sid, "server_name": server.name, "tools": [], "owner": owner})
+    merged: dict[str, ToolNeed] = {}
+    for needs in _needs_in(definition):
+        for need in needs:
+            seen = merged.get(need.system)
+            merged[need.system] = need if seen is None else seen.model_copy(update={"required": seen.required or need.required})
+    taken = {o["server_id"] for o in out if o["server_id"]}
+    out += [
+        {**s.as_dict(), "owner": "publisher" if s.server_id in owners else "you"}
+        for s in await resolve_needs(db, user, list(merged.values()), user_for=lambda sid: owners.get(sid, user))
+        if not (s.server_id and s.server_id in taken)
+    ]
+    return out
+
+
+async def definition_problems(
+    db: AsyncSession, user: CurrentUser, definition: dict, variables: dict, owners: dict[str, CurrentUser] | None = None,
+) -> list[str]:
+    """Can ``user`` run this frozen definition right now? (Tool connections — theirs, or ``owners``'
+    for those servers — and required inputs.)"""
+    messages = await connection_problems(db, user, definition, owners)
+    for f in input_fields(definition):
+        if f.get("required") and variables.get(f["name"]) in (None, ""):
+            messages.append(f'Fill in "{f.get("label") or f["name"]}".')
+    return list(dict.fromkeys(messages))
+
+
+# ── keys in use ─────────────────────────────────────────────────────────────
+
+
+def share_publisher_servers(key: BuilderPublicKey) -> list[str]:
+    """On a mixed link: the servers the publisher keeps as theirs. Servers reached
+    through tool needs aren't known until resolved, so every listed one counts
+    (one the run doesn't use changes nothing)."""
+    return list(dict.fromkeys(key.publisher_server_ids or [])) if key.tool_mode == "mixed" else []
+
+
+async def publisher(db: AsyncSession, key: BuilderPublicKey) -> CurrentUser:
+    user = await db.get(User, key.owner_id)
+    if user is None or not user.is_active or user.tenant_id != key.tenant_id:
+        raise PublishError(403, "This key's publisher no longer has access, so it can't run.")
+    return CurrentUser(id=user.id, email=user.email, full_name=user.full_name, role=user.role, tenant_id=user.tenant_id)
+
+
+async def target_of(db: AsyncSession, key: BuilderPublicKey) -> BuilderAgent | BuilderWorkflow:
+    target = await db.get(BuilderAgent, key.agent_id) if key.kind == "agent" else await db.get(BuilderWorkflow, key.workflow_id)
+    if target is None or target.tenant_id != key.tenant_id:
+        raise PublishError(410, "What this key published no longer exists.")
+    return target
+
+
+async def usage(db: AsyncSession, key_id: str, since: datetime, *, caller_user_id: str | None = None) -> int:
+    query = select(func.count()).select_from(BuilderRun).where(BuilderRun.public_key_id == key_id, BuilderRun.created_at >= since)
+    if caller_user_id:
+        query = query.where(BuilderRun.caller_user_id == caller_user_id)
+    return (await db.execute(query)).scalar_one()
+
+
+def start_of_day(now: datetime) -> datetime:
+    return now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+async def start_public_run(
+    db: AsyncSession, key: BuilderPublicKey, *, text: str, variables: dict, caller_user_id: str | None = None,
+    run_as: CurrentUser | None = None, stream: bool = True,
+) -> BuilderRun:
+    """Run what ``key`` published, as its publisher — or as ``run_as`` (a
+    visitor on a "visitor" share link: their connections, their approvals).
+    ``caller_user_id``: the signed-in person who started it through the share
+    link (their own daily limit applies too)."""
+    now = utcnow()
+    if await usage(db, key.id, now - timedelta(minutes=1)) >= key.requests_per_minute:
+        raise PublishError(429, f"Too many requests: this key allows {key.requests_per_minute} a minute.")
+    if key.daily_quota is not None and await usage(db, key.id, start_of_day(now)) >= key.daily_quota:
+        raise PublishError(429, f"This key's daily limit ({key.daily_quota} runs) is used up; it resets at 00:00 UTC.")
+    if (
+        caller_user_id and key.per_user_daily_limit is not None
+        and await usage(db, key.id, start_of_day(now), caller_user_id=caller_user_id) >= key.per_user_daily_limit
+    ):
+        raise PublishError(429, f"You've used your {key.per_user_daily_limit} runs for today; they reset at 00:00 UTC.")
+    user = await publisher(db, key)  # a link stops when its publisher loses access, whoever it runs as
+    target = await target_of(db, key)
+    definition, version = await definition_for(db, key.kind, target, key.version)
+    owners: dict[str, CurrentUser] = {}
+    if run_as is not None:
+        # The agent's knowledge bases live in the publisher's workspace, not the visitor's.
+        definition = {**definition, "home_tenant_id": key.tenant_id}
+        if key.tool_mode == "mixed":
+            # These servers run with the publisher's account, and they approve those calls.
+            owners = {sid: user for sid in share_publisher_servers(key)}
+            definition["tool_owners"] = {sid: key.owner_id for sid in owners}
+        user = run_as
+    if key.kind == "agent" and not text.strip():
+        raise PublishError(422, "Send an input.")
+    problems = await definition_problems(db, user, definition, variables, owners)
+    if problems:
+        raise PublishError(422, "It can't run right now.", problems)
+    key.last_used_at = now
+    return await create_run(
+        db, user, key.kind, target.id, definition=definition, version=version, text=text, variables=variables,
+        purpose="public", public_key_id=key.id, caller_user_id=caller_user_id, stream=stream,
+    )
+
+
+def public_view(run: BuilderRun) -> dict:
+    """What a caller may see of a run: no tool calls, no internal errors."""
+    out = run.output or {}
+    error = None
+    if run.status == "failed":
+        error = run.error if (run.error or "").startswith(("Blocked the request", "The answer was withheld")) else "It couldn't finish this request."
+    elif run.status == "cancelled":
+        error = "Cancelled."
+    return {
+        "run_id": run.id,
+        "status": run.status,
+        "output": run.output_text if run.status == "succeeded" else None,
+        "sources": (out.get("sources") or []) if run.status == "succeeded" else [],
+        "waiting_for": "approval" if run.status == "waiting" else None,
+        "error": error,
+        "version": run.definition_version,
+    }
+
+
+__all__ = [
+    "PublishError", "new_key", "hash_key", "new_share_slug", "connection_problems", "connection_needs", "share_publisher_servers", "definition_for", "write_tools", "input_fields", "definition_problems",
+    "publisher", "target_of", "usage", "start_of_day", "start_public_run", "public_view", "KEY_PREFIX",
+]
