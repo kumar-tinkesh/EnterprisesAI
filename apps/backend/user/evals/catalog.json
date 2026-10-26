@@ -1,0 +1,125 @@
+{
+  "_comment": "A realistic MCP catalog for the compiler eval: tool names, descriptions and parameters modelled on popular open-source MCP servers. Several tools deliberately look alike across servers (send_email / post_message / send_message, two create_issue, three file searches) — telling them apart is the test.",
+  "servers": [
+    {
+      "name": "Gmail",
+      "description": "Read, search, send and organise email in a Gmail mailbox.",
+      "tools": [
+        {"name": "send_email", "description": "Send an email to one or more recipients.", "input_schema": {"type": "object", "properties": {"to": {"type": "array", "items": {"type": "string"}, "description": "Recipient email addresses"}, "subject": {"type": "string"}, "body": {"type": "string"}, "cc": {"type": "array", "items": {"type": "string"}}}, "required": ["to", "subject", "body"]}},
+        {"name": "search_emails", "description": "Search emails using Gmail search syntax, e.g. from:alice is:unread.", "input_schema": {"type": "object", "properties": {"query": {"type": "string"}, "max_results": {"type": "integer"}}, "required": ["query"]}},
+        {"name": "read_email", "description": "Read the full content of one email by its message id.", "input_schema": {"type": "object", "properties": {"message_id": {"type": "string"}}, "required": ["message_id"]}},
+        {"name": "draft_email", "description": "Create a draft email without sending it.", "input_schema": {"type": "object", "properties": {"to": {"type": "array", "items": {"type": "string"}}, "subject": {"type": "string"}, "body": {"type": "string"}}, "required": ["to", "subject", "body"]}},
+        {"name": "modify_labels", "description": "Add or remove labels on an email, e.g. mark as read or archive.", "input_schema": {"type": "object", "properties": {"message_id": {"type": "string"}, "add_labels": {"type": "array", "items": {"type": "string"}}, "remove_labels": {"type": "array", "items": {"type": "string"}}}, "required": ["message_id"]}},
+        {"name": "delete_email", "description": "Permanently delete an email.", "input_schema": {"type": "object", "properties": {"message_id": {"type": "string"}}, "required": ["message_id"]}}
+      ]
+    },
+    {
+      "name": "Slack",
+      "description": "Post and read messages in Slack workspace channels and threads.",
+      "tools": [
+        {"name": "post_message", "description": "Post a message to a Slack channel.", "input_schema": {"type": "object", "properties": {"channel": {"type": "string", "description": "Channel name or id, e.g. #general"}, "text": {"type": "string"}}, "required": ["channel", "text"]}},
+        {"name": "reply_to_thread", "description": "Reply in a thread under an existing Slack message.", "input_schema": {"type": "object", "properties": {"channel": {"type": "string"}, "thread_ts": {"type": "string"}, "text": {"type": "string"}}, "required": ["channel", "thread_ts", "text"]}},
+        {"name": "list_channels", "description": "List the public channels in the workspace.", "input_schema": {"type": "object", "properties": {"limit": {"type": "integer"}}}},
+        {"name": "get_channel_history", "description": "Get recent messages from a Slack channel.", "input_schema": {"type": "object", "properties": {"channel": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["channel"]}},
+        {"name": "add_reaction", "description": "Add an emoji reaction to a message.", "input_schema": {"type": "object", "properties": {"channel": {"type": "string"}, "timestamp": {"type": "string"}, "emoji": {"type": "string"}}, "required": ["channel", "timestamp", "emoji"]}},
+        {"name": "get_user_profile", "description": "Get a Slack user's profile details.", "input_schema": {"type": "object", "properties": {"user_id": {"type": "string"}}, "required": ["user_id"]}}
+      ]
+    },
+    {
+      "name": "WhatsApp",
+      "description": "Send and read WhatsApp messages from your personal WhatsApp account.",
+      "tools": [
+        {"name": "send_message", "description": "Send a WhatsApp text message to a phone number or contact.", "input_schema": {"type": "object", "properties": {"recipient": {"type": "string", "description": "Phone number with country code, or contact name"}, "message": {"type": "string"}}, "required": ["recipient", "message"]}},
+        {"name": "list_chats", "description": "List recent WhatsApp chats.", "input_schema": {"type": "object", "properties": {"limit": {"type": "integer"}}}},
+        {"name": "list_messages", "description": "Get messages from a WhatsApp chat.", "input_schema": {"type": "object", "properties": {"chat": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["chat"]}},
+        {"name": "search_contacts", "description": "Search WhatsApp contacts by name or number.", "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
+        {"name": "send_file", "description": "Send an image, video or document over WhatsApp.", "input_schema": {"type": "object", "properties": {"recipient": {"type": "string"}, "file_path": {"type": "string"}}, "required": ["recipient", "file_path"]}}
+      ]
+    },
+    {
+      "name": "GitHub",
+      "description": "Work with GitHub repositories: issues, pull requests, code and files.",
+      "tools": [
+        {"name": "create_issue", "description": "Open a new issue in a GitHub repository.", "input_schema": {"type": "object", "properties": {"owner": {"type": "string"}, "repo": {"type": "string"}, "title": {"type": "string"}, "body": {"type": "string"}, "labels": {"type": "array", "items": {"type": "string"}}}, "required": ["owner", "repo", "title"]}},
+        {"name": "list_issues", "description": "List issues in a GitHub repository, filtered by state or label.", "input_schema": {"type": "object", "properties": {"owner": {"type": "string"}, "repo": {"type": "string"}, "state": {"type": "string", "enum": ["open", "closed", "all"]}}, "required": ["owner", "repo"]}},
+        {"name": "create_pull_request", "description": "Open a pull request from one branch into another.", "input_schema": {"type": "object", "properties": {"owner": {"type": "string"}, "repo": {"type": "string"}, "title": {"type": "string"}, "head": {"type": "string"}, "base": {"type": "string"}, "body": {"type": "string"}}, "required": ["owner", "repo", "title", "head", "base"]}},
+        {"name": "list_pull_requests", "description": "List pull requests in a repository.", "input_schema": {"type": "object", "properties": {"owner": {"type": "string"}, "repo": {"type": "string"}, "state": {"type": "string"}}, "required": ["owner", "repo"]}},
+        {"name": "get_file_contents", "description": "Get the contents of a file in a repository.", "input_schema": {"type": "object", "properties": {"owner": {"type": "string"}, "repo": {"type": "string"}, "path": {"type": "string"}, "branch": {"type": "string"}}, "required": ["owner", "repo", "path"]}},
+        {"name": "search_code", "description": "Search code across GitHub repositories.", "input_schema": {"type": "object", "properties": {"q": {"type": "string"}}, "required": ["q"]}},
+        {"name": "add_issue_comment", "description": "Comment on an existing issue or pull request.", "input_schema": {"type": "object", "properties": {"owner": {"type": "string"}, "repo": {"type": "string"}, "issue_number": {"type": "integer"}, "body": {"type": "string"}}, "required": ["owner", "repo", "issue_number", "body"]}},
+        {"name": "merge_pull_request", "description": "Merge an open pull request.", "input_schema": {"type": "object", "properties": {"owner": {"type": "string"}, "repo": {"type": "string"}, "pull_number": {"type": "integer"}}, "required": ["owner", "repo", "pull_number"]}}
+      ]
+    },
+    {
+      "name": "Jira",
+      "description": "Track work in Jira: issues, tickets, sprints and projects.",
+      "tools": [
+        {"name": "create_issue", "description": "Create a Jira issue (task, bug or story) in a project.", "input_schema": {"type": "object", "properties": {"project_key": {"type": "string"}, "summary": {"type": "string"}, "description": {"type": "string"}, "issue_type": {"type": "string", "enum": ["Task", "Bug", "Story"]}, "priority": {"type": "string"}}, "required": ["project_key", "summary", "issue_type"]}},
+        {"name": "search_issues", "description": "Search Jira issues with JQL.", "input_schema": {"type": "object", "properties": {"jql": {"type": "string"}, "max_results": {"type": "integer"}}, "required": ["jql"]}},
+        {"name": "transition_issue", "description": "Move a Jira issue to another status, e.g. In Progress or Done.", "input_schema": {"type": "object", "properties": {"issue_key": {"type": "string"}, "status": {"type": "string"}}, "required": ["issue_key", "status"]}},
+        {"name": "assign_issue", "description": "Assign a Jira issue to a person.", "input_schema": {"type": "object", "properties": {"issue_key": {"type": "string"}, "assignee": {"type": "string"}}, "required": ["issue_key", "assignee"]}},
+        {"name": "get_sprint", "description": "Get the active sprint of a Jira board with its issues.", "input_schema": {"type": "object", "properties": {"board_id": {"type": "integer"}}, "required": ["board_id"]}}
+      ]
+    },
+    {
+      "name": "Notion",
+      "description": "Search, read and write pages and databases in a Notion workspace.",
+      "tools": [
+        {"name": "search", "description": "Search Notion pages and databases by title or content.", "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
+        {"name": "create_page", "description": "Create a new Notion page under a parent page or database.", "input_schema": {"type": "object", "properties": {"parent_id": {"type": "string"}, "title": {"type": "string"}, "content": {"type": "string"}}, "required": ["title"]}},
+        {"name": "append_block", "description": "Append text content to the end of an existing Notion page.", "input_schema": {"type": "object", "properties": {"page_id": {"type": "string"}, "content": {"type": "string"}}, "required": ["page_id", "content"]}},
+        {"name": "query_database", "description": "Query rows of a Notion database with filters.", "input_schema": {"type": "object", "properties": {"database_id": {"type": "string"}, "filter": {"type": "object"}}, "required": ["database_id"]}},
+        {"name": "retrieve_page", "description": "Get a Notion page's properties and content.", "input_schema": {"type": "object", "properties": {"page_id": {"type": "string"}}, "required": ["page_id"]}}
+      ]
+    },
+    {
+      "name": "Google Drive",
+      "description": "Find, read and upload files in Google Drive.",
+      "tools": [
+        {"name": "search_files", "description": "Search Google Drive files by name or content.", "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
+        {"name": "read_file", "description": "Read the content of a Google Drive file (Docs exported as text).", "input_schema": {"type": "object", "properties": {"file_id": {"type": "string"}}, "required": ["file_id"]}},
+        {"name": "upload_file", "description": "Upload a file to a Google Drive folder.", "input_schema": {"type": "object", "properties": {"name": {"type": "string"}, "content": {"type": "string"}, "folder_id": {"type": "string"}}, "required": ["name", "content"]}},
+        {"name": "share_file", "description": "Share a Drive file with someone by email.", "input_schema": {"type": "object", "properties": {"file_id": {"type": "string"}, "email": {"type": "string"}, "role": {"type": "string", "enum": ["reader", "commenter", "writer"]}}, "required": ["file_id", "email"]}}
+      ]
+    },
+    {
+      "name": "Google Sheets",
+      "description": "Read and write data in Google Sheets spreadsheets.",
+      "tools": [
+        {"name": "read_range", "description": "Read cell values from a spreadsheet range, e.g. Sheet1!A1:D20.", "input_schema": {"type": "object", "properties": {"spreadsheet_id": {"type": "string"}, "range": {"type": "string"}}, "required": ["spreadsheet_id", "range"]}},
+        {"name": "append_rows", "description": "Append rows of values to the end of a sheet.", "input_schema": {"type": "object", "properties": {"spreadsheet_id": {"type": "string"}, "range": {"type": "string"}, "values": {"type": "array", "items": {"type": "array"}}}, "required": ["spreadsheet_id", "values"]}},
+        {"name": "update_cells", "description": "Overwrite cell values in a range.", "input_schema": {"type": "object", "properties": {"spreadsheet_id": {"type": "string"}, "range": {"type": "string"}, "values": {"type": "array", "items": {"type": "array"}}}, "required": ["spreadsheet_id", "range", "values"]}},
+        {"name": "create_spreadsheet", "description": "Create a new spreadsheet.", "input_schema": {"type": "object", "properties": {"title": {"type": "string"}}, "required": ["title"]}}
+      ]
+    },
+    {
+      "name": "Google Calendar",
+      "description": "See and schedule events on Google Calendar.",
+      "tools": [
+        {"name": "list_events", "description": "List calendar events between two dates.", "input_schema": {"type": "object", "properties": {"time_min": {"type": "string"}, "time_max": {"type": "string"}, "calendar_id": {"type": "string"}}, "required": ["time_min", "time_max"]}},
+        {"name": "create_event", "description": "Create a calendar event or meeting and invite attendees.", "input_schema": {"type": "object", "properties": {"summary": {"type": "string"}, "start": {"type": "string"}, "end": {"type": "string"}, "attendees": {"type": "array", "items": {"type": "string"}}, "location": {"type": "string"}}, "required": ["summary", "start", "end"]}},
+        {"name": "find_free_time", "description": "Find free time slots across calendars for a meeting.", "input_schema": {"type": "object", "properties": {"attendees": {"type": "array", "items": {"type": "string"}}, "duration_minutes": {"type": "integer"}, "time_min": {"type": "string"}, "time_max": {"type": "string"}}, "required": ["duration_minutes"]}},
+        {"name": "delete_event", "description": "Cancel and delete a calendar event.", "input_schema": {"type": "object", "properties": {"event_id": {"type": "string"}}, "required": ["event_id"]}}
+      ]
+    },
+    {
+      "name": "HubSpot",
+      "description": "CRM: contacts, companies and sales deals in HubSpot.",
+      "tools": [
+        {"name": "search_contacts", "description": "Search CRM contacts by name, email or company.", "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
+        {"name": "create_contact", "description": "Add a new contact (lead) to the CRM.", "input_schema": {"type": "object", "properties": {"email": {"type": "string"}, "first_name": {"type": "string"}, "last_name": {"type": "string"}, "company": {"type": "string"}, "phone": {"type": "string"}}, "required": ["email"]}},
+        {"name": "create_deal", "description": "Create a sales deal in a pipeline stage.", "input_schema": {"type": "object", "properties": {"name": {"type": "string"}, "amount": {"type": "number"}, "stage": {"type": "string"}, "contact_email": {"type": "string"}}, "required": ["name"]}},
+        {"name": "update_deal_stage", "description": "Move a deal to another pipeline stage, e.g. closed won.", "input_schema": {"type": "object", "properties": {"deal_id": {"type": "string"}, "stage": {"type": "string"}}, "required": ["deal_id", "stage"]}},
+        {"name": "list_deals", "description": "List deals, optionally by pipeline stage or owner.", "input_schema": {"type": "object", "properties": {"stage": {"type": "string"}, "owner": {"type": "string"}}}}
+      ]
+    },
+    {
+      "name": "Weather",
+      "description": "Current weather and forecasts for any city.",
+      "tools": [
+        {"name": "get_current_weather", "description": "Get the current weather for a city.", "input_schema": {"type": "object", "properties": {"city": {"type": "string"}, "units": {"type": "string", "enum": ["metric", "imperial"]}}, "required": ["city"]}},
+        {"name": "get_forecast", "description": "Get a multi-day weather forecast for a city.", "input_schema": {"type": "object", "properties": {"city": {"type": "string"}, "days": {"type": "integer"}}, "required": ["city"]}}
+      ]
+    }
+  ]
+}

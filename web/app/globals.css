@@ -1,11 +1,169 @@
 @import "tailwindcss";
 
+/* ── Design tokens ────────────────────────────────────────────────────────────
+   The one theme every page wears ("Calm Dark"). Change a colour here, not in
+   components. One accent (indigo); green / amber / red only for status. */
 :root {
-  --background: #fafafa;
-  --foreground: #18181b;
+  --bg: #0a0a0b;
+  --surface: #111113;
+  --surface-raised: #18181b;
+  --surface-strong: #232327;
+  --hover: #1f1f23;
+  --border: rgb(255 255 255 / 0.08);
+  --border-strong: rgb(255 255 255 / 0.14);
+
+  --text: #ededef;
+  --text-secondary: #d4d4d8;
+  --text-muted: #a1a1aa;
+  --text-subtle: #71717a;
+  --text-disabled: #52525b;
+
+  --accent: #4f46e5;
+  --accent-hover: #6366f1;
+  --accent-wash: rgb(99 102 241 / 0.14);
+  --accent-wash-strong: rgb(99 102 241 / 0.28);
+  --accent-border: rgb(99 102 241 / 0.4);
+  --link: #818cf8;
+
+  --success: #34d399;
+  --success-wash: rgb(16 185 129 / 0.14);
+  --success-border: rgb(16 185 129 / 0.35);
+  --warning: #fbbf24;
+  --warning-wash: rgb(245 158 11 / 0.14);
+  --warning-border: rgb(245 158 11 / 0.35);
+  --danger: #f87171;
+  --danger-wash: rgb(239 68 68 / 0.14);
+  --danger-border: rgb(239 68 68 / 0.4);
+
+  /* kept for code that reads them */
+  --background: var(--bg);
+  --foreground: var(--text);
+  color-scheme: dark;
 }
 
-body {
-  background-color: var(--background);
-  color: var(--foreground);
+/* Fonts come from next/font in app/layout.tsx. Sky / violet / purple fold into
+   the accent and rose into red, so the app shows one accent colour. */
+@theme inline {
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, monospace;
+
+  --color-sky-50: var(--color-indigo-50);
+  --color-sky-100: var(--color-indigo-100);
+  --color-sky-200: var(--color-indigo-200);
+  --color-sky-300: var(--color-indigo-300);
+  --color-sky-400: var(--color-indigo-400);
+  --color-sky-500: var(--color-indigo-500);
+  --color-sky-600: var(--color-indigo-600);
+  --color-sky-700: var(--color-indigo-700);
+  --color-sky-800: var(--color-indigo-800);
+  --color-violet-50: var(--color-indigo-50);
+  --color-violet-100: var(--color-indigo-100);
+  --color-violet-200: var(--color-indigo-200);
+  --color-violet-300: var(--color-indigo-300);
+  --color-violet-400: var(--color-indigo-400);
+  --color-violet-500: var(--color-indigo-500);
+  --color-violet-600: var(--color-indigo-600);
+  --color-violet-700: var(--color-indigo-700);
+  --color-purple-50: var(--color-indigo-50);
+  --color-purple-600: var(--color-indigo-600);
+  --color-purple-700: var(--color-indigo-700);
+  --color-rose-50: var(--color-red-50);
+  --color-rose-100: var(--color-red-100);
+  --color-rose-200: var(--color-red-200);
+  --color-rose-500: var(--color-red-500);
+  --color-rose-700: var(--color-red-700);
 }
+
+html, body {
+  background-color: var(--bg);
+  color: var(--text);
+}
+body {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+}
+h1, h2, h3 { letter-spacing: -0.01em; line-height: 1.25; }
+
+/* ── Dark remap ───────────────────────────────────────────────────────────────
+   Components are written with light zinc classes; inside .builder-dark (the
+   body) they map onto the tokens above instead of every component carrying
+   dark: variants. Keep to the classes the app actually uses. */
+.builder-dark { color-scheme: dark; color: var(--text); }
+
+/* surfaces */
+.builder-dark .bg-white { background-color: var(--surface); }
+.builder-dark .bg-white\/90 { background-color: rgb(17 17 19 / 0.9); }
+.builder-dark .bg-zinc-50, .builder-dark .bg-zinc-50\/60 { background-color: var(--surface-raised); }
+.builder-dark .bg-zinc-100, .builder-dark .bg-zinc-200 { background-color: var(--surface-strong); }
+.builder-dark .hover\:bg-zinc-50:hover, .builder-dark .hover\:bg-zinc-50\/50:hover { background-color: var(--hover); }
+.builder-dark .hover\:bg-zinc-100:hover, .builder-dark .hover\:bg-zinc-200:hover { background-color: var(--surface-strong); }
+.builder-dark select option { background-color: var(--surface-raised); color: var(--text); }
+
+/* text */
+.builder-dark .text-zinc-950, .builder-dark .text-zinc-900, .builder-dark .text-zinc-800 { color: var(--text); }
+.builder-dark .text-zinc-700 { color: var(--text-secondary); }
+.builder-dark .text-zinc-600, .builder-dark .text-zinc-500 { color: var(--text-muted); }
+.builder-dark .text-zinc-400 { color: var(--text-subtle); }
+.builder-dark .hover\:text-zinc-900:hover, .builder-dark .hover\:text-zinc-800:hover, .builder-dark .hover\:text-zinc-700:hover { color: var(--text); }
+.builder-dark .placeholder\:text-zinc-400::placeholder { color: var(--text-subtle); }
+
+/* borders */
+.builder-dark .border-zinc-100, .builder-dark .border-zinc-200, .builder-dark .border-zinc-300 { border-color: var(--border); }
+.builder-dark .divide-zinc-100 > :not(:last-child) { border-color: var(--border); }
+.builder-dark .hover\:border-zinc-200:hover, .builder-dark .hover\:border-zinc-300:hover { border-color: var(--border-strong); }
+.builder-dark .border-white { border-color: var(--surface); }
+
+/* primary action = the accent */
+.builder-dark button.bg-zinc-900, .builder-dark a.bg-zinc-900 { background-color: var(--accent); color: #fff; }
+.builder-dark button.bg-zinc-900:hover, .builder-dark a.bg-zinc-900:hover, .builder-dark .hover\:bg-zinc-700:hover { background-color: var(--accent-hover); }
+.builder-dark .focus-visible\:ring-zinc-900:focus-visible { --tw-ring-color: var(--accent-hover); }
+.builder-dark .focus-visible\:ring-offset-2:focus-visible { --tw-ring-offset-color: var(--bg); }
+.builder-dark .shadow-lg, .builder-dark .shadow-sm, .builder-dark .shadow-md { --tw-shadow-color: rgb(0 0 0 / 0.5); }
+
+/* accent tints: a wash of the hue instead of a pastel fill */
+.builder-dark .bg-indigo-50, .builder-dark .bg-indigo-50\/30, .builder-dark .bg-indigo-50\/50, .builder-dark .bg-indigo-50\/60,
+.builder-dark .bg-indigo-50\/70, .builder-dark .bg-indigo-50\/90, .builder-dark .bg-indigo-100,
+.builder-dark .hover\:bg-indigo-50:hover, .builder-dark .hover\:bg-indigo-50\/40:hover,
+.builder-dark .bg-sky-50, .builder-dark .bg-sky-50\/80, .builder-dark .bg-sky-100, .builder-dark .hover\:bg-sky-100:hover,
+.builder-dark .bg-violet-50, .builder-dark .bg-purple-50 { background-color: var(--accent-wash); }
+.builder-dark .bg-indigo-200, .builder-dark .hover\:bg-indigo-300:hover, .builder-dark .bg-sky-200 { background-color: var(--accent-wash-strong); }
+.builder-dark .from-indigo-50 { --tw-gradient-from: var(--accent-wash); }
+.builder-dark .to-violet-50 { --tw-gradient-to: rgb(99 102 241 / 0.06); }
+.builder-dark .text-indigo-900, .builder-dark .text-indigo-800, .builder-dark .text-indigo-700,
+.builder-dark .text-sky-800, .builder-dark .text-sky-700, .builder-dark .text-violet-700, .builder-dark .text-purple-700 { color: #a5b4fc; }
+.builder-dark .text-indigo-600, .builder-dark .text-sky-600, .builder-dark .text-violet-600, .builder-dark .text-purple-600,
+.builder-dark .hover\:text-indigo-800:hover, .builder-dark .hover\:text-indigo-600:hover { color: var(--link); }
+.builder-dark .border-indigo-100, .builder-dark .border-indigo-200, .builder-dark .border-indigo-300, .builder-dark .border-indigo-400,
+.builder-dark .hover\:border-indigo-200:hover, .builder-dark .hover\:border-indigo-300:hover,
+.builder-dark .border-sky-200, .builder-dark .hover\:border-sky-300:hover { border-color: var(--accent-border); }
+.builder-dark .ring-violet-200 { --tw-ring-color: var(--accent-border); }
+
+/* status: success */
+.builder-dark .bg-emerald-50, .builder-dark .bg-emerald-50\/40, .builder-dark .bg-emerald-50\/50,
+.builder-dark .hover\:bg-emerald-50:hover { background-color: var(--success-wash); }
+.builder-dark .bg-emerald-100, .builder-dark .hover\:bg-emerald-100:hover { background-color: rgb(16 185 129 / 0.2); }
+.builder-dark .text-emerald-950, .builder-dark .text-emerald-900, .builder-dark .text-emerald-800, .builder-dark .text-emerald-700 { color: var(--success); }
+.builder-dark .border-emerald-100, .builder-dark .border-emerald-200 { border-color: var(--success-border); }
+
+/* status: warning */
+.builder-dark .bg-amber-50, .builder-dark .bg-amber-50\/50, .builder-dark .bg-amber-50\/60 { background-color: var(--warning-wash); }
+.builder-dark .bg-amber-100, .builder-dark .hover\:bg-amber-100:hover { background-color: rgb(245 158 11 / 0.2); }
+.builder-dark .text-amber-950, .builder-dark .text-amber-900, .builder-dark .text-amber-800, .builder-dark .text-amber-700 { color: var(--warning); }
+.builder-dark .border-amber-100, .builder-dark .border-amber-200, .builder-dark .border-amber-300,
+.builder-dark .hover\:border-amber-300:hover { border-color: var(--warning-border); }
+
+/* status: danger */
+.builder-dark .bg-red-50, .builder-dark .bg-red-50\/80, .builder-dark .hover\:bg-red-50:hover,
+.builder-dark .bg-rose-50 { background-color: var(--danger-wash); }
+.builder-dark .bg-red-100, .builder-dark .hover\:bg-red-100:hover, .builder-dark .bg-rose-100 { background-color: rgb(239 68 68 / 0.2); }
+.builder-dark .bg-red-200 { background-color: rgb(239 68 68 / 0.3); }
+.builder-dark .text-red-800, .builder-dark .text-red-700, .builder-dark .text-red-600,
+.builder-dark .text-rose-700, .builder-dark .hover\:text-red-600:hover, .builder-dark .hover\:text-red-700:hover { color: var(--danger); }
+.builder-dark .border-red-100, .builder-dark .border-red-200, .builder-dark .border-red-300,
+.builder-dark .hover\:border-red-300:hover { border-color: var(--danger-border); }
+
+/* A row that scrolls sideways on a narrow screen (tabs, filters) without
+   showing a scrollbar; swiping and the trackpad still scroll it. */
+.no-scrollbar { scrollbar-width: none; overflow-y: hidden; }
+.no-scrollbar::-webkit-scrollbar { display: none; }

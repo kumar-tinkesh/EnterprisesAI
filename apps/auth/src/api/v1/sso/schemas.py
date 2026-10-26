@@ -1,4 +1,4 @@
-"""SSO / OIDC endpoint schemas."""
+"""Google SSO / OIDC endpoint schemas."""
 from __future__ import annotations
 
 from pydantic import BaseModel

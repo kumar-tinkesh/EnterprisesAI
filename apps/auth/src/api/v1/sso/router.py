@@ -1,4 +1,4 @@
-"""SSO / OIDC API endpoints."""
+"""Google SSO / OIDC API endpoints for solo_user login."""
 from __future__ import annotations
 
 import httpx

@@ -19,6 +19,7 @@ __all__ = [
     "build_authorization_url",
     "exchange_code",
     "verify_id_token",
+    "generate_state",
 ]
 
 # Simple in-memory cache of OIDC discovery documents (process lifetime).
@@ -40,17 +41,21 @@ def pkce_pair() -> tuple[str, str]:
     return verifier, challenge
 
 
-async def get_discovery(session: httpx.AsyncClient) -> dict[str, Any]:
+async def get_discovery(
+    session: httpx.AsyncClient, discovery_url: str | None = None
+) -> dict[str, Any]:
     """Fetch (and cache) the OIDC discovery document from the provider."""
     settings = get_settings()
-    cached = DISCOVERY_CACHE.get(settings.SSO_DISCOVERY_URL)
+    url = discovery_url or settings.SSO_DISCOVERY_URL
+    cached = DISCOVERY_CACHE.get(url)
     if cached is not None:
         return cached
-    response = await session.get(settings.SSO_DISCOVERY_URL)
+    response = await session.get(url)
     response.raise_for_status()
     doc: dict[str, Any] = response.json()
-    DISCOVERY_CACHE[settings.SSO_DISCOVERY_URL] = doc
+    DISCOVERY_CACHE[url] = doc
     return doc
+
 
 
 async def build_authorization_url(

@@ -1,6 +1,8 @@
 """Local auth schemas (unified register/login with role)."""
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from src.core.roles import Roles
@@ -10,7 +12,7 @@ class SignupRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
     full_name: str = Field(default="", max_length=255)
-    # vendor_admin | tenant_admin | tenant_user
+    # Only solo_user can self-sign-up; the other roles are rejected by the service.
     role: str = Roles.TENANT_USER
     tenant_name: str = Field(default="Default", min_length=1, max_length=255)
 
@@ -56,3 +58,18 @@ class MeResponse(BaseModel):
     role: str
     tenant_id: str | None = None
     is_active: bool = True
+
+
+class AuditEventOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    user_id: str | None = None
+    tenant_id: str | None = None
+    action: str
+    resource: str
+    detail: str | None = None
+    ip_address: str | None = None
+    user_agent: str | None = None
+    created_at: datetime | None = None
+

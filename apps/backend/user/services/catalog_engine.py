@@ -1,0 +1,278 @@
+"""Catalog engine — the AI Compiler's authorised capability view.
+
+Phase 1 implements **access-filtering only**: given an authenticated user,
+return the MCP servers they are allowed to bind to an agent.
+
+    * ``vendor_admin`` → every registered MCP server.
+    * ``solo_user``     → MCP servers flagged ``is_global``.
+    * ``tenant_user`` / ``tenant_admin`` → ``is_global`` MCP servers **plus**
+      MCP servers granted to the caller's tenant via ``tenant_resource_grants``.
+
+Read-only: this module only ever queries ``vendor.models`` — it never
+mutates a server/tool row. Registration, verification, and embedding are
+``vendor.services.mcp_service`` / ``vendor.services.embedding``, both
+off-limits to this ``user`` package (see the repo's import-linter
+contracts; ``vendor.models``, ``vendor.services.text_repr`` and
+``vendor.services.embedding.embed_text`` are the only narrow exceptions,
+each pure/read-only).
+"""
+from __future__ import annotations
+
+from typing import Optional
+
+from sqlalchemy import or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.api.deps import CurrentUser
+from src.core.roles import Roles
+
+from vendor.models import MCPTool, TenantResourceGrant, VendorMCPCredential, VendorMCPServer
+from vendor.services.embedding import embed_text
+from vendor.services.text_repr import server_text, tool_text
+
+from user.services import hybrid_search
+
+
+async def get_authorized_vendor_catalog(
+    db: AsyncSession, *, user: CurrentUser
+) -> list[VendorMCPServer]:
+    """Return the MCP servers the calling user is authorised to use."""
+    if user.role == Roles.VENDOR_ADMIN:
+        result = await db.execute(select(VendorMCPServer).order_by(VendorMCPServer.name))
+        return list(result.scalars().all())
+
+    if user.role == Roles.SOLO_USER:
+        result = await db.execute(
+            select(VendorMCPServer)
+            .where(VendorMCPServer.is_global.is_(True))
+            .order_by(VendorMCPServer.name)
+        )
+        return list(result.scalars().all())
+
+    grant_subq = select(TenantResourceGrant.resource_id).where(
+        TenantResourceGrant.tenant_id == user.tenant_id,
+        TenantResourceGrant.resource_type == "mcp",
+    )
+    result = await db.execute(
+        select(VendorMCPServer)
+        .where(
+            or_(
+                VendorMCPServer.is_global.is_(True),
+                VendorMCPServer.id.in_(grant_subq),
+            )
+        )
+        .order_by(VendorMCPServer.name)
+    )
+    return list(result.scalars().all())
+
+
+def _rank_servers(servers: list[VendorMCPServer], *, query: str, q_vec, top_k: int):
+    return hybrid_search.rank(
+        servers,
+        query=query,
+        query_vector=q_vec,
+        top_k=top_k,
+        text_of=server_text,
+        embedding_of=lambda s: s.embedding,
+        dim_of=lambda s: s.dim,
+    )
+
+
+def _rank_tools(tools: list[MCPTool], *, query: str, q_vec, top_k: int):
+    return hybrid_search.rank(
+        tools,
+        query=query,
+        query_vector=q_vec,
+        top_k=top_k,
+        text_of=tool_text,
+        embedding_of=lambda t: t.embedding,
+        dim_of=lambda t: t.dim,
+    )
+
+
+async def get_authorized_vendor_catalog_semantic(
+    db: AsyncSession,
+    *,
+    user: CurrentUser,
+    query: str,
+    top_k: int = 5,
+    embedding_provider: Optional[str] = None,
+) -> list[VendorMCPServer]:
+    """Hybrid-search match: rank the access-filtered catalog against
+    ``query``.
+
+    Access control is enforced **first**, then the candidate servers are
+    ranked by :func:`hybrid_search.rank` (vector + BM25 + rerank — see that
+    module for why). BM25 and the reranker work even when the query
+    couldn't be embedded (provider down, etc.), so only a genuinely empty
+    query or zero candidates skips ranking entirely.
+    """
+    candidates = await get_authorized_vendor_catalog(db, user=user)
+    if not candidates or not query:
+        return candidates[:top_k]
+
+    q_embedded = await embed_text(query, provider=embedding_provider)
+    q_vec = q_embedded[0] if q_embedded else None
+
+    ranked = _rank_servers(candidates, query=query, q_vec=q_vec, top_k=top_k)
+    return ranked or candidates[:top_k]
+
+
+async def get_relevant_tools_semantic(
+    db: AsyncSession,
+    *,
+    user: CurrentUser,
+    query: str,
+    top_k_servers: int = 5,
+    top_k_tools: int = 8,
+    embedding_provider: Optional[str] = None,
+) -> list[tuple[VendorMCPServer, MCPTool, Optional[float]]]:
+    """Two-stage hybrid tool retrieval — the actual "which tool(s) can
+    answer this query" lookup, for handing to an LLM as function-calling
+    candidates. Does **not** call any tool; it only selects and returns them
+    with their ``input_schema`` (parameters).
+
+    Stage 1: rank the caller's *access-filtered* catalog (same rules as
+    :func:`get_authorized_vendor_catalog`) down to ``top_k_servers``.
+    Stage 2: within only those servers' tools, rank down to ``top_k_tools``.
+    Both stages go through :func:`hybrid_search.rank` (vector + BM25 +
+    cross-encoder rerank).
+
+    The query is embedded once and reused for both stages. Returns
+    ``(server, tool, score)`` triples, best match first; ``score`` is the
+    tool's cosine similarity to the query when an embedding was available,
+    else ``None`` (BM25/rerank still ranked it, there's just no vector
+    score to report).
+    """
+    candidates = await get_authorized_vendor_catalog(db, user=user)
+    if not candidates or not query:
+        return []
+
+    q_embedded = await embed_text(query, provider=embedding_provider)
+    q_vec = q_embedded[0] if q_embedded else None
+
+    servers = _rank_servers(candidates, query=query, q_vec=q_vec, top_k=top_k_servers)
+    if not servers:
+        servers = candidates[:top_k_servers]
+    if not servers:
+        return []
+
+    server_ids = [s.id for s in servers]
+    server_map = {s.id: s for s in servers}
+    tools = (
+        await db.execute(select(MCPTool).where(MCPTool.mcp_server_id.in_(server_ids)))
+    ).scalars().all()
+    if not tools:
+        return []
+
+    ranked_tools = _rank_tools(list(tools), query=query, q_vec=q_vec, top_k=top_k_tools)
+    if not ranked_tools:
+        ranked_tools = list(tools)[:top_k_tools]
+
+    # Diversity floor: ranking every selected server's tools together in one
+    # pool lets a server with many tools (e.g. 20+) statistically crowd out
+    # a server with only a couple, especially for a multi-intent query whose
+    # single combined embedding is blurry (verified live: a 5-server pool
+    # for a 4-intent query returned zero tools from two of the servers
+    # Stage 1 itself had just ranked as relevant). Guarantee each Stage-1
+    # server its own best-matching tool a slot, so a server Stage 1 already
+    # judged relevant can't be silently dropped here purely because a
+    # bigger sibling server crowded the pool.
+    seen_servers = {t.mcp_server_id for t in ranked_tools}
+    missing_servers = [s for s in servers if s.id not in seen_servers]
+    if missing_servers:
+        tools_by_server: dict[str, list[MCPTool]] = {}
+        for t in tools:
+            tools_by_server.setdefault(t.mcp_server_id, []).append(t)
+        floor_tools: list[MCPTool] = []
+        for s in missing_servers:
+            server_tools = tools_by_server.get(s.id) or []
+            if not server_tools:
+                continue
+            top1 = _rank_tools(server_tools, query=query, q_vec=q_vec, top_k=1)
+            floor_tools.extend(top1 or server_tools[:1])
+        floor_tools = floor_tools[:top_k_tools]
+        if floor_tools:
+            keep = max(0, top_k_tools - len(floor_tools))
+            ranked_tools = ranked_tools[:keep] + floor_tools
+
+    return [
+        (
+            server_map[t.mcp_server_id],
+            t,
+            hybrid_search.cosine_similarity(q_vec, t.embedding) if q_vec and t.embedding else None,
+        )
+        for t in ranked_tools
+    ]
+
+
+async def has_user_credential(db: AsyncSession, *, server_id: str, user_id: str) -> bool:
+    """Whether the calling user has connected their own credential for a
+    server — used to gate tool-call planning on "connect first" instead of
+    silently returning nothing. Queries ``vendor.models`` directly (a
+    whitelisted read-only exception in the repo's import-linter contracts)
+    rather than ``vendor.services.mcp_auth``, which this package must never
+    import."""
+    row = (
+        await db.execute(
+            select(VendorMCPCredential.id).where(
+                VendorMCPCredential.server_id == server_id,
+                VendorMCPCredential.user_id == user_id,
+            )
+        )
+    ).scalars().first()
+    return row is not None
+
+
+async def get_user_connected_server_ids(
+    db: AsyncSession, *, server_ids: list[str], user_id: str
+) -> set[str]:
+    """Bulk version of :func:`has_user_credential` — which of these servers
+    the calling user has already connected their own credential for. Used
+    to annotate the catalog listing so the client can render "Connect" vs
+    "Connected" per server without one query each."""
+    if not server_ids:
+        return set()
+    from vendor.services.whatsapp_bridge.manager import drop_dead_bridges
+
+    await drop_dead_bridges(db, user_id=user_id, server_ids=server_ids)
+    rows = (
+        await db.execute(
+            select(VendorMCPCredential.server_id).where(
+                VendorMCPCredential.server_id.in_(server_ids),
+                VendorMCPCredential.user_id == user_id,
+            )
+        )
+    ).scalars().all()
+    return set(rows)
+
+
+def credential_field_names(server: VendorMCPServer) -> list[str]:
+    """Names (never values) of the credential fields a caller must supply to
+    connect to ``server`` — mirrors the vendor admin's own credential-field
+    resolution (see ``ConnectCredentialModal`` in the vendor tools UI):
+    prefer the structured ``auth_schema.fields``, else fall back to
+    ``env_vars`` keys that don't already have a stored (vendor-level)
+    value."""
+    auth_schema = getattr(server, "auth_schema", None) or {}
+    schema_fields = auth_schema.get("fields") if isinstance(auth_schema, dict) else None
+    if schema_fields:
+        return [f["name"] for f in schema_fields if isinstance(f, dict) and f.get("name")]
+    if server.env_vars:
+        return [k for k, v in server.env_vars.items() if not v]
+    return []
+
+
+# Re-exported for backward compatibility — this used to be defined here.
+cosine_similarity = hybrid_search.cosine_similarity
+
+
+__all__ = [
+    "get_authorized_vendor_catalog",
+    "get_authorized_vendor_catalog_semantic",
+    "get_relevant_tools_semantic",
+    "has_user_credential",
+    "get_user_connected_server_ids",
+    "credential_field_names",
+    "cosine_similarity",
+]

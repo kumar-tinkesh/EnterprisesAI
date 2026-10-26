@@ -32,4 +32,3 @@ def test_redacted_repr_has_no_secrets():
     red = s.redacted_repr()
     assert "JWT_PRIVATE_KEY" not in red
     assert "SSO_CLIENT_SECRET" not in red
-    assert "CSRF_SECRET_KEY" not in red

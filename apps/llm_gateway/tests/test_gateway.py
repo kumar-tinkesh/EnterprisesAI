@@ -1,3 +1,4 @@
+import dataclasses
 """
 Unit & Integration Tests for LLM Gateway (apps/llm_gateway).
 Run with: uv run pytest apps/llm_gateway/tests
@@ -32,6 +33,7 @@ def mock_env_settings():
         groq=ProviderConfig(api_key="gsk-groq-mock", default_model="llama-3.3-70b-versatile"),
         gemini=ProviderConfig(api_key="AIza-gemini-mock", default_model="gemini-2.5-flash"),
         default_provider="openai",
+        embedding_provider="openai",
     )
 
 
@@ -40,6 +42,7 @@ def mock_env_settings():
 def test_gateway_settings_from_env(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
     monkeypatch.setenv("GROQ_API_KEY", "test-groq-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "")
     monkeypatch.setenv("LLM_GATEWAY_DEFAULT_PROVIDER", "groq")
 
     settings = GatewaySettings.from_env()
@@ -48,6 +51,64 @@ def test_gateway_settings_from_env(monkeypatch):
     assert settings.groq.api_key == "test-groq-key"
     assert settings.default_provider == "groq"
     assert settings.gemini.is_configured is False
+
+
+_LLM_ENV = (
+    "OPENAI_API_KEY", "GROQ_API_KEY", "GEMINI_API_KEY", "AZURE_OPENAI_API_KEY",
+    "AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_VERSION", "AZURE_OPENAI_DEPLOYMENT",
+    "AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "LLM_GATEWAY_DEFAULT_PROVIDER",
+    "LLM_GATEWAY_EMBEDDING_PROVIDER",
+)
+
+
+@pytest.fixture
+def clean_llm_env(monkeypatch):
+    """No .env and none of the provider variables — each test sets its own."""
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: False)
+    for name in _LLM_ENV:
+        monkeypatch.delenv(name, raising=False)
+    return monkeypatch
+
+
+def test_azure_from_marketplace_variables_becomes_default(clean_llm_env):
+    clean_llm_env.setenv("AZURE_OPENAI_API_KEY", "az-key")
+    clean_llm_env.setenv("AZURE_OPENAI_ENDPOINT", "https://dev.openai.azure.com/")
+    clean_llm_env.setenv("AZURE_OPENAI_API_VERSION", "2025-01-01-preview")
+    clean_llm_env.setenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4.1-mini")
+
+    settings = GatewaySettings.from_env()
+
+    assert settings.azure.is_configured and settings.azure.is_azure
+    assert settings.azure.api_version == "2025-01-01-preview"
+    assert settings.default_provider == "azure"
+    # embeddings stay on the local default
+    assert settings.embedding_provider == "fastembed"
+
+
+def test_azure_defaults_and_explicit_provider_wins(clean_llm_env):
+    clean_llm_env.setenv("AZURE_OPENAI_API_KEY", "az-key")
+    clean_llm_env.setenv("AZURE_OPENAI_ENDPOINT", "https://my-proxy.example.com/")
+    clean_llm_env.setenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "embed-small")
+    clean_llm_env.setenv("LLM_GATEWAY_DEFAULT_PROVIDER", "openai")
+
+    settings = GatewaySettings.from_env()
+
+    assert settings.azure.is_azure  # custom domain still routes as Azure
+    assert settings.azure.api_version == "2024-06-01"
+    assert settings.azure.azure_chat_deployment == "gpt-4o-mini"
+    assert settings.default_provider == "openai"
+    assert settings.embedding_provider == "fastembed"  # only an explicit setting picks a hosted one
+
+
+def test_no_azure_keeps_old_defaults(clean_llm_env):
+    clean_llm_env.setenv("AZURE_OPENAI_API_KEY", "az-key")  # no endpoint -> not configured
+    clean_llm_env.setenv("LLM_GATEWAY_DEFAULT_PROVIDER", "")  # compose passes "" when unset
+
+    settings = GatewaySettings.from_env()
+
+    assert settings.azure.is_configured is False
+    assert settings.default_provider == "openai"
+    assert settings.embedding_provider == "fastembed"
 
 
 # ── Gateway Routing & Fallback Tests ─────────────────────────────────────────
@@ -132,6 +193,41 @@ async def test_llm_gateway_embeddings_skip_groq(mock_env_settings):
         assert resp.provider == "openai"
 
 
+@pytest.mark.asyncio
+async def test_embeddings_use_fastembed_when_requested_provider_missing(mock_env_settings):
+    """gemini asked for but not configured -> fastembed, not another hosted provider."""
+    settings = dataclasses.replace(mock_env_settings, gemini=ProviderConfig(), embedding_provider="gemini")
+    fake = AsyncMock()
+    fake.model_name = "BAAI/bge-small-en-v1.5"
+    fake.embed.return_value = EmbeddingResponse(embeddings=[[0.5] * 4], model=fake.model_name, provider="fastembed")
+
+    with patch("apps.llm_gateway.gateway.OpenAIClient") as openai_cls, \
+         patch("apps.llm_gateway.gateway.GroqClient"), \
+         patch("apps.llm_gateway.gateway.FastEmbedClient", return_value=fake):
+        gw = LLMGateway(settings)
+        assert gw.embedding_provider == "fastembed"
+        resp = await gw.embed(["hello"])
+
+    assert resp.provider == "fastembed"
+    openai_cls.return_value.embed.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_embedding_failure_does_not_switch_provider(mock_env_settings):
+    """Another provider's vectors wouldn't match the stored ones, so a failure is raised."""
+    from apps.llm_gateway.exceptions import ProviderAPIError
+
+    failing = AsyncMock()
+    failing.embed.side_effect = ProviderAPIError("down", provider="openai", status_code=503, retryable=True)
+    with patch("apps.llm_gateway.gateway.OpenAIClient", return_value=failing), \
+         patch("apps.llm_gateway.gateway.GroqClient"), \
+         patch("apps.llm_gateway.gateway.GeminiClient") as gemini_cls:
+        gw = LLMGateway(mock_env_settings)
+        with pytest.raises(ProviderAPIError):
+            await gw.embed(["hello"])
+    gemini_cls.return_value.embed.assert_not_called()
+
+
 # ── FastAPI Endpoint Tests ────────────────────────────────────────────────────
 
 def test_api_health_endpoint():
@@ -168,3 +264,98 @@ def test_api_chat_completions_mocked():
             json_body = res.json()
             assert json_body["object"] == "chat.completion"
             assert json_body["choices"][0]["message"]["content"] == "API test response"
+
+
+def test_api_prompt_render_endpoint():
+    with TestClient(app) as client:
+        res = client.post(
+            "/v1/prompts/render",
+            json={
+                "prompt_type": "react_agent",
+                "variables": {
+                    "agent_goal": "Onboard new hire",
+                    "bound_tools": ["hris.createEmployee"],
+                    "knowledge_context": "HR policy",
+                    "memory_context": "No previous runs",
+                },
+            },
+        )
+        assert res.status_code == 200
+        body = res.json()
+        assert body["prompt_type"] == "react_agent"
+        assert "Onboard new hire" in body["prompt"]
+
+
+def test_api_prompt_render_unknown_type():
+    with TestClient(app) as client:
+        res = client.post(
+            "/v1/prompts/render",
+            json={"prompt_type": "does_not_exist", "variables": {}},
+        )
+        assert res.status_code == 400
+        assert "Unknown prompt_type" in res.json()["detail"]
+
+
+def test_api_prompts_list_endpoint():
+    with TestClient(app) as client:
+        res = client.get("/prompts")
+        assert res.status_code == 200
+        assert "react_agent" in res.json()["prompt_types"]
+
+
+@pytest.mark.asyncio
+async def test_llm_gateway_cache_hits(mock_env_settings):
+    """Same request should only hit the provider once when caching is enabled."""
+    from dataclasses import replace
+
+    settings = replace(mock_env_settings, enable_cache=True, cache_ttl_seconds=60)
+    gw = LLMGateway(settings)
+    mock_openai = AsyncMock()
+    gw._clients["openai"] = mock_openai
+
+    from apps.llm_gateway.types import CompletionRequest
+    req = CompletionRequest(messages=[Message(role=Role.USER, content="cached question")])
+    mock_openai.complete.return_value = CompletionResponse(
+        content="cached answer", model="gpt-4.1", provider="openai"
+    )
+
+    first = await gw.complete(req)
+    second = await gw.complete(req)
+    assert mock_openai.complete.call_count == 1
+    assert first.content == "cached answer"
+    assert second.content == "cached answer"
+
+
+
+@pytest.mark.asyncio
+async def test_complete_streamed_hands_out_text_and_puts_tool_calls_together(mock_env_settings):
+    from apps.llm_gateway.types import StreamChunk, ToolCall
+
+    async def stream(_request):
+        for chunk in (
+            StreamChunk(content="<think>plan</think>Hel"),
+            StreamChunk(content="lo <"),
+            StreamChunk(tool_calls=[ToolCall(id="c1", name="search", arguments='{"q": ', index=0)]),
+            StreamChunk(tool_calls=[ToolCall(id="c2", name="mail", arguments="{}", index=1)]),
+            StreamChunk(tool_calls=[ToolCall(id="", name="", arguments='"x"}', index=0)], finish_reason="tool_calls"),
+            StreamChunk(usage=TokenUsage(prompt_tokens=7, completion_tokens=3, total_tokens=10)),
+        ):
+            yield chunk
+
+    mock_openai = AsyncMock()
+    mock_openai.stream = stream
+    with patch("apps.llm_gateway.gateway.OpenAIClient", return_value=mock_openai), \
+         patch("apps.llm_gateway.gateway.GroqClient"), \
+         patch("apps.llm_gateway.gateway.GeminiClient"):
+        gw = LLMGateway(mock_env_settings)
+        seen: list[str] = []
+
+        async def on_text(t: str) -> None:
+            seen.append(t)
+
+        resp = await gw.complete_streamed(CompletionRequest(messages=[Message(role=Role.USER, content="Hi")]), on_text=on_text)
+
+    # The thinking stays out of the answer; a "<" held back for a possible tag comes out at the end.
+    assert "".join(seen) == "Hello <" == resp.content and resp.reasoning == "plan"
+    assert [(c.id, c.name, c.arguments) for c in resp.tool_calls] == [("c1", "search", '{"q": "x"}'), ("c2", "mail", "{}")]
+    assert (resp.usage.prompt_tokens, resp.usage.completion_tokens, resp.finish_reason) == (7, 3, "tool_calls")

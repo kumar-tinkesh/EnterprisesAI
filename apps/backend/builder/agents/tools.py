@@ -1,0 +1,153 @@
+"""The tools an agent may call, as LLM function definitions.
+
+* Each ``mcp:<server_id>:<tool_name>`` in the agent's config becomes one
+  function, named ``<server>__<tool>`` (unique, provider-safe), with the
+  tool's own JSON Schema as its parameters.
+* An agent with knowledge bases also gets ``search_knowledge`` — hybrid
+  retrieval over those knowledge bases (``knowledge.services.retrieval``).
+
+Tools that are no longer available (server removed, tool gone) are left out
+rather than failing the run; preflight already reported them before it started.
+"""
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from vendor.models import MCPTool, VendorMCPServer
+
+from builder.graph.schema import parse_tool_id
+
+KNOWLEDGE_TOOL = "search_knowledge"
+_MAX_NAME = 64
+
+
+@dataclass(frozen=True)
+class AgentTool:
+    function_name: str
+    server_id: str
+    server_name: str
+    tool_name: str
+    description: str
+    input_schema: dict
+    annotations: dict | None
+
+
+def _slug(text: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_]+", "_", text).strip("_").lower() or "tool"
+
+
+# Providers (OpenAI / Azure) reject a function whose parameters use these at
+# the top level, and one bad tool fails the whole request.
+_TOP_LEVEL_BANNED = ("oneOf", "anyOf", "allOf", "enum", "const", "not")
+
+
+def _required_sets(rule: object) -> str:
+    """``[{"required": ["a"]}, {"required": ["b"]}]`` -> "a; or b"."""
+    if not isinstance(rule, list):
+        return ""
+    sets = [", ".join(r["required"]) for r in rule if isinstance(r, dict) and isinstance(r.get("required"), list) and r["required"]]
+    return "; or ".join(sets)
+
+
+def provider_safe_parameters(schema: dict | None) -> tuple[dict, str]:
+    """The tool's JSON Schema in a shape every provider accepts, plus a note
+    describing any top-level rule that had to be dropped (for the description;
+    the MCP server still enforces it on the call)."""
+    if not isinstance(schema, dict) or not schema:
+        return {"type": "object", "properties": {}}, ""
+    out = {k: v for k, v in schema.items() if k not in _TOP_LEVEL_BANNED}
+    out["type"] = "object"
+    if not isinstance(out.get("properties"), dict):
+        out["properties"] = {}
+    notes = []
+    if one_of := _required_sets(schema.get("oneOf")) or _required_sets(schema.get("anyOf")):
+        notes.append(f"Provide {one_of}.")
+    if _required_sets(schema.get("allOf")):
+        notes.append(f"Also required: {_required_sets(schema.get('allOf'))}.")
+    return out, " ".join(notes)
+
+
+def function_definitions(tools: list[AgentTool], *, with_knowledge: bool) -> list[dict]:
+    """[{name, description, parameters}] in the order the model sees them."""
+    defs = []
+    for t in tools:
+        parameters, note = provider_safe_parameters(t.input_schema)
+        defs.append({
+            "name": t.function_name,
+            "description": " ".join(x for x in (f"[{t.server_name}] {t.description}".strip(), note) if x),
+            "parameters": parameters,
+        })
+    if with_knowledge:
+        defs.append({
+            "name": KNOWLEDGE_TOOL,
+            "description": "Search this agent's knowledge base (company documents) and return the most relevant passages with their source.",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string", "description": "What to look for, in plain words"}},
+                "required": ["query"],
+            },
+        })
+    return defs
+
+
+async def resolve_agent_tools(db: AsyncSession, tool_ids: list[str], labels: dict[str, str] | None = None) -> list[AgentTool]:
+    """``labels``: server id -> the name the agent sees for it instead of the
+    server's own (a tool need's system: "LinkedIn", whatever the admin named it)."""
+    refs = list(dict.fromkeys(p for p in (parse_tool_id(t) for t in tool_ids) if p))
+    if not refs:
+        return []
+    server_ids = {sid for sid, _ in refs}
+    servers = {s.id: s for s in (await db.execute(select(VendorMCPServer).where(VendorMCPServer.id.in_(server_ids)))).scalars()}
+    tools = {
+        (t.mcp_server_id, t.name): t
+        for t in (await db.execute(select(MCPTool).where(MCPTool.mcp_server_id.in_(server_ids)))).scalars()
+    }
+    out: list[AgentTool] = []
+    taken: set[str] = {KNOWLEDGE_TOOL}
+    for server_id, tool_name in refs:
+        server, tool = servers.get(server_id), tools.get((server_id, tool_name))
+        if server is None or tool is None:
+            continue
+        server_name = (labels or {}).get(server_id) or server.name
+        base = f"{_slug(server_name)}__{_slug(tool_name)}"[:_MAX_NAME]
+        name, n = base, 2
+        while name in taken:
+            suffix = f"_{n}"
+            name, n = base[: _MAX_NAME - len(suffix)] + suffix, n + 1
+        taken.add(name)
+        out.append(AgentTool(
+            function_name=name,
+            server_id=server_id,
+            server_name=server_name,
+            tool_name=tool_name,
+            description=tool.description or "",
+            input_schema=tool.input_schema or {"type": "object", "properties": {}},
+            annotations=tool.annotations,
+        ))
+    return out
+
+
+async def search_knowledge(
+    db: AsyncSession, *, tenant_id: str, kb_ids: list[str], query: str, top_k: int = 6
+) -> tuple[str, list[dict]]:
+    """Retrieve across the agent's knowledge bases -> (passages formatted for the
+    model, the passages themselves: [{filename, content}] — what the answer can
+    later be checked against)."""
+    from knowledge.services.retrieval import retrieve
+
+    hits: list[dict] = []
+    for kb_id in kb_ids:
+        hits.extend(await retrieve(db, knowledge_base_id=kb_id, tenant_id=tenant_id, query=query, k=top_k))
+    hits.sort(key=lambda h: h["score"], reverse=True)
+    if not hits:
+        return "No relevant passages found in the knowledge base.", []
+    top = hits[:top_k]
+    text = "\n\n".join(f"[{i}] (source: {h['filename']})\n{h['content']}" for i, h in enumerate(top, start=1))
+    return text, [{"filename": h["filename"], "content": h["content"]} for h in top]
+
+
+__all__ = ["AgentTool", "KNOWLEDGE_TOOL", "function_definitions", "resolve_agent_tools", "search_knowledge"]

@@ -12,7 +12,13 @@ from typing import Optional
 
 @dataclass(frozen=True)
 class ProviderConfig:
-    """Credentials & defaults for a single LLM provider."""
+    """Credentials & defaults for a single LLM provider.
+
+    ``azure_chat_deployment``/``azure_embedding_deployment`` only apply to
+    the ``openai`` provider config when it's actually pointed at Azure
+    OpenAI (see :attr:`is_azure`) — Azure routes by *deployment name*, which
+    may differ from the underlying model name, instead of by model name.
+    """
 
     api_key: str = ""
     base_url: Optional[str] = None
@@ -20,10 +26,33 @@ class ProviderConfig:
     max_retries: int = 3
     timeout_seconds: int = 60
     organization: Optional[str] = None
+    api_version: Optional[str] = None
+    default_embedding_model: str = ""
+    azure_chat_deployment: str = ""
+    azure_embedding_deployment: str = ""
+    # The dedicated ``azure`` provider: always Azure routing, whatever the
+    # endpoint's host (custom domains included).
+    force_azure: bool = False
 
     @property
     def is_configured(self) -> bool:
+        if self.force_azure:
+            return bool(self.api_key and self.base_url)
         return bool(self.api_key)
+
+    @property
+    def is_azure(self) -> bool:
+        """True when ``base_url`` is an Azure OpenAI endpoint (``*.azure.com``)
+        with an ``api_version`` set — Azure OpenAI requires both a
+        deployment-scoped URL and an ``api-version`` query param, unlike
+        plain OpenAI-compatible endpoints."""
+        if self.force_azure:
+            return True
+        return bool(
+            self.base_url
+            and "azure.com" in self.base_url.lower()
+            and self.api_version
+        )
 
 
 @dataclass(frozen=True)
@@ -34,9 +63,23 @@ class GatewaySettings:
     Environment variables consumed
     ──────────────────────────────
     OPENAI_API_KEY, OPENAI_ORG_ID, OPENAI_BASE_URL, OPENAI_DEFAULT_MODEL
+    OPENAI_API_VERSION             Azure OpenAI only — enables Azure routing
+                                    when OPENAI_BASE_URL is a *.azure.com URL
+    AZURE_OPENAI_CHAT_DEPLOYMENT       optional — defaults to OPENAI_DEFAULT_MODEL
+    AZURE_OPENAI_EMBEDDING_DEPLOYMENT  optional — defaults to OPENAI_EMBEDDING_MODEL
+    AZURE_OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT   the dedicated ``azure`` provider
+    AZURE_OPENAI_API_VERSION       default 2024-06-01
+    AZURE_OPENAI_DEPLOYMENT        chat deployment name (default gpt-4o-mini)
+                                    AZURE_OPENAI_EMBEDDING_DEPLOYMENT doubles as
+                                    its embedding deployment
     GROQ_API_KEY, GROQ_BASE_URL, GROQ_DEFAULT_MODEL
     GEMINI_API_KEY, GEMINI_BASE_URL, GEMINI_DEFAULT_MODEL
-    LLM_GATEWAY_DEFAULT_PROVIDER   (openai | groq | gemini)
+    LLM_GATEWAY_DEFAULT_PROVIDER   (azure | openai | groq | gemini) — when unset,
+                                    azure if it's configured, else openai
+    LLM_GATEWAY_EMBEDDING_PROVIDER (fastembed | gemini | openai | azure), default
+                                    fastembed (local, no key); a hosted one that
+                                    isn't configured falls back to fastembed
+    FASTEMBED_MODEL                default BAAI/bge-small-en-v1.5
     LLM_GATEWAY_TIMEOUT            seconds, applies to all providers
     LLM_GATEWAY_MAX_RETRIES        retry count, applies to all providers
     LLM_GATEWAY_ENABLE_CACHE       1 | true | yes → enable response cache
@@ -46,7 +89,9 @@ class GatewaySettings:
     openai: ProviderConfig = field(default_factory=ProviderConfig)
     groq: ProviderConfig = field(default_factory=ProviderConfig)
     gemini: ProviderConfig = field(default_factory=ProviderConfig)
+    azure: ProviderConfig = field(default_factory=ProviderConfig)
     default_provider: str = "openai"
+    embedding_provider: str = "fastembed"
     enable_cache: bool = False
     cache_ttl_seconds: int = 3600
 
@@ -72,7 +117,11 @@ class GatewaySettings:
             api_key=os.getenv("OPENAI_API_KEY", ""),
             base_url=os.getenv("OPENAI_BASE_URL"),
             default_model=os.getenv("OPENAI_DEFAULT_MODEL", ""),
+            default_embedding_model=os.getenv("OPENAI_EMBEDDING_MODEL", ""),
             organization=os.getenv("OPENAI_ORG_ID"),
+            api_version=os.getenv("OPENAI_API_VERSION"),
+            azure_chat_deployment=os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT", ""),
+            azure_embedding_deployment=os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", ""),
             max_retries=retries,
             timeout_seconds=timeout,
         )
@@ -96,11 +145,35 @@ class GatewaySettings:
             timeout_seconds=timeout,
         )
 
+        azure_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", "") or "gpt-4o-mini"
+        azure_embedding = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "")
+        azure_cfg = ProviderConfig(
+            api_key=os.getenv("AZURE_OPENAI_API_KEY", ""),
+            base_url=os.getenv("AZURE_OPENAI_ENDPOINT") or None,
+            api_version=os.getenv("AZURE_OPENAI_API_VERSION", "") or "2024-06-01",
+            default_model=azure_deployment,
+            azure_chat_deployment=azure_deployment,
+            default_embedding_model=azure_embedding,
+            azure_embedding_deployment=azure_embedding,
+            force_azure=True,
+            max_retries=retries,
+            timeout_seconds=timeout,
+        )
+
+        # Empty counts as unset (docker compose passes "" for unset vars).
+        default_provider = os.getenv("LLM_GATEWAY_DEFAULT_PROVIDER", "").strip().lower() or (
+            "azure" if azure_cfg.is_configured else "openai"
+        )
+        # What was asked for; the gateway swaps in fastembed when it isn't usable.
+        embedding_provider = os.getenv("LLM_GATEWAY_EMBEDDING_PROVIDER", "").strip().lower() or "fastembed"
+
         return cls(
             openai=openai_cfg,
             groq=groq_cfg,
             gemini=gemini_cfg,
-            default_provider=os.getenv("LLM_GATEWAY_DEFAULT_PROVIDER", "openai"),
+            azure=azure_cfg,
+            default_provider=default_provider,
+            embedding_provider=embedding_provider,
             enable_cache=enable_cache,
             cache_ttl_seconds=cache_ttl,
         )

@@ -2,8 +2,9 @@
 # EnterpriseAI — full local stack
 #
 #   docker compose up --build
-#     web  -> http://localhost:3000/auth
+#     web  -> http://localhost:3001/auth
 #     auth -> http://localhost:8001/docs
+#     backend -> http://localhost:8002/docs
 #
 # With PostgreSQL instead of SQLite:
 #   docker compose --profile postgres up --build
@@ -21,7 +22,10 @@ services:
     container_name: enterpriseai-auth
     restart: unless-stopped
     ports:
-      - "8001:8001"
+      - "${AUTH_PORT:-8001}:8001"
+    env_file:
+      - path: .env
+        required: false
     environment:
       ENV: production
       DEBUG: "false"
@@ -32,14 +36,14 @@ services:
       # SQLite on a named volume by default; for Postgres use e.g.:
       # DATABASE_URL: postgresql+asyncpg://auth:auth@db:5432/auth
       DATABASE_URL: ${AUTH_DATABASE_URL:-sqlite+aiosqlite:////data/auth.db}
-      BACKEND_CORS_ORIGINS: '["http://localhost:3000","http://127.0.0.1:3000"]'
+      BACKEND_CORS_ORIGINS: '["http://localhost:3000","http://127.0.0.1:3000","http://localhost:3001","http://127.0.0.1:3001"]'
       # Override secrets via .env at the repo root or your shell.
       CSRF_SECRET_KEY: ${CSRF_SECRET_KEY:-change-me-in-production}
       SSO_PROVIDER: ${SSO_PROVIDER:-google}
-      SSO_CLIENT_ID: ${SSO_CLIENT_ID}
-      SSO_CLIENT_SECRET: ${SSO_CLIENT_SECRET}
+      SSO_CLIENT_ID: ${SSO_CLIENT_ID:-}
+      SSO_CLIENT_SECRET: ${SSO_CLIENT_SECRET:-}
       SSO_DISCOVERY_URL: ${SSO_DISCOVERY_URL:-https://accounts.google.com/.well-known/openid-configuration}
-      SSO_REDIRECT_URI: ${SSO_REDIRECT_URI:-http://localhost:3000/auth/callback}
+      SSO_REDIRECT_URI: ${SSO_REDIRECT_URI:-http://localhost:3001/auth/callback}
     volumes:
       - ./data:/data                      # SQLite database file (host-accessible)
       - ./data/.keys:/app/apps/auth/.keys  # RSA keypair (keep across restarts)
@@ -67,8 +71,10 @@ services:
     image: enterpriseai-web
     container_name: enterpriseai-web
     restart: unless-stopped
+    environment:
+      PORT: ${WEB_PORT:-3001}
     ports:
-      - "3000:3000"
+      - "${WEB_PORT:-3001}:${WEB_PORT:-3001}"
     depends_on:
       auth:
         condition: service_healthy
@@ -79,7 +85,7 @@ services:
     container_name: enterpriseai-redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "6380:6379"
     volumes:
       - redisdata:/data
     healthcheck:
@@ -97,19 +103,32 @@ services:
     container_name: enterpriseai-llm-gateway
     restart: unless-stopped
     ports:
-      - "4000:4000"
+      - "${LLM_GATEWAY_PORT:-4000}:4000"
+    env_file:
+      - path: .env
+        required: false
     environment:
       # Provider API keys — set in .env at repo root
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      OPENAI_API_VERSION: ${OPENAI_API_VERSION:-}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      # Defaults
-      LLM_GATEWAY_DEFAULT_PROVIDER: ${LLM_GATEWAY_DEFAULT_PROVIDER:-openai}
+      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY:-}
+      AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT:-}
+      AZURE_OPENAI_API_VERSION: ${AZURE_OPENAI_API_VERSION:-}
+      AZURE_OPENAI_DEPLOYMENT: ${AZURE_OPENAI_DEPLOYMENT:-}
+      AZURE_OPENAI_EMBEDDING_DEPLOYMENT: ${AZURE_OPENAI_EMBEDDING_DEPLOYMENT:-}
+      # Defaults — empty lets the gateway pick (azure when it's configured)
+      LLM_GATEWAY_DEFAULT_PROVIDER: ${LLM_GATEWAY_DEFAULT_PROVIDER:-}
+      LLM_GATEWAY_EMBEDDING_PROVIDER: ${LLM_GATEWAY_EMBEDDING_PROVIDER:-}
       LLM_GATEWAY_TIMEOUT: ${LLM_GATEWAY_TIMEOUT:-60}
       LLM_GATEWAY_MAX_RETRIES: ${LLM_GATEWAY_MAX_RETRIES:-3}
       OPENAI_DEFAULT_MODEL: ${OPENAI_DEFAULT_MODEL:-}
       GROQ_DEFAULT_MODEL: ${GROQ_DEFAULT_MODEL:-}
       GEMINI_DEFAULT_MODEL: ${GEMINI_DEFAULT_MODEL:-}
+    volumes:
+      - ./apps/llm_gateway:/app/apps/llm_gateway
     depends_on:
       redis:
         condition: service_healthy
@@ -126,12 +145,137 @@ services:
       retries: 6
       start_period: 15s
 
+  # --- Backend service (MCP server management) -----------------------------
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    image: enterpriseai-backend
+    container_name: enterpriseai-backend
+    restart: unless-stopped
+    ports:
+      - "${BACKEND_PORT:-8002}:8002"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      ENV: production
+      DEBUG: "false"
+      APP_NAME: EnterpriseAI Backend Service
+      BACKEND_API_V1_PREFIX: /api/v1
+      # Reuse the same database as auth service
+      DATABASE_URL: ${AUTH_DATABASE_URL:-sqlite+aiosqlite:////data/auth.db}
+      BACKEND_CORS_ORIGINS: '["http://localhost:3000","http://127.0.0.1:3000","http://localhost:3001","http://127.0.0.1:3001"]'
+      # Share the same JWT settings as auth service
+      JWT_ISSUER: enterprise-ai-auth
+      JWT_AUDIENCE: enterprise-ai
+      SECRET_KEY: ${SECRET_KEY:-your-secret-key-here}
+      # Agent/workflow runs go to the `worker` service over Redis Streams;
+      # live run events come back over Redis pub/sub.
+      BUILDER_QUEUE_BACKEND: redis
+      REDIS_URL: redis://redis:6379/0
+      # Per-user WhatsApp bridge containers (see whatsapp-orchestrator below)
+      WHATSAPP_ORCHESTRATOR_URL: http://whatsapp-orchestrator:8090
+      WHATSAPP_ORCHESTRATOR_API_KEY: ${WHATSAPP_ORCHESTRATOR_API_KEY:-dev-only-change-me}
+    volumes:
+      - ./data:/data  # Shared database with auth service
+      - ./data/.keys:/app/apps/auth/.keys  # Shared RSA keypair with auth service
+    networks:
+      - default
+      - whatsapp  # to reach users' bridge containers (token-guarded)
+    depends_on:
+      auth:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      whatsapp-orchestrator:
+        condition: service_started
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8002/health', timeout=3)",
+        ]
+      interval: 60s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  # --- Builder worker (executes agent/workflow runs) -----------------------
+  # Scale with `docker compose up --scale worker=3`. Several workers writing
+  # one SQLite file will contend for its lock — use the postgres profile then.
+  # A worker that dies mid-run leaves its run checkpointed; another worker
+  # resumes it once the lease lapses (RUN_LEASE_SECONDS).
+  worker:
+    image: enterpriseai-backend
+    restart: unless-stopped
+    entrypoint: ["sh", "-c", "cd apps/backend && exec python -m builder.worker"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      ENV: production
+      DATABASE_URL: ${AUTH_DATABASE_URL:-sqlite+aiosqlite:////data/auth.db}
+      BUILDER_QUEUE_BACKEND: redis
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./data:/data
+    networks:
+      - default
+      - whatsapp  # agent runs call users' WhatsApp bridge containers
+    stop_grace_period: 30s
+    depends_on:
+      backend:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # --- WhatsApp: per-user bridge containers ---------------------------------
+  # Image that whatsapp-orchestrator starts one container of per paired user.
+  # Not a long-lived service: its own container just runs `true` and exits —
+  # the orchestrator waits on that, so the image always exists first.
+  whatsapp-bridge-image:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.whatsapp_bridge
+    image: enterpriseai-whatsapp-bridge:latest
+    pull_policy: build
+    command: ["true"]
+    restart: "no"
+
+  # The only service with docker.sock mounted — see
+  # apps/whatsapp_orchestrator/main.py for why that isn't the backend's job.
+  whatsapp-orchestrator:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.whatsapp_orchestrator
+    image: enterpriseai-whatsapp-orchestrator
+    container_name: enterpriseai-whatsapp-orchestrator
+    restart: unless-stopped
+    environment:
+      ORCHESTRATOR_API_KEY: ${WHATSAPP_ORCHESTRATOR_API_KEY:-dev-only-change-me}
+      WHATSAPP_BRIDGE_IMAGE: enterpriseai-whatsapp-bridge:latest
+      WHATSAPP_NETWORK: enterpriseai_whatsapp
+      WHATSAPP_MAX_CONTAINERS: ${WHATSAPP_MAX_CONTAINERS:-0}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - default
+      - whatsapp
+    depends_on:
+      whatsapp-bridge-image:
+        condition: service_completed_successfully
+
   # --- Optional: PostgreSQL (profile "postgres") ---------------------------
   db:
     image: postgres:16-alpine
     profiles: ["postgres"]
     container_name: enterpriseai-db
     restart: unless-stopped
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
     environment:
       POSTGRES_USER: auth
       POSTGRES_PASSWORD: auth
@@ -144,6 +288,40 @@ services:
       timeout: 5s
       retries: 6
 
+  # --- Project URLs Display ------------------------------------------------
+  urls:
+    image: alpine:latest
+    container_name: enterpriseai-urls
+    restart: "no"
+    depends_on:
+      web:
+        condition: service_started
+      auth:
+        condition: service_started
+      backend:
+        condition: service_started
+    command:
+      - /bin/sh
+      - -c
+      - |
+        echo ""
+        echo "=========================================================================="
+        echo "  🚀  EnterpriseAI Web UI:     http://localhost:${WEB_PORT:-3001}"
+        echo "  🔐  Auth / Login UI:         http://localhost:${WEB_PORT:-3001}/auth"
+        echo "  🛡️  Auth API Docs:           http://localhost:${AUTH_PORT:-8001}/docs"
+        echo "  ⚡  Backend API Docs:        http://localhost:${BACKEND_PORT:-8002}/docs"
+        echo "  🤖  LLM Gateway Docs:        http://localhost:${LLM_GATEWAY_PORT:-4000}/docs"
+        echo "=========================================================================="
+        echo ""
+
 volumes:
   pgdata:
   redisdata:
+
+networks:
+  # Users' WhatsApp bridge containers live here, not on `default` — they have
+  # no reason to reach redis/auth/the database, only to be reachable (by
+  # container name, token-guarded) from backend, worker and the orchestrator.
+  whatsapp:
+    name: enterpriseai_whatsapp  # pinned: the orchestrator attaches bridges by this literal name
+    driver: bridge

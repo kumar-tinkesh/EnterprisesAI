@@ -7,7 +7,8 @@ import { useForm } from "react-hook-form";
 import { LogIn } from "lucide-react";
 
 import { api, ApiError } from "@/lib/api";
-import { dashboardPathForRole, loginSchema, type LoginValues } from "@/lib/validations";
+import { afterLoginPath } from "@/lib/after-login";
+import { loginSchema, type LoginValues } from "@/lib/validations";
 import { useAuthStore } from "@/stores/auth-store";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,7 +29,7 @@ export function LoginForm() {
     mutationFn: api.login,
     onSuccess: (payload) => {
       loginStore(payload);
-      router.push(dashboardPathForRole(payload.user.role));
+      router.push(afterLoginPath(payload.user.role));
     },
   });
 

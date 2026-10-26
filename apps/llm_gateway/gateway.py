@@ -12,8 +12,12 @@ It:
 
 from __future__ import annotations
 
+import copy
+import hashlib
+import json
 import logging
-from typing import AsyncIterator, Optional
+import time
+from typing import AsyncIterator, Awaitable, Callable, Optional
 
 from apps.llm_gateway.config import GatewaySettings
 from apps.llm_gateway.exceptions import (
@@ -24,13 +28,18 @@ from apps.llm_gateway.types import (
     CompletionRequest,
     CompletionResponse,
     EmbeddingResponse,
-    Provider,
     StreamChunk,
+    ReasoningStreamParser,
+    TokenUsage,
+    ToolCall,
+    extract_think_block,
 )
 from apps.llm_gateway.providers.base import BaseLLMClient
 from apps.llm_gateway.providers.openai_client import OpenAIClient
 from apps.llm_gateway.providers.groq_client import GroqClient
 from apps.llm_gateway.providers.gemini_client import GeminiClient
+from apps.llm_gateway.providers.azure_client import AzureOpenAIClient
+from apps.llm_gateway.providers.fastembed_client import FastEmbedClient
 
 logger = logging.getLogger("llm_gateway.gateway")
 
@@ -38,46 +47,24 @@ logger = logging.getLogger("llm_gateway.gateway")
 # ── Fallback ordering ────────────────────────────────────────────────────────
 # When a provider fails with a retryable error, try the others in this order.
 _FALLBACK_ORDER: dict[str, list[str]] = {
-    "openai": ["gemini", "groq"],
-    "groq": ["openai", "gemini"],
-    "gemini": ["openai", "groq"],
+    "azure": ["openai", "gemini", "groq"],
+    "openai": ["azure", "gemini", "groq"],
+    "groq": ["azure", "openai", "gemini"],
+    "gemini": ["azure", "openai", "groq"],
 }
 
 
 class LLMGateway:
     """
     Unified entry-point for all LLM operations across the platform.
-
-    Usage
-    ─────
-    ```python
-    from apps.llm_gateway.gateway import LLMGateway
-    from apps.llm_gateway.types import CompletionRequest, Message, Role
-
-    gw = LLMGateway.from_env()
-
-    resp = await gw.complete(CompletionRequest(
-        messages=[Message(role=Role.USER, content="Hello!")],
-    ))
-    print(resp.content)
-
-    # Force a specific provider:
-    resp = await gw.complete(request, provider="groq")
-
-    # Stream:
-    async for chunk in gw.stream(request):
-        print(chunk.content, end="", flush=True)
-
-    # Embed:
-    emb = await gw.embed(["some text"], provider="gemini")
-
-    await gw.close()
-    ```
     """
 
     def __init__(self, settings: GatewaySettings) -> None:
         self._settings = settings
         self._clients: dict[str, BaseLLMClient] = {}
+        self._fastembed = FastEmbedClient()
+        # In-memory TTL response cache: key -> (last_stored_ts, response).
+        self._cache: dict[str, tuple[float, CompletionResponse]] = {}
         self._init_clients()
 
     @classmethod
@@ -95,17 +82,18 @@ class LLMGateway:
         fallback: bool = True,
     ) -> CompletionResponse:
         """
-        Run a chat completion.
-
-        Args:
-            request:  The completion request.
-            provider: Force a specific provider (``openai``, ``groq``, ``gemini``).
-                      Defaults to ``settings.default_provider``.
-            fallback: If True and the primary fails with a retryable error,
-                      automatically try the next configured provider.
+        Run a chat completion. Automatically separates reasoning <think> blocks
+        into resp.reasoning while keeping resp.content clean.
         """
         primary = provider or self._settings.default_provider
         providers_to_try = self._build_try_order(primary, fallback)
+
+        # Response cache (opt-in via GatewaySettings.enable_cache).
+        cache_key = self._cache_key(primary, request)
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            logger.info("complete → cache HIT (%s)", primary)
+            return cached
 
         last_error: Optional[LLMGatewayError] = None
         for name in providers_to_try:
@@ -114,7 +102,18 @@ class LLMGateway:
                 continue
             try:
                 logger.info("complete → %s (%s)", name, request.model or "default")
-                return await client.complete(request)
+                resp = await client.complete(request)
+                if resp.content:
+                    clean, think_reasoning = extract_think_block(resp.content)
+                    resp.content = clean
+                    if think_reasoning:
+                        resp.reasoning = (
+                            f"{resp.reasoning}\n\n{think_reasoning}".strip()
+                            if resp.reasoning
+                            else think_reasoning
+                        )
+                self._cache_set(cache_key, resp)
+                return resp
             except LLMGatewayError as exc:
                 last_error = exc
                 if exc.retryable and fallback:
@@ -138,8 +137,8 @@ class LLMGateway:
         fallback: bool = True,
     ) -> AsyncIterator[StreamChunk]:
         """
-        Stream a chat completion.  Fallback works at connection time only
-        (once streaming starts, no mid-stream failover).
+        Stream a chat completion. Intercepts <think>...</think> tags so chunk.content
+        contains only clean response text while chunk.reasoning carries thinking deltas.
         """
         primary = provider or self._settings.default_provider
         providers_to_try = self._build_try_order(primary, fallback)
@@ -151,9 +150,14 @@ class LLMGateway:
                 continue
             try:
                 logger.info("stream → %s (%s)", name, request.model or "default")
+                parser = ReasoningStreamParser()
                 async for chunk in client.stream(request):
-                    yield chunk
-                return  # stream completed successfully
+                    processed = parser.process(chunk)
+                    yield processed
+                tail = parser.flush()
+                if tail is not None:
+                    yield tail
+                return
             except LLMGatewayError as exc:
                 last_error = exc
                 if exc.retryable and fallback:
@@ -169,6 +173,62 @@ class LLMGateway:
             f"No configured provider available. Tried: {providers_to_try}"
         )
 
+    async def complete_streamed(
+        self,
+        request: CompletionRequest,
+        *,
+        provider: Optional[str] = None,
+        on_text: Callable[[str], Awaitable[None]],
+    ) -> CompletionResponse:
+        """``complete``, but streamed: ``on_text`` gets the answer's text as it
+        arrives, and the same CompletionResponse comes back at the end (the
+        text, the tool calls put together from their pieces, the usage)."""
+        content: list[str] = []
+        reasoning: list[str] = []
+        calls: dict[int, dict] = {}
+        usage = TokenUsage()
+        finish: Optional[str] = None
+        async for chunk in self.stream(request, provider=provider):
+            if chunk.content:
+                content.append(chunk.content)
+                await on_text(chunk.content)
+            if chunk.reasoning:
+                reasoning.append(chunk.reasoning)
+            for tc in chunk.tool_calls:
+                call = calls.setdefault(tc.index, {"id": "", "name": "", "arguments": []})
+                call["id"] = call["id"] or tc.id
+                call["name"] = call["name"] or tc.name
+                call["arguments"].append(tc.arguments)
+            if chunk.usage is not None:
+                usage = chunk.usage
+            if chunk.finish_reason:
+                finish = chunk.finish_reason
+        return CompletionResponse(
+            content="".join(content) or None,
+            reasoning="".join(reasoning) or None,
+            tool_calls=[
+                ToolCall(id=c["id"] or f"call_{i}", name=c["name"], arguments="".join(c["arguments"]) or "{}")
+                for i, c in sorted(calls.items())
+            ],
+            usage=usage,
+            model=request.model or "",
+            finish_reason=finish,
+        )
+
+    @property
+    def embedding_provider(self) -> str:
+        """The provider every embedding comes from: ``fastembed`` (local, the
+        default) unless LLM_GATEWAY_EMBEDDING_PROVIDER names a hosted one that
+        is configured here. One provider for everything, because vectors from
+        different models can't be compared."""
+        wanted = self._settings.embedding_provider
+        client = self._clients.get(wanted)
+        if client is None or not getattr(client, "EMBEDDINGS_SUPPORTED", True):
+            return "fastembed"
+        if wanted == "azure" and not self._settings.azure.azure_embedding_deployment:
+            return "fastembed"
+        return wanted
+
     async def embed(
         self,
         texts: list[str],
@@ -177,34 +237,21 @@ class LLMGateway:
         provider: Optional[str] = None,
     ) -> EmbeddingResponse:
         """
-        Generate embeddings.
+        Generate embeddings with :attr:`embedding_provider` (or ``provider``).
 
-        Defaults to OpenAI (text-embedding-3-small) or Gemini (text-embedding-004).
-        Groq does not support embeddings and is skipped.
+        No fallback to another provider: a vector from a different model
+        would silently mismatch the vectors already stored, so a failure is
+        raised and callers degrade to keyword-only search instead.
         """
-        primary = provider or self._settings.default_provider
-        # For embeddings, prefer providers that actually support them
-        embed_order = [
-            p for p in self._build_try_order(primary, fallback=True) if p != "groq"
-        ]
-
-        last_error: Optional[LLMGatewayError] = None
-        for name in embed_order:
-            client = self._clients.get(name)
-            if client is None:
-                continue
-            try:
-                logger.info("embed → %s (%s)", name, model or "default")
-                return await client.embed(texts, model=model)
-            except LLMGatewayError as exc:
-                last_error = exc
-                if exc.retryable:
-                    continue
-                raise
-
-        raise last_error or ProviderNotConfiguredError(
-            "No provider configured that supports embeddings."
-        )
+        name = provider or self.embedding_provider
+        if name == "fastembed":
+            logger.info("embed → fastembed (%s)", model or self._fastembed.model_name)
+            return await self._fastembed.embed(texts, model=model)
+        client = self._clients.get(name)
+        if client is None:
+            raise ProviderNotConfiguredError(f"Embedding provider '{name}' is not configured.")
+        logger.info("embed → %s (%s)", name, model or "default")
+        return await client.embed(texts, model=model)
 
     async def list_models(self, provider: Optional[str] = None) -> dict[str, list[str]]:
         """
@@ -235,16 +282,6 @@ class LLMGateway:
     def default_provider(self) -> str:
         return self._settings.default_provider
 
-    def get_client(self, provider: str) -> BaseLLMClient:
-        """Get the raw client for a provider (for advanced usage)."""
-        client = self._clients.get(provider)
-        if client is None:
-            raise ProviderNotConfiguredError(
-                f"Provider '{provider}' is not configured.",
-                provider=provider,
-            )
-        return client
-
     # ── lifecycle ────────────────────────────────────────────────────────
 
     async def close(self) -> None:
@@ -258,17 +295,58 @@ class LLMGateway:
 
     # ── private ──────────────────────────────────────────────────────────
 
+    def _cache_key(self, provider: str, request: CompletionRequest) -> str:
+        """Build a deterministic cache key from the provider + request params."""
+        payload: dict[str, object] = {
+            "provider": provider,
+            "model": request.model,
+            "temperature": request.temperature,
+            "max_tokens": request.max_tokens,
+            "top_p": request.top_p,
+            "stop": request.stop,
+            "messages": [m.to_dict() for m in request.messages],
+            "tools": [t.to_dict() for t in (request.tools or [])],
+            "tool_choice": request.tool_choice,
+            "response_format": request.response_format,
+            "reasoning_effort": request.reasoning_effort,
+        }
+        digest = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, default=str).encode()
+        ).hexdigest()
+        return f"{provider}:{digest}"
+
+    def _cache_get(self, key: str) -> Optional[CompletionResponse]:
+        """Return a fresh cached copy, or None on miss / expiry (cache off-safe)."""
+        if not self._settings.enable_cache:
+            return None
+        entry = self._cache.get(key)
+        if entry is None:
+            return None
+        stored_at, resp = entry
+        if time.monotonic() - stored_at > self._settings.cache_ttl_seconds:
+            self._cache.pop(key, None)
+            return None
+        # Return a deep copy so callers can never mutate the cached object.
+        return copy.deepcopy(resp)
+
+    def _cache_set(self, key: str, resp: CompletionResponse) -> None:
+        if not self._settings.enable_cache:
+            return
+        self._cache[key] = (time.monotonic(), copy.deepcopy(resp))
+
     def _init_clients(self) -> None:
         """Lazily create only the clients whose API keys are present."""
         configs = {
             "openai": self._settings.openai,
             "groq": self._settings.groq,
             "gemini": self._settings.gemini,
+            "azure": self._settings.azure,
         }
         factories = {
             "openai": OpenAIClient,
             "groq": GroqClient,
             "gemini": GeminiClient,
+            "azure": AzureOpenAIClient,
         }
         for name, cfg in configs.items():
             if cfg.is_configured:
@@ -283,7 +361,8 @@ class LLMGateway:
         if not self._clients:
             logger.warning(
                 "⚠ No LLM providers configured. "
-                "Set at least one of OPENAI_API_KEY, GROQ_API_KEY, GEMINI_API_KEY."
+                "Set at least one of AZURE_OPENAI_API_KEY (+ AZURE_OPENAI_ENDPOINT), "
+                "OPENAI_API_KEY, GROQ_API_KEY, GEMINI_API_KEY."
             )
 
     def _build_try_order(self, primary: str, fallback: bool) -> list[str]:

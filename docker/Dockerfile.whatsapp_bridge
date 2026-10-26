@@ -1,0 +1,33 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# WhatsApp bridge — built from the repo root context
+#   docker build -f docker/Dockerfile.whatsapp_bridge .
+# The vendored+patched Go bridge (apps/backend/vendor/services/whatsapp_bridge/
+# vendor_src/bridge, see its README). One container of this image runs per
+# paired user, started by the whatsapp-orchestrator service — it holds a live
+# WhatsApp Web session and a SQLite store that belong to a single account, so
+# it is never shared across users the way the backend/worker containers are.
+# ─────────────────────────────────────────────────────────────────────────────
+ARG GOLANG_IMAGE=golang:1.26-bookworm@sha256:d9c68c2c51161e12fd77e4c6320687c9cd86e1af1e3ad6e6cd63ff970641453c
+FROM ${GOLANG_IMAGE} AS build
+WORKDIR /src
+COPY apps/backend/vendor/services/whatsapp_bridge/vendor_src/bridge/go.mod \
+     apps/backend/vendor/services/whatsapp_bridge/vendor_src/bridge/go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+COPY apps/backend/vendor/services/whatsapp_bridge/vendor_src/bridge/main.go ./
+# CGO is required — go-sqlite3 is a cgo binding, not pure Go.
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=1 go build -o /out/whatsapp-bridge .
+
+FROM debian:bookworm-slim
+# CA roots for WhatsApp's TLS endpoints — taken from the build image rather
+# than apt, so this stage needs no package downloads.
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+RUN useradd --system --uid 10001 --home /app bridge
+WORKDIR /app
+COPY --from=build /out/whatsapp-bridge ./whatsapp-bridge
+# Session state (WhatsApp pairing + message history) — the orchestrator
+# mounts a per-instance volume here so a restart doesn't force a re-scan.
+RUN mkdir -p /app/store && chown bridge:bridge /app/store
+USER bridge
+EXPOSE 8080
+CMD ["./whatsapp-bridge"]

@@ -33,8 +33,21 @@ class Settings(BaseSettings):
     # --- Application -----------------------------------------------------
     APP_NAME: str = "EnterpriseAI Auth Service"
     ENV: str = "development"
-    DEBUG: bool = False
     SHOW_LOADED_ENV: bool = False
+
+    # ── First admin ────────────────────────────────────────────────────────
+    # The platform (vendor) admin created at startup if no account with this
+    # email exists yet; an existing one is left untouched (its password too).
+    # Both empty = no bootstrap.
+    ADMIN_EMAIL: str = ""
+    ADMIN_PASSWORD: str = ""
+    ADMIN_FULL_NAME: str = "Platform Admin"
+    # The first tenant (a company) and its tenant admin, created the same way:
+    # only if no account with TENANT_ADMIN_EMAIL exists yet.
+    TENANT_NAME: str = ""
+    TENANT_ADMIN_EMAIL: str = ""
+    TENANT_ADMIN_PASSWORD: str = ""
+    TENANT_ADMIN_FULL_NAME: str = "Tenant Admin"
 
     # --- HTTP / CORS ------------------------------------------------------
     API_V1_PREFIX: str = "/api/v1"
@@ -54,6 +67,14 @@ class Settings(BaseSettings):
     JWT_AUDIENCE: str = "enterprise-ai"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     JWT_REFRESH_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
+    # Tolerated clock skew (in seconds) when validating JWT time claims
+    # (exp/nbf). Guards against small clock drift between issuing and
+    # validating services, or VM/clock resync jumps in dev environments.
+    # Override via the JWT_LEEWAY_SECONDS env var.
+    JWT_LEEWAY_SECONDS: int = 300
+    # Key material for Fernet-encrypting stored MCP credentials. Falls back
+    # to the JWT private key when unset (it is always generated/persisted).
+    MCP_CREDENTIALS_SECRET: str = ""
 
     # --- SSO / OIDC -------------------------------------------------------
     SSO_PROVIDER: str = "google"
@@ -63,11 +84,6 @@ class Settings(BaseSettings):
         "https://accounts.google.com/.well-known/openid-configuration"
     )
     SSO_REDIRECT_URI: str = "http://localhost:8001/api/v1/sso/callback"
-
-    # --- Security / CSRF --------------------------------------------------
-    CSRF_SECRET_KEY: str = "change-me-in-production"
-    CSRF_COOKIE_NAME: str = "csrf_token"
-    CSRF_COOKIE_AGE: int = 60 * 60 * 3  # 3 hours
 
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
     @classmethod
@@ -81,10 +97,6 @@ class Settings(BaseSettings):
         return v
 
     @property
-    def is_sqlite(self) -> bool:
-        return self.DATABASE_URL.startswith("sqlite")
-
-    @property
     def key_dir(self) -> Path:
         return BASE_DIR / ".keys"
 
@@ -92,7 +104,6 @@ class Settings(BaseSettings):
         return {
             "APP_NAME": self.APP_NAME,
             "ENV": self.ENV,
-            "DEBUG": self.DEBUG,
             "DATABASE_URL": self.DATABASE_URL,
             "API_V1_PREFIX": self.API_V1_PREFIX,
             "JWT_ALGORITHM": self.JWT_ALGORITHM,

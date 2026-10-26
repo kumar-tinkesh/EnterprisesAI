@@ -1,15 +1,13 @@
 """Tenant management & member service."""
 from __future__ import annotations
 
-import re
-
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.roles import Roles
 from src.core.security import hash_password
-from src.models import Tenant, User
+from src.models import User
 from src.models.workspace import Workspace, WorkspaceMember
 from src.api.v1.tenant.schemas import MemberCreate, MemberUpdate
 

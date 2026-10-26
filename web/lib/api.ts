@@ -7,40 +7,91 @@
  */
 
 import type { AuthPayload, Role } from "@/lib/validations";
+import { useAuthStore } from "@/stores/auth-store";
 
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8001/api/v1";
 
+// Base URL of the EnterpriseAI Backend (Vendor Resources / AI Compiler).
+export const BACKEND_API_URL =
+  process.env.NEXT_PUBLIC_BACKEND_API_URL ?? "http://localhost:8002/api/v1";
+
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** The parsed error body, when there was one (e.g. a builder 422's `problems`). */
+  body: unknown;
+  constructor(status: number, message: string, body?: unknown) {
     super(message);
     this.status = status;
+    this.body = body;
   }
 }
 
-async function request<T>(
+/**
+ * Best-effort silent token refresh using the persisted refresh token.
+ * Returns the new access token, or null if there is nothing to refresh with.
+ */
+async function tryRefreshToken(): Promise<string | null> {
+  const store = useAuthStore.getState();
+  const refreshToken = store.refreshToken;
+  if (!refreshToken) return null;
+
+  const res = await fetch(`${API_URL}/auth/refresh`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ refresh_token: refreshToken }),
+  });
+  if (!res.ok) {
+    store.logout();
+    return null;
+  }
+  const data = await res.json();
+  store.login({
+    access_token: data.access_token,
+    refresh_token: data.refresh_token,
+    token_type: data.token_type || "bearer",
+    user: store.user!,
+  });
+  return data.access_token;
+}
+
+export async function request<T>(
   path: string,
   init: RequestInit = {},
   token?: string,
+  base: string = API_URL,
 ): Promise<T> {
+  // A FormData body (file upload) must let the browser set its own
+  // multipart Content-Type, boundary included.
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
+    ...(init.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
     ...(init.headers as Record<string, string> | undefined),
   };
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch(`${API_URL}${path}`, { ...init, headers });
+  let res = await fetch(`${base}${path}`, { ...init, headers });
+
+  // On an expired/revoked access token, try a silent refresh once, then retry.
+  if (res.status === 401 && token) {
+    const fresh = await tryRefreshToken();
+    if (fresh) {
+      headers.Authorization = `Bearer ${fresh}`;
+      res = await fetch(`${base}${path}`, { ...init, headers });
+    }
+  }
 
   if (!res.ok) {
     let detail: string = `Request failed (${res.status})`;
+    let body: unknown;
     try {
-      const body = await res.json();
-      if (typeof body?.detail === "string") detail = body.detail;
+      body = await res.json();
+      const d = (body as { detail?: unknown })?.detail;
+      if (typeof d === "string") detail = d;
+      else if (d && typeof (d as { message?: unknown }).message === "string") detail = (d as { message: string }).message;
     } catch {
       /* ignore parse errors */
     }
-    throw new ApiError(res.status, detail);
+    throw new ApiError(res.status, detail, body);
   }
   if (res.status === 204) return {} as T;
   return (await res.json()) as T;
@@ -138,6 +189,22 @@ export interface SsoCallbackResponse {
   user_id: string;
 }
 
+export interface AuditLog {
+  id: string;
+  action: string;
+  resource: string;
+  detail: string | null;
+  ip_address: string | null;
+  user_agent: string | null;
+  created_at: string | null;
+}
+
+export interface DashboardResponse {
+  dashboard: string;
+  role: string;
+  message: string;
+}
+
 export const api = {
   login: (body: { email: string; password: string; role?: string }) =>
     request<AuthPayload>("/auth/login", {
@@ -151,7 +218,7 @@ export const api = {
     }),
   me: (token: string) => request<MeResponse>("/auth/me", { method: "GET" }, token),
 
-  // SSO / Google Auth endpoints
+  // SSO / Google Auth endpoints for solo_user
   ssoInitiate: () =>
     request<SsoInitiateResponse>("/sso/initiate", { method: "GET" }),
   ssoCallback: (code: string, state: string, codeVerifier: string) =>
@@ -195,4 +262,409 @@ export const api = {
     }, token),
   deleteVendorTenant: (token: string, tenantId: string) =>
     request<void>(`/vendor/tenants/${tenantId}`, { method: "DELETE" }, token),
+
+  // Audit logs (scoped by role server-side)
+  getAuditLogs: (token: string, params?: { action?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.action) qs.set("action", params.action);
+    if (params?.limit) qs.set("limit", String(params.limit));
+    const query = qs.toString();
+    return request<AuditLog[]>(`/auth/audit-logs${query ? `?${query}` : ""}`, {
+      method: "GET",
+    }, token);
+  },
+
+  // Role-scoped dashboard endpoint (server-side access validation)
+  getDashboard: (token: string, dashboard: "vendor" | "tenant" | "user" | "workspace") =>
+    request<DashboardResponse>(`/dashboard/${dashboard}`, { method: "GET" }, token),
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Vendor Resources backend (apps/backend · port 8002 · /api/v1/vendor/resources)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const VR = "/vendor/resources";
+
+export interface AnalyzeRepoRequest {
+  repo_url: string;
+}
+
+export interface AnalyzeRepoResponse {
+  detected: boolean;
+  transport: "stdio" | "streamable_http" | "sse" | "docker" | "unknown";
+  runtime: "node" | "python" | "docker" | "go" | "rust" | "remote" | "custom" | "unknown";
+  suggested_command: string | null;
+  remote_endpoint: string | null;
+  required_env_vars: string[];
+  auth_type: string;
+  hints: string[];
+}
+
+export interface VendorMCPServer {
+  id: string;
+  name: string;
+  description: string;
+  transport: string;
+  server_url: string;
+  source_repo_url?: string;
+  status?: string;
+  auth_type?: string;
+  auth_config?: Record<string, any>;
+  env_vars?: Record<string, string>;
+  bound_tools: string[];
+  is_global: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ConnectMCPServerBody {
+  name: string;
+  description?: string;
+  server_url: string;
+  is_global?: boolean;
+  source_repo_url?: string;
+  env_vars?: Record<string, string>;
+}
+
+export interface ConnectMCPServerResponse {
+  transport: string;
+  bound_tools: string[];
+  tools?: { name: string; description: string }[];
+  server_info?: Record<string, any>;
+  protocol_version?: string;
+  auth_type?: string;
+}
+
+export interface OAuthConfigBody {
+  authorization_endpoint: string;
+  token_endpoint: string;
+  scope?: string;
+  extra_authorize_params?: Record<string, string>;
+}
+
+export interface OAuthAuthorizeBody {
+  client_id?: string;
+  client_secret?: string;
+  scope?: string;
+}
+
+// No client_id/client_secret — those are the vendor's shared OAuth app
+// credentials (set once by an admin via oauth-config); an end-user only
+// ever supplies their own consent, never the app secret.
+export interface OAuthAuthorizeAsUserBody {
+  scope?: string;
+}
+
+// Native per-user device-pairing bridge (e.g. WhatsApp) — see
+// apps/backend/vendor/services/whatsapp_bridge/manager.py.
+export interface BridgeStatus {
+  status: "not_connected" | "starting" | "awaiting_qr" | "connected" | "error";
+  qr?: string | null;
+  pair_code?: string | null;
+  error?: string | null;
+}
+
+export interface OAuthAuthorizeResponse {
+  authorization_url: string;
+  state: string;
+}
+
+export interface MCPServerEntry {
+  id: string;
+  name: string;
+  description: string;
+  transport: string;
+  server_url: string;
+  bound_tools: string[];
+  auth_type?: string | null;
+  credential_fields?: string[];
+  connected?: boolean;
+}
+
+export interface CatalogResponse {
+  servers: MCPServerEntry[];
+  count: number;
+}
+
+export interface GrantBody {
+  tenant_id: string;
+  resource_type?: "mcp" | "datasource";
+  resource_id: string;
+}
+
+export interface Grant {
+  id: string;
+  tenant_id: string;
+  resource_type: string;
+  resource_id: string;
+  created_at: string;
+}
+
+// Two-stage semantic tool search — GET /catalog/tools (see
+// apps/backend/user/services/catalog_engine.get_relevant_tools_semantic).
+// Selection only: no tool is ever called from this response.
+export interface ToolSearchResult {
+  tool_id: string;
+  tool_name: string;
+  tool_description: string;
+  input_schema: Record<string, unknown> | null;
+  server_id: string;
+  server_name: string;
+  score: number | null;
+}
+
+export interface ToolSearchResponse {
+  results: ToolSearchResult[];
+  count: number;
+  // Servers with a matching tool that were left out of `results` because
+  // the caller hasn't connected their own credential for them yet.
+  needs_connection_server_ids?: string[];
+}
+
+// GET /catalog/plan-tool-call — an LLM picks one tool from the search above
+// and fills its arguments from the query. Still not called.
+export interface PlannedToolCall {
+  tool_id: string;
+  tool_name: string;
+  server_id: string;
+  server_name: string;
+  arguments: Record<string, unknown>;
+  input_schema: Record<string, unknown> | null;
+  model: string;
+}
+
+export interface ToolCallPlanResponse {
+  plan: PlannedToolCall | null;
+  candidates_considered: string[];
+  message: string | null;
+  // Set when `message` is specifically "you haven't connected this server
+  // yet" — the client can use it to render a "Connect" call to action.
+  needs_connection_server_id?: string | null;
+}
+
+/** Client for the Vendor Resources / AI Compiler backend (port 8002). */
+export const vendorApi = {
+  // MCP servers (vendor_admin)
+  listMCPServers: (token: string) =>
+    request<VendorMCPServer[]>(`${VR}/mcp`, { method: "GET" }, token, BACKEND_API_URL),
+  createMCPServer: (token: string, body: ConnectMCPServerBody) =>
+    request<VendorMCPServer>(`${VR}/mcp`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }, token, BACKEND_API_URL),
+  deleteMCPServer: (token: string, serverId: string) =>
+    request<void>(`${VR}/${serverId}`, { method: "DELETE" }, token, BACKEND_API_URL),
+  embedMCPServer: (token: string, serverId: string) =>
+    request<void>(`${VR}/mcp/${serverId}/embed`, { method: "POST" }, token, BACKEND_API_URL),
+  connectMCPServer: (token: string, serverId: string, credentials?: Record<string, string> | null) =>
+    request<ConnectMCPServerResponse>(`${VR}/mcp/${serverId}/connect`, {
+      method: "POST",
+      body: JSON.stringify(credentials ? { credentials } : {}),
+    }, token, BACKEND_API_URL),
+  disconnectMCPServer: (token: string, serverId: string) =>
+    request<VendorMCPServer>(`${VR}/mcp/${serverId}/disconnect`, { method: "POST" }, token, BACKEND_API_URL),
+  // End-user self-service connect — stores *this user's own* isolated
+  // credential for an already vendor-verified server (see
+  // apps/backend/vendor/api/v1/router.py::connect_mcp_server_as_user_endpoint).
+  connectMCPServerAsUser: (token: string, serverId: string, credentials?: Record<string, string> | null) =>
+    request<ConnectMCPServerResponse>(`${VR}/mcp/${serverId}/connect-as-user`, {
+      method: "POST",
+      body: JSON.stringify(credentials ? { credentials } : {}),
+    }, token, BACKEND_API_URL),
+  // End-user self-service disconnect — removes only *this user's own*
+  // isolated credential (see
+  // apps/backend/vendor/api/v1/router.py::disconnect_mcp_server_as_user_endpoint).
+  disconnectMCPServerAsUser: (token: string, serverId: string) =>
+    request<void>(`${VR}/mcp/${serverId}/disconnect-as-user`, {
+      method: "POST",
+    }, token, BACKEND_API_URL),
+  // End-user self-service "Connect via OAuth" — builds *this user's own*
+  // consent URL for an oauth2 server; the resulting tokens land in this
+  // user's own isolated credential row, never the vendor's shared one
+  // (see apps/backend/vendor/api/v1/user_connection.py::start_mcp_oauth_authorize_as_user).
+  startMCPOAuthAuthorizeAsUser: (token: string, serverId: string, body: OAuthAuthorizeAsUserBody) =>
+    request<OAuthAuthorizeResponse>(`${VR}/mcp/${serverId}/oauth/authorize-as-user`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }, token, BACKEND_API_URL),
+  // Native per-user device-pairing bridge (e.g. WhatsApp) — start/poll/stop
+  // *this user's own* long-running bridge process. See
+  // apps/backend/vendor/api/v1/bridge.py.
+  startBridgeAsUser: (token: string, serverId: string) =>
+    request<BridgeStatus>(`${VR}/mcp/${serverId}/bridge/connect-as-user`, {
+      method: "POST",
+    }, token, BACKEND_API_URL),
+  getBridgeStatusAsUser: (token: string, serverId: string) =>
+    request<BridgeStatus>(`${VR}/mcp/${serverId}/bridge/status-as-user`, {
+      method: "GET",
+    }, token, BACKEND_API_URL),
+  // Link by phone number instead of the QR — for someone on the same phone
+  // WhatsApp runs on. Returns the code to type into WhatsApp.
+  pairPhoneBridgeAsUser: (token: string, serverId: string, phone: string) =>
+    request<BridgeStatus>(`${VR}/mcp/${serverId}/bridge/pair-phone-as-user`, {
+      method: "POST",
+      body: JSON.stringify({ phone }),
+    }, token, BACKEND_API_URL),
+  disconnectBridgeAsUser: (token: string, serverId: string) =>
+    request<void>(`${VR}/mcp/${serverId}/bridge/disconnect-as-user`, {
+      method: "POST",
+    }, token, BACKEND_API_URL),
+  forgetBridgeAsUser: (token: string, serverId: string) =>
+    request<void>(`${VR}/mcp/${serverId}/bridge/forget-as-user`, {
+      method: "POST",
+    }, token, BACKEND_API_URL),
+  setMCPServerGlobal: (token: string, serverId: string, isGlobal: boolean) =>
+    request<VendorMCPServer>(`${VR}/mcp/${serverId}/global`, {
+      method: "PATCH",
+      body: JSON.stringify({ is_global: isGlobal }),
+    }, token, BACKEND_API_URL),
+  // "Connect via OAuth" bootstrap — see apps/backend/vendor/services/oauth_flow.py
+  setMCPOAuthConfig: (token: string, serverId: string, body: OAuthConfigBody) =>
+    request<VendorMCPServer>(`${VR}/mcp/${serverId}/oauth-config`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }, token, BACKEND_API_URL),
+  startMCPOAuthAuthorize: (token: string, serverId: string, body: OAuthAuthorizeBody) =>
+    request<OAuthAuthorizeResponse>(`${VR}/mcp/${serverId}/oauth/authorize`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }, token, BACKEND_API_URL),
+
+  // Analyze MCP Repository (vendor_admin)
+  analyzeRepo: (token: string, repoUrl: string) =>
+    request<AnalyzeRepoResponse>(`${VR}/mcp/analyze-repo`, {
+      method: "POST",
+      body: JSON.stringify({ repo_url: repoUrl }),
+    }, token, BACKEND_API_URL),
+
+  // Grants (vendor_admin)
+  grantResource: (token: string, body: GrantBody) =>
+    request<Grant>(`${VR}/grants`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }, token, BACKEND_API_URL),
+
+  // Catalog (any authenticated user; ?q= → semantic ranking)
+  getCatalog: (token: string, params?: { q?: string; top_k?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.q) qs.set("q", params.q);
+    if (params?.top_k) qs.set("top_k", String(params.top_k));
+    const query = qs.toString();
+    return request<CatalogResponse>(`${VR}/catalog${query ? `?${query}` : ""}`, {
+      method: "GET",
+    }, token, BACKEND_API_URL);
+  },
+
+  // Two-stage semantic tool search (any authenticated user) — selection only.
+  searchCatalogTools: (
+    token: string,
+    params: { q: string; top_k_servers?: number; top_k_tools?: number }
+  ) => {
+    const qs = new URLSearchParams({ q: params.q });
+    if (params.top_k_servers) qs.set("top_k_servers", String(params.top_k_servers));
+    if (params.top_k_tools) qs.set("top_k_tools", String(params.top_k_tools));
+    return request<ToolSearchResponse>(`${VR}/catalog/tools?${qs.toString()}`, {
+      method: "GET",
+    }, token, BACKEND_API_URL);
+  },
+  // Selects one tool from the search above and fills its arguments via an
+  // LLM (function-calling) — still does not call the tool.
+  planToolCall: (
+    token: string,
+    params: { q: string; top_k_servers?: number; top_k_tools?: number }
+  ) => {
+    const qs = new URLSearchParams({ q: params.q });
+    if (params.top_k_servers) qs.set("top_k_servers", String(params.top_k_servers));
+    if (params.top_k_tools) qs.set("top_k_tools", String(params.top_k_tools));
+    return request<ToolCallPlanResponse>(`${VR}/catalog/plan-tool-call?${qs.toString()}`, {
+      method: "GET",
+    }, token, BACKEND_API_URL);
+  },
+};
+
+// ─── Knowledge bases (backend /api/v1/knowledge-bases) ──────────────────────
+
+export interface KnowledgeBase {
+  id: string;
+  name: string;
+  description: string;
+  owner_id: string;
+  document_count: number;
+  // True for the knowledge base's creator and tenant admins (rename / delete).
+  can_manage: boolean;
+  created_at: string;
+}
+
+export type KnowledgeDocumentStatus = "processing" | "ready" | "error";
+
+export interface KnowledgeDocument {
+  id: string;
+  filename: string;
+  status: KnowledgeDocumentStatus;
+  error_message: string | null;
+  chunk_count: number;
+  // Typed text or an uploaded .md/.txt file: can be opened and edited.
+  editable: boolean;
+  created_at: string;
+}
+
+export interface KnowledgeDocumentText {
+  id: string;
+  filename: string;
+  title: string;
+  content: string;
+}
+
+export interface KnowledgeSearchHit {
+  id: string;
+  content: string;
+  filename: string;
+  document_id: string;
+  chunk_index: number;
+  score: number;
+  retrieval_method: "hybrid" | "semantic" | "keyword";
+  metadata: Record<string, string | number>;
+}
+
+export interface KnowledgeSearchResponse {
+  query: string;
+  results: KnowledgeSearchHit[];
+}
+
+const KB = "/knowledge-bases";
+
+export const knowledgeApi = {
+  list: (token: string) =>
+    request<KnowledgeBase[]>(KB, { method: "GET" }, token, BACKEND_API_URL),
+  create: (token: string, body: { name: string; description?: string }) =>
+    request<KnowledgeBase>(KB, { method: "POST", body: JSON.stringify(body) }, token, BACKEND_API_URL),
+  update: (token: string, kbId: string, body: { name?: string; description?: string }) =>
+    request<KnowledgeBase>(`${KB}/${kbId}`, { method: "PATCH", body: JSON.stringify(body) }, token, BACKEND_API_URL),
+  remove: (token: string, kbId: string) =>
+    request<void>(`${KB}/${kbId}`, { method: "DELETE" }, token, BACKEND_API_URL),
+
+  listDocuments: (token: string, kbId: string) =>
+    request<KnowledgeDocument[]>(`${KB}/${kbId}/documents`, { method: "GET" }, token, BACKEND_API_URL),
+  uploadDocument: (token: string, kbId: string, file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    return request<KnowledgeDocument>(`${KB}/${kbId}/documents`, { method: "POST", body }, token, BACKEND_API_URL);
+  },
+  addText: (token: string, kbId: string, body: { title: string; content: string }) =>
+    request<KnowledgeDocument>(`${KB}/${kbId}/text`, { method: "POST", body: JSON.stringify(body) }, token, BACKEND_API_URL),
+  getText: (token: string, kbId: string, docId: string) =>
+    request<KnowledgeDocumentText>(`${KB}/${kbId}/documents/${docId}/text`, { method: "GET" }, token, BACKEND_API_URL),
+  updateText: (token: string, kbId: string, docId: string, body: { title: string; content: string }) =>
+    request<KnowledgeDocument>(`${KB}/${kbId}/documents/${docId}/text`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }, token, BACKEND_API_URL),
+  removeDocument: (token: string, kbId: string, docId: string) =>
+    request<void>(`${KB}/${kbId}/documents/${docId}`, { method: "DELETE" }, token, BACKEND_API_URL),
+
+  search: (token: string, kbId: string, body: { query: string; top_k?: number }) =>
+    request<KnowledgeSearchResponse>(`${KB}/${kbId}/search`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }, token, BACKEND_API_URL),
 };

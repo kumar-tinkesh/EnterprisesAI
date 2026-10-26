@@ -1,0 +1,1249 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  Server,
+  Plus,
+  Trash2,
+  Share2,
+  X,
+  Globe,
+  Lock,
+  Radio,
+  Link,
+  Unlink,
+  Wrench,
+  CheckCircle2,
+  XCircle,
+  Check,
+  Search,
+  Globe as GlobeIcon,
+} from "lucide-react";
+
+import ProtectedDashboard from "@/components/protected-dashboard";
+import { useAuthStore } from "@/stores/auth-store";
+import { api, ApiError, type VendorTenant } from "@/lib/api";
+import {
+  vendorApi,
+  type VendorMCPServer,
+  type ConnectMCPServerBody,
+  type ConnectMCPServerResponse,
+  type AnalyzeRepoResponse,
+  type AnalyzeRepoRequest,
+  type OAuthConfigBody,
+  type OAuthAuthorizeBody,
+} from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
+import { Field } from "@/components/auth-fields";
+
+export default function VendorMCPPage() {
+  const accessToken = useAuthStore((s) => s.accessToken) || "";
+  const queryClient = useQueryClient();
+
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [showAnalyzeModal, setShowAnalyzeModal] = useState(false);
+  const [showGrantModal, setShowGrantModal] = useState(false);
+  const [showToolsModal, setShowToolsModal] = useState(false);
+  const [showConnectModal, setShowConnectModal] = useState(false);
+  const [analyzeRepoUrl, setAnalyzeRepoUrl] = useState("");
+  const [analyzeResult, setAnalyzeResult] = useState<AnalyzeRepoResponse | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [grantServer, setGrantServer] = useState<VendorMCPServer | null>(null);
+  const [toolsServer, setToolsServer] = useState<{
+    id: string;
+    name: string;
+    response: ConnectMCPServerResponse | null;
+    error: string | null;
+  } | null>(null);
+  const [connectServer, setConnectServer] = useState<VendorMCPServer | null>(null);
+  const [credKey, setCredKey] = useState("");
+  const [credValue, setCredValue] = useState("");
+
+  // Queries
+  const { data: servers = [], isLoading } = useQuery({
+    queryKey: ["vendor-mcp-servers", accessToken],
+    queryFn: () => vendorApi.listMCPServers(accessToken),
+    enabled: !!accessToken,
+  });
+
+  const { data: tenants = [] }: { data: VendorTenant[] | undefined } = useQuery({
+    queryKey: ["vendor-tenants", accessToken],
+    queryFn: () => api.getVendorTenants(accessToken),
+    enabled: !!accessToken,
+  });
+
+  // Analyze repo mutation
+  const analyzeRepoMutation = useMutation({
+    mutationFn: (repoUrl: string) => vendorApi.analyzeRepo(accessToken, repoUrl),
+    onSuccess: (data) => {
+      setAnalyzeResult(data);
+      setIsAnalyzing(false);
+    },
+    onError: (err) => {
+      setAnalyzeResult(null);
+      setIsAnalyzing(false);
+    },
+  });
+
+  const handleAnalyzeRepo = (url: string) => {
+    if (!url || !url.trim()) return;
+    setAnalyzeRepoUrl(url.trim());
+    setIsAnalyzing(true);
+    setAnalyzeResult(null);
+    analyzeRepoMutation.mutate(url.trim());
+  };
+
+  // Resource & Server Management Mutations
+  const createMutation = useMutation({
+    mutationFn: (vals: ConnectMCPServerBody) => vendorApi.createMCPServer(accessToken, vals),
+    onSuccess: () => {
+      setShowAddModal(false);
+      queryClient.invalidateQueries({ queryKey: ["vendor-mcp-servers"] });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => vendorApi.deleteMCPServer(accessToken, id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["vendor-mcp-servers"] }),
+  });
+
+  const embedMutation = useMutation({
+    mutationFn: (id: string) => vendorApi.embedMCPServer(accessToken, id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["vendor-mcp-servers"] }),
+  });
+
+  const connectMutation = useMutation({
+    mutationFn: ({ id, credentials }: { id: string; credentials?: Record<string, string> | null }) =>
+      vendorApi.connectMCPServer(accessToken, id, credentials),
+    onSuccess: (data, vars) => {
+      const id = (vars as any).id as string;
+      setToolsServer({ id, name: servers.find((s) => s.id === id)?.name ?? id, response: data, error: null });
+      setShowToolsModal(true);
+      // Without this, the server list keeps its pre-connect bound_tools (empty),
+      // so reopening "List Discovered Tools" later shows nothing even though
+      // the backend now has them — this is what the wrench button reads from.
+      queryClient.invalidateQueries({ queryKey: ["vendor-mcp-servers"] });
+    },
+    onError: (err, vars) => {
+      const id = (vars as any).id as string;
+      setToolsServer({
+        id,
+        name: servers.find((s) => s.id === id)?.name ?? id,
+        response: null,
+        error: err instanceof ApiError ? err.message : "Connection failed",
+      });
+      setShowToolsModal(true);
+    },
+  });
+
+  const disconnectMutation = useMutation({
+    mutationFn: (id: string) => vendorApi.disconnectMCPServer(accessToken, id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["vendor-mcp-servers"] }),
+  });
+
+  const globalMutation = useMutation({
+    mutationFn: ({ id, isGlobal }: { id: string; isGlobal: boolean }) => vendorApi.setMCPServerGlobal(accessToken, id, isGlobal),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["vendor-mcp-servers"] }),
+  });
+
+  const grantMutation = useMutation({
+    mutationFn: (vals: { tenant_id: string; resource_id: string }) =>
+      vendorApi.grantResource(accessToken, {
+        tenant_id: vals.tenant_id,
+        resource_type: "mcp",
+        resource_id: vals.resource_id,
+      }),
+    onSuccess: () => setShowGrantModal(false),
+  });
+
+  return (
+    <ProtectedDashboard
+      path="/vendor"
+      title="MCP Servers"
+      description="Register MCP servers, embed them for semantic matching, and grant access to tenants."
+    >
+      <div className="mt-6 flex items-center justify-between">
+        <a href="/vendor" className="text-sm text-zinc-500 hover:text-zinc-800 cursor-pointer">
+          ← Back to dashboard
+        </a>
+        <Button onClick={() => setShowAddModal(true)} size="sm">
+          <Plus className="h-4 w-4 mr-1" /> Register MCP Server
+        </Button>
+      </div>
+
+      <div className="mt-4 rounded-xl border border-zinc-200 bg-white p-6 shadow-xs">
+        <div className="flex items-center gap-2 border-b border-zinc-100 pb-4">
+          <Server className="h-5 w-5 text-indigo-600" />
+          <div>
+            <h2 className="text-lg font-semibold text-zinc-900">Registered MCP Servers</h2>
+            <p className="text-sm text-zinc-500">
+              Servers are embedded on create (best-effort) for the AI Compiler&apos;s semantic matcher.
+            </p>
+          </div>
+        </div>
+
+        {isLoading ? (
+          <div className="flex justify-center py-8">
+            <Spinner className="h-6 w-6 text-zinc-500" />
+          </div>
+        ) : servers.length === 0 ? (
+          <p className="py-8 text-center text-sm text-zinc-400">
+            No MCP servers registered yet — click &ldquo;Register MCP Server&rdquo;.
+          </p>
+        ) : (
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full text-left text-sm text-zinc-600">
+              <thead className="bg-zinc-50 text-xs font-semibold uppercase text-zinc-500">
+                <tr>
+                  <th className="px-4 py-3">Server</th>
+                  <th className="px-4 py-3">Transport</th>
+                  <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3">Scope</th>
+                  <th className="px-4 py-3">URL</th>
+                  <th className="px-4 py-3 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-100">
+                {servers.map((s) => (
+                  <tr key={s.id} className="hover:bg-zinc-50/50">
+                    <td className="px-4 py-3">
+                      <div className="font-medium text-zinc-900">{s.name}</div>
+                      <div className="text-xs text-zinc-400">{s.description || "—"}</div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700">
+                        {s.transport}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      {connectMutation.isPending && (connectMutation.variables as any)?.id === s.id ? (
+                        <div className="space-y-1.5 min-w-[130px]">
+                          <span className="inline-flex items-center gap-1.5 rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-semibold text-indigo-700">
+                            <Spinner className="h-3 w-3 text-indigo-600" /> Connecting...
+                          </span>
+                          <div className="h-1.5 w-full overflow-hidden rounded-full bg-indigo-100">
+                            <div className="h-full bg-gradient-to-r from-indigo-500 via-sky-500 to-emerald-500 animate-pulse rounded-full w-full" />
+                          </div>
+                        </div>
+                      ) : disconnectMutation.isPending && (disconnectMutation.variables as any) === s.id ? (
+                        <div className="space-y-1.5 min-w-[130px]">
+                          <span className="inline-flex items-center gap-1.5 rounded-full bg-red-50 px-2 py-0.5 text-xs font-semibold text-red-700">
+                            <Spinner className="h-3 w-3 text-red-600" /> Disconnecting...
+                          </span>
+                          <div className="h-1.5 w-full overflow-hidden rounded-full bg-red-100">
+                            <div className="h-full bg-gradient-to-r from-red-400 via-red-500 to-amber-500 animate-pulse rounded-full w-full" />
+                          </div>
+                        </div>
+                      ) : s.status === "VERIFIED" ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                          <CheckCircle2 className="h-3 w-3 text-emerald-600" /> Connected
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-500">
+                          <XCircle className="h-3 w-3 text-zinc-400" /> Unconnected
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <button
+                        type="button"
+                        disabled={globalMutation.isPending && globalMutation.variables?.id === s.id}
+                        onClick={() => globalMutation.mutate({ id: s.id, isGlobal: !s.is_global })}
+                        title={
+                          s.is_global
+                            ? "Every user can see and use this server. Click to restrict it to tenants you grant it to."
+                            : "Hidden from users until you grant it to their tenant. Click to make it available to every user."
+                        }
+                        className={
+                          s.is_global
+                            ? "inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-50 cursor-pointer"
+                            : "inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 hover:bg-amber-100 disabled:opacity-50 cursor-pointer"
+                        }
+                      >
+                        {globalMutation.isPending && globalMutation.variables?.id === s.id ? (
+                          <Spinner className="h-3 w-3" />
+                        ) : s.is_global ? (
+                          <Globe className="h-3 w-3" />
+                        ) : (
+                          <Lock className="h-3 w-3" />
+                        )}
+                        {s.is_global ? "All users" : "Restricted"}
+                      </button>
+                    </td>
+                    <td className="px-4 py-3 text-xs text-zinc-500">
+                      {s.server_url || <span className="text-zinc-400">—</span>}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center justify-end gap-2">
+                        {connectMutation.isPending && (connectMutation.variables as any)?.id === s.id ? (
+                          <span className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600">
+                            <Spinner className="h-4 w-4 text-indigo-600" /> Testing connection...
+                          </span>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => {
+                                setConnectServer(s);
+                                setCredKey("");
+                                setCredValue("");
+                                setShowConnectModal(true);
+                              }}
+                              className="p-1 text-zinc-400 hover:text-emerald-600 cursor-pointer disabled:opacity-30"
+                              title="Test Connection & Discover Tools"
+                              disabled={connectMutation.isPending}
+                            >
+                              <Link className="h-4 w-4" />
+                            </button>
+                        <button
+                          onClick={() => {
+                            setToolsServer({
+                              id: s.id,
+                              name: s.name,
+                              response: s.bound_tools
+                                ? {
+                                    transport: s.transport,
+                                    bound_tools: s.bound_tools,
+                                    tools: (s.bound_tools || []).map((t) => ({ name: t, description: "" })),
+                                    server_info: {},
+                                    protocol_version: "2024-11-05",
+                                    auth_type: s.auth_type || "none",
+                                  }
+                                : null,
+                              error: s.bound_tools && s.bound_tools.length > 0 ? null : "No tools discovered yet. Click Connect to discover tools.",
+                            });
+                            setShowToolsModal(true);
+                          }}
+                          className="p-1 text-zinc-400 hover:text-amber-600 cursor-pointer"
+                          title="List Discovered Tools"
+                        >
+                          <Wrench className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (confirm(`Disconnect server "${s.name}"? This clears stored credentials.`)) {
+                              disconnectMutation.mutate(s.id);
+                            }
+                          }}
+                          className="p-1 text-zinc-400 hover:text-orange-600 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                          title="Disconnect Server"
+                          disabled={disconnectMutation.isPending || s.status === "UNCONNECTED"}
+                        >
+                          <Unlink className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => embedMutation.mutate(s.id)}
+                          className="p-1 text-zinc-400 hover:text-indigo-600 cursor-pointer"
+                          title="(Re)compute semantic embedding"
+                          disabled={embedMutation.isPending}
+                        >
+                          <Radio className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => {
+                            setGrantServer(s);
+                            setShowGrantModal(true);
+                          }}
+                          className="p-1 text-zinc-400 hover:text-sky-600 cursor-pointer"
+                          title="Grant to tenant"
+                        >
+                          <Share2 className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (confirm(`Delete server "${s.name}"? This revokes any tenant grants.`)) {
+                              deleteMutation.mutate(s.id);
+                            }
+                          }}
+                          className="p-1 text-zinc-400 hover:text-red-600 cursor-pointer"
+                          title="Delete server"
+                          disabled={deleteMutation.isPending}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                          </>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {showAddModal && (
+        <AnalyzeRepoModal
+          onClose={() => setShowAddModal(false)}
+          onAnalyze={handleAnalyzeRepo}
+          onRegister={(vals) => createMutation.mutate(vals)}
+          isAnalyzing={isAnalyzing}
+          isRegistering={createMutation.isPending}
+          analyzeResult={analyzeResult}
+          error={
+            analyzeRepoMutation.isError
+              ? analyzeRepoMutation.error instanceof ApiError
+                ? analyzeRepoMutation.error.message
+                : "Failed to analyze repository"
+              : createMutation.isError
+              ? createMutation.error instanceof ApiError
+                ? createMutation.error.message
+                : "Failed to register MCP server"
+              : null
+          }
+        />
+      )}
+
+      {showGrantModal && grantServer && (
+        <GrantServerModal
+          server={grantServer}
+          tenants={tenants}
+          onClose={() => setShowGrantModal(false)}
+          onSubmit={(vals) =>
+            grantMutation.mutate({ tenant_id: vals.tenant_id, resource_id: grantServer.id })
+          }
+          isPending={grantMutation.isPending}
+          error={
+            grantMutation.isError
+              ? grantMutation.error instanceof ApiError
+                ? grantMutation.error.message
+                : "Failed to grant resource"
+              : null
+          }
+        />
+      )}
+
+      {showToolsModal && toolsServer && (
+        <ToolsModal
+          serverName={toolsServer.name}
+          response={toolsServer.response}
+          error={toolsServer.error}
+          isPending={connectMutation.isPending}
+          onClose={() => setShowToolsModal(false)}
+        />
+      )}
+
+      {showConnectModal && connectServer && (
+        <ConnectCredentialModal
+          // Look the server up fresh from the list each render — the OAuth
+          // "Set endpoints"/"Connect via OAuth" actions invalidate this
+          // query, but connectServer itself is a snapshot taken when the
+          // modal opened and would otherwise never pick up the update.
+          server={servers.find((s) => s.id === connectServer.id) ?? connectServer}
+          accessToken={accessToken}
+          onClose={() => setShowConnectModal(false)}
+          onSubmit={(creds) => {
+            connectMutation.mutate({ id: connectServer.id, credentials: creds ?? null });
+            setShowConnectModal(false);
+          }}
+          credKey={credKey}
+          credValue={credValue}
+          setCredKey={setCredKey}
+          setCredValue={setCredValue}
+          isPending={connectMutation.isPending}
+        />
+      )}
+    </ProtectedDashboard>
+  );
+}
+
+function CreateMCPModal({
+  onClose,
+  onSubmit,
+  isPending,
+  error,
+}: {
+  onClose: () => void;
+  onSubmit: (vals: ConnectMCPServerBody) => void;
+  isPending: boolean;
+  error: string | null;
+}) {
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [serverUrl, setServerUrl] = useState("");
+  const [isGlobal, setIsGlobal] = useState(true);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name) return;
+    if (!serverUrl.trim()) return;
+    onSubmit({
+      name,
+      description,
+      server_url: serverUrl,
+      is_global: isGlobal,
+    });
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+      <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl">
+        <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
+          <h3 className="text-lg font-semibold text-zinc-900">Register MCP Server</h3>
+          <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600 cursor-pointer">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <p className="mt-1 text-xs text-zinc-500">
+          Transport and tools are auto-discovered on connect.
+        </p>
+
+        <form onSubmit={handleSubmit} className="mt-4 space-y-4">
+          <Field label="Server name">
+            <Input
+              placeholder="finance.invoice-server"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+            />
+          </Field>
+          <Field label="Description">
+            <Input
+              placeholder="Connect to the invoice MCP server."
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+            />
+          </Field>
+          <Field label="Server URL">
+            <Input
+              placeholder="https://mcp.example.com/invoice"
+              value={serverUrl}
+              onChange={(e) => setServerUrl(e.target.value)}
+              required
+            />
+          </Field>
+          <label className="flex items-center gap-2 text-sm text-zinc-700">
+            <input
+              type="checkbox"
+              checked={isGlobal}
+              onChange={(e) => setIsGlobal(e.target.checked)}
+              className="h-4 w-4 rounded border-zinc-300"
+            />
+            Available to all users (untick to show it only to tenants you grant it to)
+          </label>
+
+          {error && <p className="text-xs text-red-600">{error}</p>}
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+            <Button type="submit" disabled={isPending}>
+              {isPending ? <Spinner /> : <Plus className="h-4 w-4 mr-1" />} Register
+            </Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function ToolsModal({
+  serverName,
+  response,
+  error,
+  isPending,
+  onClose,
+}: {
+  serverName: string;
+  response: ConnectMCPServerResponse | null;
+  error: string | null;
+  isPending: boolean;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+      <div className="flex max-h-[85vh] w-full max-w-md flex-col rounded-xl bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-zinc-100 px-6 py-4">
+          <h3 className="text-lg font-semibold text-zinc-900">
+            Tools for &ldquo;{serverName}&rdquo;
+          </h3>
+          <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600 cursor-pointer">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-6 py-4">
+          {isPending ? (
+            <div className="flex justify-center py-8">
+              <Spinner className="h-6 w-6 text-zinc-500" />
+            </div>
+          ) : error ? (
+            <p className="text-sm text-red-600">{error}</p>
+          ) : response ? (
+            <div className="space-y-3">
+              <div className="sticky -top-4 flex items-center gap-2 bg-white pb-2 pt-1 text-sm text-zinc-600">
+                <span className="inline-flex items-center rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium">
+                  {response.transport}
+                </span>
+                <span className="text-xs text-zinc-500">
+                  {response.bound_tools.length} tool(s) discovered
+                </span>
+              </div>
+              {response.bound_tools.length > 0 ? (
+                <ul className="space-y-1">
+                  {response.bound_tools.map((tool) => (
+                    <li key={tool} className="flex items-center gap-2 text-sm text-zinc-700">
+                      <Check className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                      {tool}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-sm text-zinc-400">No tools discovered.</p>
+              )}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="flex justify-end border-t border-zinc-100 px-6 py-4">
+          <Button variant="outline" onClick={onClose}>Close</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GrantServerModal({
+  server,
+  tenants,
+  onClose,
+  onSubmit,
+  isPending,
+  error,
+}: {
+  server: VendorMCPServer;
+  tenants: VendorTenant[];
+  onClose: () => void;
+  onSubmit: (vals: { tenant_id: string }) => void;
+  isPending: boolean;
+  error: string | null;
+}) {
+  const [tenantId, setTenantId] = useState("");
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!tenantId) return;
+    onSubmit({ tenant_id: tenantId });
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+        <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
+          <h3 className="text-lg font-semibold text-zinc-900">
+            Grant &ldquo;{server.name}&rdquo; to tenant
+          </h3>
+          <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600 cursor-pointer">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="mt-4 space-y-4">
+          <Field label="Tenant / Organization">
+            <select
+              value={tenantId}
+              onChange={(e) => setTenantId(e.target.value)}
+              required
+              className="flex h-10 w-full rounded-md border border-zinc-300 bg-white px-3 text-sm focus-visible:ring-2 focus-visible:ring-zinc-900"
+            >
+              <option value="" disabled>Select a tenant…</option>
+              {tenants
+                .filter((t) => !t.is_personal)
+                .map((t) => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+            </select>
+          </Field>
+          <p className="text-xs text-zinc-500">
+            All members of this tenant will inherit access to this MCP server.
+          </p>
+
+          {error && <p className="text-xs text-red-600">{error}</p>}
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+            <Button type="submit" disabled={isPending}>
+              {isPending ? <Spinner /> : <Share2 className="h-4 w-4 mr-1" />} Grant access
+            </Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function ConnectCredentialModal({
+  server,
+  accessToken,
+  onClose,
+  onSubmit,
+  credKey,
+  credValue,
+  setCredKey,
+  setCredValue,
+  isPending,
+}: {
+  server: VendorMCPServer;
+  accessToken: string;
+  onClose: () => void;
+  onSubmit: (creds?: Record<string, string>) => void;
+  credKey: string;
+  credValue: string;
+  setCredKey: (v: string) => void;
+  setCredValue: (v: string) => void;
+  isPending: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const [customCreds, setCustomCreds] = useState<Record<string, string>>({});
+  // Credential fields come from two sources:
+  //  1. auth_config.credential_fields — populated by MCP detection for remote
+  //     servers (entries are {name, label, type, ...} objects).
+  //  2. env_vars — stdio servers are not probeable, so their required keys
+  //     surface as the env vars captured at registration.
+  // An EMPTY detected list must fall through to env_vars, hence the length
+  // check instead of `||` (an empty array is truthy in JS and would block
+  // the fallback). Env keys that already have a stored value are injected
+  // automatically at connect time, so only the empty ones are asked for.
+  const labelsMap: Record<string, string> = {};
+  if (Array.isArray((server.auth_config as any)?.credential_fields)) {
+    for (const f of (server.auth_config as any).credential_fields as any[]) {
+      if (f && typeof f === "object" && f.name) {
+        labelsMap[f.name] = f.label || f.name;
+      }
+    }
+  }
+
+  const detectedFields: string[] = Array.isArray(
+    (server.auth_config as any)?.credential_fields
+  )
+    ? ((server.auth_config as any).credential_fields as any[])
+        .map((f) => (typeof f === "string" ? f : f?.name))
+        .filter(Boolean)
+    : [];
+  const envFields: string[] = server.env_vars
+    ? Object.keys(server.env_vars).filter(
+        (k) => !server.env_vars?.[k] // skip keys with a stored value
+      )
+    : [];
+  const credentialFields: string[] =
+    detectedFields.length > 0 ? detectedFields : envFields;
+  const isStdio = server.transport === "stdio";
+  const needsNoCreds = credentialFields.length === 0 && isStdio;
+  // device_pairing (e.g. WhatsApp): there is no vendor-wide account to
+  // verify here — the test below runs our vendored MCP server with no
+  // bridge, which discovers its tools; each user then pairs their own phone
+  // by QR before those tools can run. Read from auth_config directly
+  // (not the top-level auth_type) so this can't silently go stale again
+  // the way it did before (see the c8e2a6f13d90 backfill migration).
+  const isDevicePairing = (server.auth_config as any)?.auth_type === "device_pairing";
+
+  // ── OAuth "Connect via provider" bootstrap (see oauth_flow.py backend) ──
+  const isOAuth = server.auth_type === "oauth2";
+  const oauthCfg: { authorization_endpoint?: string; token_endpoint?: string; registration_endpoint?: string } =
+    (server.auth_config as any)?.oauth || {};
+  const oauthConfigured = !!(oauthCfg.authorization_endpoint && oauthCfg.token_endpoint);
+  // The server registers our client itself (RFC 7591): no OAuth app to fill in.
+  const oauthSelfRegisters = !!(oauthCfg.authorization_endpoint && oauthCfg.registration_endpoint);
+
+  const [showOAuthConfig, setShowOAuthConfig] = useState(false);
+  const [authEndpoint, setAuthEndpoint] = useState("");
+  const [tokenEndpoint, setTokenEndpoint] = useState("");
+  const [oauthScope, setOauthScope] = useState("");
+  const [oauthMessage, setOauthMessage] = useState<string | null>(null);
+
+  // The provider redirects into a popup we open, which posts back here once
+  // the admin finishes (or cancels) the consent screen — see
+  // apps/backend/vendor/api/v1/router.py::_oauth_result_html.
+  useEffect(() => {
+    function handleMessage(event: MessageEvent) {
+      const data = event.data;
+      if (!data || (data.type !== "MCP_OAUTH_SUCCESS" && data.type !== "MCP_OAUTH_ERROR")) return;
+      if (data.serverId && data.serverId !== server.id) return;
+      setOauthMessage(data.message || (data.type === "MCP_OAUTH_SUCCESS" ? "Connected." : "Failed."));
+      if (data.type === "MCP_OAUTH_SUCCESS") {
+        queryClient.invalidateQueries({ queryKey: ["vendor-mcp-servers"] });
+      }
+    }
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [server.id, queryClient]);
+
+  const oauthConfigMutation = useMutation({
+    mutationFn: (body: OAuthConfigBody) => vendorApi.setMCPOAuthConfig(accessToken, server.id, body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["vendor-mcp-servers"] });
+      setShowOAuthConfig(false);
+    },
+  });
+
+  const oauthAuthorizeMutation = useMutation({
+    mutationFn: (body: OAuthAuthorizeBody) => vendorApi.startMCPOAuthAuthorize(accessToken, server.id, body),
+    onSuccess: (data) => {
+      window.open(data.authorization_url, "mcp-oauth-connect", "width=600,height=750");
+      setOauthMessage("Waiting for you to finish in the popup window…");
+    },
+    onError: (err) => {
+      setOauthMessage(err instanceof ApiError ? err.message : "Could not start the OAuth flow.");
+    },
+  });
+
+  // Client ID/secret are just normal detected fields (e.g. QUICKBOOKS_CLIENT_ID) —
+  // find them by suffix rather than assuming an exact name, same fuzzy-match
+  // spirit as the backend's callback-param matching.
+  const findCredBySuffix = (suffix: string): string => {
+    const key = Object.keys(customCreds).find((k) => k.toUpperCase().endsWith(suffix));
+    return key ? customCreds[key] : "";
+  };
+
+  const handleOAuthConnect = () => {
+    const clientId = findCredBySuffix("CLIENT_ID");
+    const clientSecret = findCredBySuffix("CLIENT_SECRET");
+    if (oauthSelfRegisters && !(clientId && clientSecret)) {
+      setOauthMessage(null);
+      oauthAuthorizeMutation.mutate({});
+      return;
+    }
+    if (!clientId || !clientSecret) {
+      setOauthMessage("Fill in the Client ID and Client Secret fields above first.");
+      return;
+    }
+    setOauthMessage(null);
+    oauthAuthorizeMutation.mutate({ client_id: clientId, client_secret: clientSecret });
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (needsNoCreds) {
+      onSubmit(undefined);
+    } else if (credentialFields.length > 0 && Object.keys(customCreds).length > 0) {
+      onSubmit(customCreds);
+    } else if (credKey && credValue) {
+      onSubmit({ [credKey]: credValue });
+    } else {
+      onSubmit(undefined);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+        <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
+          <h3 className="text-lg font-semibold text-zinc-900">Test Connection: "{server.name}"</h3>
+          <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600 cursor-pointer">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="mt-4 space-y-4">
+          {isDevicePairing ? (
+            <div className="rounded-lg bg-amber-50 border border-amber-200 p-3">
+              <p className="text-xs font-medium text-amber-900">
+                No credentials needed — each user pairs their own phone.
+              </p>
+              <p className="mt-1 text-xs text-amber-700">
+                Testing discovers this server&apos;s tools and makes it available to users.
+                Each user then connects from their own dashboard by scanning a QR code with
+                their phone; until they do, the tools can&apos;t run for them.
+              </p>
+            </div>
+          ) : needsNoCreds ? (
+            <div className="rounded-lg bg-emerald-50 border border-emerald-100 p-3">
+              <p className="text-xs font-medium text-emerald-800">
+                No credentials required.
+              </p>
+              <p className="mt-1 text-xs text-emerald-600">
+                This stdio server authenticates at runtime (e.g. via a local token or QR
+                flow) and none were detected at registration. Click below to connect and
+                discover tools.
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500">
+              Enter required credentials to test connection and discover available tools. Credentials will be encrypted and stored in the secure vault.
+            </p>
+          )}
+
+          {(server.auth_config as any)?.auth_type === "linkedin_cookie" && (
+            <p className="rounded-lg bg-sky-50 border border-sky-100 p-3 text-xs text-sky-800">
+              Paste a LinkedIn <span className="font-mono">li_at</span> cookie to test it: sign in to linkedin.com,
+              open DevTools → Application → Cookies → https://www.linkedin.com and copy the value of li_at. Each
+              user still connects their own cookie; runs always use the runner&apos;s.
+            </p>
+          )}
+
+          {credentialFields.length > 0 ? (
+            <div className="space-y-3">
+              <label className="text-xs font-semibold text-zinc-700">
+                Required Credentials{isStdio && (server.auth_config as any)?.auth_type !== "linkedin_cookie" ? " (passed as environment variables)" : ""}
+              </label>
+              {credentialFields.map((field) => (
+                <Field key={field} label={labelsMap[field] || field}>
+                  <Input
+                    type="password"
+                    placeholder={`Enter ${labelsMap[field] || field}`}
+                    value={customCreds[field] || ""}
+                    onChange={(e) => setCustomCreds({ ...customCreds, [field]: e.target.value })}
+                  />
+                </Field>
+              ))}
+            </div>
+          ) : !needsNoCreds ? (
+            <>
+              <Field label="Credential key (e.g. Authorization or API_KEY)">
+                <Input
+                  value={credKey}
+                  onChange={(e) => setCredKey(e.target.value)}
+                  placeholder="Authorization"
+                />
+              </Field>
+              <Field label="Credential value (e.g. Bearer TOKEN or sk_test_...)">
+                <Input
+                  type="password"
+                  value={credValue}
+                  onChange={(e) => setCredValue(e.target.value)}
+                  placeholder="Bearer ..."
+                />
+              </Field>
+              <p className="text-xs text-zinc-400">
+                Leave blank if the server does not require authentication.
+                {isStdio
+                  ? " For stdio servers use the environment variable name as the key (e.g. the token variable the server's README documents) — it will be injected into the server process."
+                  : ""}
+              </p>
+            </>
+          ) : null}
+
+          {isOAuth && (
+            <div className="rounded-lg border border-indigo-100 bg-indigo-50 p-3 space-y-2">
+              <p className="text-xs font-semibold text-indigo-800">OAuth provider detected</p>
+              {!oauthConfigured ? (
+                showOAuthConfig ? (
+                  <div className="space-y-2">
+                    <p className="text-xs text-indigo-600">
+                      This server&apos;s authorize/token URLs weren&apos;t auto-detected (common for
+                      local servers). Most providers publish these as fixed, documented URLs.
+                    </p>
+                    <Field label="Authorization endpoint">
+                      <Input
+                        value={authEndpoint}
+                        onChange={(e) => setAuthEndpoint(e.target.value)}
+                        placeholder="https://appcenter.intuit.com/connect/oauth2"
+                      />
+                    </Field>
+                    <Field label="Token endpoint">
+                      <Input
+                        value={tokenEndpoint}
+                        onChange={(e) => setTokenEndpoint(e.target.value)}
+                        placeholder="https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
+                      />
+                    </Field>
+                    <Field label="Scope (optional)">
+                      <Input
+                        value={oauthScope}
+                        onChange={(e) => setOauthScope(e.target.value)}
+                        placeholder="com.intuit.quickbooks.accounting"
+                      />
+                    </Field>
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={oauthConfigMutation.isPending || !authEndpoint.trim() || !tokenEndpoint.trim()}
+                        onClick={() =>
+                          oauthConfigMutation.mutate({
+                            authorization_endpoint: authEndpoint.trim(),
+                            token_endpoint: tokenEndpoint.trim(),
+                            scope: oauthScope.trim() || undefined,
+                          })
+                        }
+                      >
+                        {oauthConfigMutation.isPending ? <Spinner /> : null} Save endpoints
+                      </Button>
+                      <Button type="button" size="sm" variant="outline" onClick={() => setShowOAuthConfig(false)}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs text-indigo-700">
+                      No authorize/token URL set yet for this provider.
+                    </p>
+                    <Button type="button" size="sm" variant="outline" onClick={() => setShowOAuthConfig(true)}>
+                      Set OAuth endpoints
+                    </Button>
+                  </div>
+                )
+              ) : (
+                <div className="space-y-2">
+                  <p className="text-xs text-indigo-700">
+                    {oauthSelfRegisters
+                      ? "Sign in on the provider's consent screen — no OAuth app needed, it registers itself."
+                      : "Fill in Client ID/Secret above, then connect via the provider's consent screen — it fills in the rest (refresh token, etc.) automatically."}
+                  </p>
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={oauthAuthorizeMutation.isPending}
+                    onClick={handleOAuthConnect}
+                  >
+                    {oauthAuthorizeMutation.isPending ? <Spinner /> : <GlobeIcon className="h-4 w-4 mr-1" />}
+                    Connect via OAuth
+                  </Button>
+                </div>
+              )}
+              {oauthMessage && <p className="text-xs text-indigo-600">{oauthMessage}</p>}
+            </div>
+          )}
+
+          {isPending && (
+            <div className="rounded-lg border border-indigo-200 bg-indigo-50/90 p-3.5 space-y-2">
+              <div className="flex items-center justify-between text-xs font-semibold text-indigo-900">
+                <span className="flex items-center gap-2">
+                  <Spinner className="h-4 w-4 text-indigo-600" />
+                  Testing connection & discovering tools...
+                </span>
+                <span className="text-xs font-mono text-indigo-600 uppercase">Connecting</span>
+              </div>
+              <div className="h-2 w-full overflow-hidden rounded-full bg-indigo-200">
+                <div className="h-full bg-gradient-to-r from-indigo-500 via-sky-500 to-emerald-500 animate-pulse rounded-full w-full" />
+              </div>
+              <p className="text-xs text-indigo-700">Running MCP protocol handshake and discovering tools list...</p>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="outline" onClick={onClose} disabled={isPending}>Cancel</Button>
+            <Button type="submit" disabled={isPending}>
+              {isPending ? (
+                <>
+                  <Spinner className="mr-1" />
+                  {isDevicePairing ? "Checking..." : "Connecting..."}
+                </>
+              ) : (
+                <>
+                  <Link className="h-4 w-4 mr-1" />
+                  {isDevicePairing ? "Check Server Reachability" : "Test Connection & Discover Tools"}
+                </>
+              )}
+            </Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function AnalyzeRepoModal({
+  onClose,
+  onAnalyze,
+  onRegister,
+  isAnalyzing,
+  isRegistering,
+  analyzeResult,
+  error,
+}: {
+  onClose: () => void;
+  onAnalyze: (url: string) => void;
+  onRegister: (vals: ConnectMCPServerBody) => void;
+  isAnalyzing: boolean;
+  isRegistering: boolean;
+  analyzeResult: AnalyzeRepoResponse | null;
+  error: string | null;
+}) {
+  const [urlInput, setUrlInput] = useState("");
+  const [activeTab, setActiveTab] = useState<"remote" | "github">("github");
+  const [serverName, setServerName] = useState("");
+  const [description, setDescription] = useState("");
+  const [isGlobal, setIsGlobal] = useState(true);
+
+  const handleAnalyze = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!urlInput.trim()) return;
+    onAnalyze(urlInput.trim());
+  };
+
+  const handleRegister = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!serverName.trim()) return;
+    const targetUrl =
+      analyzeResult?.remote_endpoint ||
+      analyzeResult?.suggested_command ||
+      urlInput.trim();
+
+    const detectedEnvVars = analyzeResult?.required_env_vars?.length
+      ? Object.fromEntries(analyzeResult.required_env_vars.map((k) => [k, ""]))
+      : undefined;
+
+    onRegister({
+      name: serverName.trim(),
+      description,
+      server_url: targetUrl,
+      is_global: isGlobal,
+      source_repo_url: activeTab === "github" ? urlInput.trim() : undefined,
+      env_vars: detectedEnvVars,
+    });
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+      <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl">
+        <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
+          <h3 className="text-lg font-semibold text-zinc-900">Register MCP Server</h3>
+          <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600 cursor-pointer">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="mt-4 border-b border-zinc-100">
+          <nav className="flex gap-4" aria-label="Tabs">
+            <button
+              type="button"
+              onClick={() => setActiveTab("remote")}
+              className={`py-2 px-1 border-b-2 font-medium text-sm flex items-center gap-1.5 cursor-pointer ${
+                activeTab === "remote"
+                  ? "border-indigo-600 text-indigo-600"
+                  : "border-transparent text-zinc-500 hover:text-zinc-700"
+              }`}
+            >
+              <Globe className="h-4 w-4" /> Remote MCP Endpoint
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("github")}
+              className={`py-2 px-1 border-b-2 font-medium text-sm flex items-center gap-1.5 cursor-pointer ${
+                activeTab === "github"
+                  ? "border-indigo-600 text-indigo-600"
+                  : "border-transparent text-zinc-500 hover:text-zinc-700"
+              }`}
+            >
+              <Server className="h-4 w-4" /> GitHub Repository URL
+            </button>
+          </nav>
+        </div>
+
+        {analyzeResult ? (
+          // Analysis Results Report Card & Simple Registration Form
+          <form onSubmit={handleRegister} className="mt-4 space-y-4">
+            <div className="p-3 bg-indigo-50/50 rounded-lg border border-indigo-100 space-y-2">
+              <div className="flex items-center justify-between text-xs font-semibold text-indigo-900">
+                <span>Analysis Complete</span>
+                <span className="capitalize px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">
+                  {analyzeResult.transport} ({analyzeResult.runtime})
+                </span>
+              </div>
+              {analyzeResult.suggested_command && (
+                <p className="text-xs font-mono bg-white p-2 rounded border border-indigo-100 text-zinc-800">
+                  {analyzeResult.suggested_command}
+                </p>
+              )}
+              {analyzeResult.remote_endpoint && (
+                <p className="text-xs font-mono bg-white p-2 rounded border border-indigo-100 text-zinc-800">
+                  {analyzeResult.remote_endpoint}
+                </p>
+              )}
+              {analyzeResult.required_env_vars.length > 0 && (
+                <p className="text-xs text-indigo-700 font-medium pt-1">
+                  Detected Credentials needed: {analyzeResult.required_env_vars.join(", ")} (Prompted on Test Connection)
+                </p>
+              )}
+            </div>
+
+            <Field label="Server Name">
+              <Input
+                placeholder="e.g. My MCP Server"
+                value={serverName}
+                onChange={(e) => setServerName(e.target.value)}
+                required
+              />
+            </Field>
+
+            <Field label="Description">
+              <Input
+                placeholder="Optional description"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+              />
+            </Field>
+
+            <label className="flex items-center gap-2 text-sm text-zinc-700">
+              <input
+                type="checkbox"
+                checked={isGlobal}
+                onChange={(e) => setIsGlobal(e.target.checked)}
+                className="h-4 w-4 rounded border-zinc-300"
+              />
+              Available to all users (untick to show it only to tenants you grant it to)
+            </label>
+
+            {error && <p className="text-xs text-red-600">{error}</p>}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button type="button" variant="outline" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={isRegistering}>
+                {isRegistering ? <Spinner /> : <Plus className="h-4 w-4 mr-1" />} Register MCP Server
+              </Button>
+            </div>
+          </form>
+        ) : activeTab === "remote" ? (
+          // Remote MCP Endpoint Form
+          <form onSubmit={handleAnalyze} className="mt-4 space-y-4">
+            <Field label="Remote MCP Endpoint URL">
+              <Input
+                placeholder="https://mcp.example.com/sse"
+                value={urlInput}
+                onChange={(e) => setUrlInput(e.target.value)}
+                required
+              />
+            </Field>
+            <p className="text-xs text-zinc-500">
+              Enter a live MCP endpoint URL (HTTP/SSE). We&apos;ll probe it to detect transport & auth requirement.
+            </p>
+
+            {error && <p className="text-xs text-red-600">{error}</p>}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button type="button" variant="outline" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={isAnalyzing}>
+                {isAnalyzing ? <Spinner /> : <Radio className="h-4 w-4 mr-1" />} Analyze Endpoint
+              </Button>
+            </div>
+          </form>
+        ) : (
+          // GitHub Repo URL Form
+          <form onSubmit={handleAnalyze} className="mt-4 space-y-4">
+            <Field label="GitHub Repository URL">
+              <Input
+                placeholder="https://github.com/org/mcp-server"
+                value={urlInput}
+                onChange={(e) => setUrlInput(e.target.value)}
+                required
+              />
+            </Field>
+            <p className="text-xs text-zinc-500">
+              Enter a GitHub repo URL. We&apos;ll analyze its manifest, Dockerfile, and README to auto-detect transport, runtime, and required environment variables.
+            </p>
+
+            {error && <p className="text-xs text-red-600">{error}</p>}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button type="button" variant="outline" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={isAnalyzing}>
+                {isAnalyzing ? <Spinner /> : <Server className="h-4 w-4 mr-1" />} Analyze Repository
+              </Button>
+            </div>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}

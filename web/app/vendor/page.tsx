@@ -16,11 +16,13 @@ import {
   EyeOff,
   User,
   ShieldCheck,
+  Server,
 } from "lucide-react";
 
 import ProtectedDashboard from "@/components/protected-dashboard";
+import { AuditLogsPanel } from "@/components/audit-logs-panel";
 import { useAuthStore } from "@/stores/auth-store";
-import { api, ApiError, type VendorTenant } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
@@ -94,8 +96,18 @@ export default function VendorDashboard() {
       title="Vendor Admin Dashboard"
       description="Platform-level administration & tenant management for EnterpriseAI."
     >
+      {/* MCP Servers shortcut */}
+      <div className="mt-6 flex justify-end">
+        <a
+          href="/vendor/tools"
+          className="inline-flex items-center gap-1.5 rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700"
+        >
+          <Server className="h-4 w-4" /> Manage MCP Servers
+        </a>
+      </div>
+
       {/* 4 Platform Metric Cards */}
-      <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
           icon={<Building2 className="h-5 w-5 text-indigo-600" />}
           label="Team Organizations"
@@ -288,6 +300,8 @@ export default function VendorDashboard() {
           }
         />
       )}
+
+      <AuditLogsPanel limit={25} />
     </ProtectedDashboard>
   );
 }
@@ -304,7 +318,7 @@ function StatCard({
   return (
     <div className="rounded-xl border border-zinc-200 bg-white p-5 shadow-xs">
       <div className="flex items-center gap-2 text-zinc-500">{icon}{label}</div>
-      <p className="mt-2 text-3xl font-bold text-zinc-900">{value}</p>
+      <p className="mt-2 text-3xl font-semibold text-zinc-900">{value}</p>
     </div>
   );
 }

@@ -90,3 +90,22 @@ async def me(current: CurrentUser = Depends(get_current_user)):
         tenant_id=current.tenant_id,
         is_active=current.is_active,
     )
+
+
+@router.get("/audit-logs", response_model=list[sc.AuditEventOut])
+async def list_audit_logs(
+    action: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    db: AsyncSession = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+):
+    from src.core.audit import get_audit_events
+
+    # For tenant users/admins, scope audit events to their tenant_id. Vendor admins can view all.
+    tenant_id = current.tenant_id if current.role != "vendor_admin" else None
+    user_id = current.id if current.role == "tenant_user" else None
+    return await get_audit_events(
+        db, tenant_id=tenant_id, user_id=user_id, action=action, limit=limit, offset=offset
+    )
+

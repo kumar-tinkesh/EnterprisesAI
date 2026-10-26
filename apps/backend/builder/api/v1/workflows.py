@@ -1,0 +1,350 @@
+"""Workflow endpoints (mounted at ``/api/v1/builder/workflows``).
+
+    GET    ""                          list
+    POST   ""                          create
+    POST   /validate                   check a graph without saving (canvas live checks)
+    GET    /{workflow_id}              one, with its own agents
+    PATCH  /{workflow_id}              update (optimistic: expected_version)
+    DELETE /{workflow_id}              delete it and its own agents
+    POST   /{workflow_id}/preflight    can the caller run it right now?
+    POST   /{workflow_id}/output-preview   an output step's settings applied to an earlier run's texts
+
+Saving refuses a graph with any structural or reference problem (422 with
+every problem listed). Preflight adds the per-user check — is each server
+connected for the person about to run it.
+"""
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
+from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.api.deps import CurrentUser
+from src.db.session import get_db
+
+from builder.agents.config import AgentConfig
+from builder.api.v1.agents import agent_out
+from builder.api.v1.definitions import (
+    CheckResult,
+    Problem,
+    WorkflowCreate,
+    WorkflowOut,
+    WorkflowSummary,
+    WorkflowUpdate,
+    WorkflowValidateRequest,
+)
+from builder.api.v1.deps import can_manage, get_end_user, problems_response, version_conflict
+from builder.graph.schema import WorkflowConfig, WorkflowEdge, WorkflowNode
+from builder.models import BuilderAgent, BuilderPublicKey, BuilderSchedule, BuilderTestCase, BuilderTestRun, BuilderVersion, BuilderWorkflow
+from builder.quality.cleanup import delete_tests
+from builder.schedules.service import sync_workflow_schedules
+from builder.versions.service import ensure_baseline, record_version
+from builder.services.references import check_workflow
+
+router = APIRouter()
+
+
+def _dump(items: list) -> list[dict]:
+    return [i.model_dump(exclude_none=True) for i in items]
+
+
+def _summary(wf: BuilderWorkflow, user: CurrentUser) -> dict:
+    return dict(
+        id=wf.id,
+        name=wf.name,
+        description=wf.description or "",
+        owner_id=wf.owner_id,
+        version=wf.version,
+        node_count=len(wf.nodes or []),
+        can_manage=can_manage(wf.owner_id, user),
+        created_at=wf.created_at,
+        updated_at=wf.updated_at,
+    )
+
+
+async def _workflow_out(db: AsyncSession, wf: BuilderWorkflow, user: CurrentUser) -> WorkflowOut:
+    own_agents = (
+        await db.execute(select(BuilderAgent).where(BuilderAgent.workflow_id == wf.id).order_by(BuilderAgent.created_at))
+    ).scalars().all()
+    return WorkflowOut(
+        **_summary(wf, user),
+        nodes=wf.nodes or [],
+        edges=wf.edges or [],
+        config=wf.config or {},
+        agents=[agent_out(a, user) for a in own_agents],
+    )
+
+
+async def _get_workflow(db: AsyncSession, workflow_id: str, user: CurrentUser) -> BuilderWorkflow:
+    wf = (
+        await db.execute(
+            select(BuilderWorkflow).where(BuilderWorkflow.id == workflow_id, BuilderWorkflow.tenant_id == user.tenant_id)
+        )
+    ).scalars().first()
+    if wf is None:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    return wf
+
+
+async def mint_draft_agents(db: AsyncSession, wf: BuilderWorkflow, nodes: list[WorkflowNode], user: CurrentUser) -> list[WorkflowNode]:
+    """Turn each agent step's ``draft_agent`` into one of this workflow's own
+    agents (a draft on a step that already had an agent replaces it for this
+    workflow only — a shared agent is never changed from here)."""
+    out: list[WorkflowNode] = []
+    for node in nodes:
+        draft = node.draft_agent if node.type == "agent" else None
+        if draft is None:
+            out.append(node)
+            continue
+        agent = BuilderAgent(
+            tenant_id=user.tenant_id,
+            owner_id=user.id,
+            workflow_id=wf.id,
+            name=draft.name.strip(),
+            role=draft.role.strip(),
+            goal=draft.goal.strip(),
+            instructions=draft.instructions.strip(),
+            llm_provider=draft.llm_provider.strip(),
+            llm_model=draft.llm_model.strip(),
+            config=AgentConfig.model_validate(draft.config).model_dump(),
+        )
+        db.add(agent)
+        await db.flush()
+        out.append(node.model_copy(update={"agent_id": agent.id, "draft_agent": None}))
+    return out
+
+
+@router.get("", response_model=list[WorkflowSummary])
+async def list_workflows(user: CurrentUser = Depends(get_end_user), db: AsyncSession = Depends(get_db)):
+    workflows = (
+        await db.execute(
+            select(BuilderWorkflow)
+            .where(BuilderWorkflow.tenant_id == user.tenant_id)
+            .order_by(BuilderWorkflow.updated_at.desc())
+        )
+    ).scalars().all()
+    return [WorkflowSummary(**_summary(wf, user)) for wf in workflows]
+
+
+@router.post("", response_model=WorkflowOut, status_code=201)
+async def create_workflow(
+    payload: WorkflowCreate,
+    user: CurrentUser = Depends(get_end_user),
+    db: AsyncSession = Depends(get_db),
+):
+    problems = await check_workflow(
+        db, user, workflow_id=None, nodes=payload.nodes, edges=payload.edges, config=payload.config, check_connection=False
+    )
+    if problems:
+        return problems_response("This workflow can't be saved yet.", problems)
+    wf = BuilderWorkflow(
+        tenant_id=user.tenant_id,
+        owner_id=user.id,
+        name=payload.name.strip(),
+        description=payload.description.strip(),
+        nodes=[],
+        edges=_dump(payload.edges),
+        config=payload.config.model_dump(),
+    )
+    db.add(wf)
+    await db.flush()
+    wf.nodes = _dump(await mint_draft_agents(db, wf, payload.nodes, user))
+    await sync_workflow_schedules(db, wf)
+    await record_version(db, "workflow", wf, author_id=user.id, note="Created")
+    await db.commit()
+    await db.refresh(wf)
+    return await _workflow_out(db, wf, user)
+
+
+@router.post("/validate", response_model=CheckResult)
+async def validate_workflow(
+    payload: WorkflowValidateRequest,
+    user: CurrentUser = Depends(get_end_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if payload.workflow_id:
+        await _get_workflow(db, payload.workflow_id, user)
+    problems = await check_workflow(
+        db,
+        user,
+        workflow_id=payload.workflow_id,
+        nodes=payload.nodes,
+        edges=payload.edges,
+        config=payload.config,
+        check_connection=False,
+    )
+    return CheckResult(ok=not problems, problems=[Problem(**p.as_dict()) for p in problems])
+
+
+@router.get("/{workflow_id}", response_model=WorkflowOut)
+async def read_workflow(workflow_id: str, user: CurrentUser = Depends(get_end_user), db: AsyncSession = Depends(get_db)):
+    return await _workflow_out(db, await _get_workflow(db, workflow_id, user), user)
+
+
+@router.patch("/{workflow_id}", response_model=WorkflowOut)
+async def update_workflow(
+    workflow_id: str,
+    payload: WorkflowUpdate,
+    user: CurrentUser = Depends(get_end_user),
+    db: AsyncSession = Depends(get_db),
+):
+    wf = await _get_workflow(db, workflow_id, user)
+    if not can_manage(wf.owner_id, user):
+        raise HTTPException(status_code=403, detail="Only the workflow's creator or a tenant admin can change it.")
+    if payload.expected_version is not None and payload.expected_version != wf.version:
+        raise version_conflict(wf.version)
+    await ensure_baseline(db, "workflow", wf)
+
+    graph_changed = any(v is not None for v in (payload.nodes, payload.edges, payload.config))
+    if graph_changed:
+        nodes = payload.nodes if payload.nodes is not None else [WorkflowNode.model_validate(n) for n in wf.nodes or []]
+        edges = payload.edges if payload.edges is not None else [WorkflowEdge.model_validate(e) for e in wf.edges or []]
+        config = payload.config if payload.config is not None else WorkflowConfig.model_validate(wf.config or {})
+        problems = await check_workflow(
+            db, user, workflow_id=wf.id, nodes=nodes, edges=edges, config=config, check_connection=False
+        )
+        if problems:
+            return problems_response("This workflow can't be saved yet.", problems)
+        nodes = await mint_draft_agents(db, wf, nodes, user)
+        wf.nodes, wf.edges, wf.config = _dump(nodes), _dump(edges), config.model_dump()
+        # This workflow's own agents that no step uses any more go (e.g. one an
+        # edit replaced). Standalone agents are never touched.
+        in_use = {n.agent_id for n in nodes if n.type == "agent" and n.agent_id}
+        await db.execute(
+            delete(BuilderAgent).where(BuilderAgent.workflow_id == wf.id, BuilderAgent.id.not_in(in_use or {""}))
+        )
+        await sync_workflow_schedules(db, wf)
+    if payload.name is not None:
+        wf.name = payload.name.strip()
+    if payload.description is not None:
+        wf.description = payload.description.strip()
+    wf.version += 1
+    await record_version(db, "workflow", wf, author_id=user.id, note="Saved")
+    await db.commit()
+    await db.refresh(wf)
+    return await _workflow_out(db, wf, user)
+
+
+@router.delete("/{workflow_id}", status_code=204)
+async def delete_workflow(workflow_id: str, user: CurrentUser = Depends(get_end_user), db: AsyncSession = Depends(get_db)):
+    wf = await _get_workflow(db, workflow_id, user)
+    if not can_manage(wf.owner_id, user):
+        raise HTTPException(status_code=403, detail="Only the workflow's creator or a tenant admin can delete it.")
+    # Run history stays (runs keep their own snapshot); the workflow's own
+    # agents and every schedule and saved version of it or them go with it.
+    own_agents = select(BuilderAgent.id).where(BuilderAgent.workflow_id == wf.id)
+    await db.execute(
+        delete(BuilderSchedule).where(
+            (BuilderSchedule.workflow_id == wf.id) | BuilderSchedule.agent_id.in_(own_agents)
+        )
+    )
+    await db.execute(
+        delete(BuilderVersion).where((BuilderVersion.workflow_id == wf.id) | BuilderVersion.agent_id.in_(own_agents))
+    )
+    await delete_tests(
+        db,
+        (BuilderTestCase.workflow_id == wf.id) | BuilderTestCase.agent_id.in_(own_agents),
+        (BuilderTestRun.workflow_id == wf.id) | BuilderTestRun.agent_id.in_(own_agents),
+    )
+    await db.execute(
+        delete(BuilderPublicKey).where((BuilderPublicKey.workflow_id == wf.id) | BuilderPublicKey.agent_id.in_(own_agents))
+    )
+    await _delete_own_knowledge(db, wf)
+    await db.execute(delete(BuilderAgent).where(BuilderAgent.workflow_id == wf.id))
+    await db.delete(wf)
+    await db.commit()
+
+
+@router.post("/{workflow_id}/preflight", response_model=CheckResult)
+async def preflight_workflow(workflow_id: str, user: CurrentUser = Depends(get_end_user), db: AsyncSession = Depends(get_db)):
+    wf = await _get_workflow(db, workflow_id, user)
+    problems = await check_workflow(
+        db,
+        user,
+        workflow_id=wf.id,
+        nodes=[WorkflowNode.model_validate(n) for n in wf.nodes or []],
+        edges=[WorkflowEdge.model_validate(e) for e in wf.edges or []],
+        config=WorkflowConfig.model_validate(wf.config or {}),
+        check_connection=True,
+    )
+    return CheckResult(ok=not problems, problems=[Problem(**p.as_dict()) for p in problems])
+
+
+class OutputPreviewRequest(BaseModel):
+    run_id: str
+    node_id: str = Field(min_length=1, max_length=255)
+    output_config: dict = Field(default_factory=dict)
+
+
+@router.post("/{workflow_id}/output-preview")
+async def output_preview(
+    workflow_id: str, payload: OutputPreviewRequest, user: CurrentUser = Depends(get_end_user), db: AsyncSession = Depends(get_db),
+):
+    """What the output step would answer with these settings, from what reached it in one of the
+    caller's earlier runs of this workflow — try a format without running everything again."""
+    from builder.graph.output_config import config_problem
+    from builder.models import BuilderRun
+    from builder.workflows.nodes import shape_output
+
+    await _get_workflow(db, workflow_id, user)
+    run = (
+        await db.execute(select(BuilderRun).where(
+            BuilderRun.id == payload.run_id, BuilderRun.owner_id == user.id, BuilderRun.workflow_id == workflow_id,
+        ))
+    ).scalars().first()
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    problem = config_problem(payload.output_config)
+    if problem:
+        raise HTTPException(status_code=422, detail=f"These output settings aren't valid: {problem}.")
+    step = ((run.state or {}).get("nodes") or {}).get(payload.node_id) or {}
+    parts = [p[1] for p in step.get("parts") or [] if isinstance(p, (list, tuple)) and len(p) == 2 and p[1]]
+    if not parts:
+        raise HTTPException(status_code=409, detail="That run never reached this output step — run the workflow once first.")
+    text, _, _ = await shape_output(parts, (run.input or {}).get("text") or "", payload.output_config, where=f"preview:{payload.node_id}")
+    return {"text": text}
+
+
+# ── the workflow's own knowledge (Settings -> Knowledge) ──
+
+
+async def _delete_own_knowledge(db: AsyncSession, wf: BuilderWorkflow) -> None:
+    from knowledge.models import KnowledgeBase, KnowledgeChunk, KnowledgeDocument
+
+    kb_id = (wf.config or {}).get("own_knowledge_base_id")
+    if not kb_id:
+        return
+    await db.execute(delete(KnowledgeChunk).where(KnowledgeChunk.knowledge_base_id == kb_id))
+    await db.execute(delete(KnowledgeDocument).where(KnowledgeDocument.knowledge_base_id == kb_id))
+    await db.execute(delete(KnowledgeBase).where(KnowledgeBase.id == kb_id, KnowledgeBase.tenant_id == wf.tenant_id))
+
+
+@router.get("/{workflow_id}/knowledge")
+async def own_knowledge(workflow_id: str, user: CurrentUser = Depends(get_end_user), db: AsyncSession = Depends(get_db)):
+    wf = await _get_workflow(db, workflow_id, user)
+    return {"knowledge_base_id": (wf.config or {}).get("own_knowledge_base_id")}
+
+
+@router.post("/{workflow_id}/knowledge")
+async def create_own_knowledge(workflow_id: str, user: CurrentUser = Depends(get_end_user), db: AsyncSession = Depends(get_db)):
+    """This workflow's own knowledge base, made on first use: every agent step
+    searches it (with the default knowledge bases), and it goes with the workflow."""
+    from knowledge.models import KnowledgeBase
+
+    wf = await _get_workflow(db, workflow_id, user)
+    if not can_manage(wf.owner_id, user):
+        raise HTTPException(status_code=403, detail="Only the workflow's creator or a tenant admin can change it.")
+    existing = (wf.config or {}).get("own_knowledge_base_id")
+    if existing and await db.get(KnowledgeBase, existing) is not None:
+        return {"knowledge_base_id": existing}
+    kb = KnowledgeBase(
+        tenant_id=wf.tenant_id, owner_id=user.id, name=f"{wf.name} \u00b7 workflow knowledge"[:255],
+        description=f"Searched by every agent step of the \u201c{wf.name}\u201d workflow; deleted with it.",
+    )
+    db.add(kb)
+    await db.flush()
+    wf.config = {**(wf.config or {}), "own_knowledge_base_id": kb.id}
+    await db.commit()
+    return {"knowledge_base_id": kb.id}
+

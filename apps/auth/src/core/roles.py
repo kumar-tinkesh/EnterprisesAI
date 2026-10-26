@@ -18,7 +18,6 @@ class Roles:
     SOLO_USER = "solo_user"
 
     ALL = (VENDOR_ADMIN, TENANT_ADMIN, TENANT_USER, SOLO_USER)
-    TENANT_ROLES = (TENANT_ADMIN, TENANT_USER)
 
     @classmethod
     def is_valid(cls, role: str) -> bool:

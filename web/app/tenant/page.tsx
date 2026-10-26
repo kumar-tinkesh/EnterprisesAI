@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 
 import ProtectedDashboard from "@/components/protected-dashboard";
+import { AuditLogsPanel } from "@/components/audit-logs-panel";
 import { useAuthStore } from "@/stores/auth-store";
 import { api, ApiError, type TenantMember } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -92,7 +93,7 @@ export default function TenantDashboard() {
           <div className="flex items-center gap-2 text-zinc-500">
             <Building2 className="h-5 w-5 text-indigo-600" /> Workspaces
           </div>
-          <p className="mt-2 text-3xl font-bold text-zinc-900">
+          <p className="mt-2 text-3xl font-semibold text-zinc-900">
             {statsLoading ? "…" : stats?.workspace_count ?? 0}
           </p>
         </div>
@@ -100,7 +101,7 @@ export default function TenantDashboard() {
           <div className="flex items-center gap-2 text-zinc-500">
             <Users className="h-5 w-5 text-violet-600" /> Members
           </div>
-          <p className="mt-2 text-3xl font-bold text-zinc-900">
+          <p className="mt-2 text-3xl font-semibold text-zinc-900">
             {statsLoading ? "…" : stats?.member_count ?? 0}
           </p>
         </div>
@@ -238,6 +239,8 @@ export default function TenantDashboard() {
           }
         />
       )}
+
+      <AuditLogsPanel limit={25} />
     </ProtectedDashboard>
   );
 }
