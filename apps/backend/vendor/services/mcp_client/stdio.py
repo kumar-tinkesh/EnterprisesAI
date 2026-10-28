@@ -538,6 +538,30 @@ async def build_stdio_params(
         env.setdefault("GCP_OAUTH_KEYS_PATH", target_oauth_path)
         env.setdefault("GMAIL_CREDENTIALS_PATH", target_creds_path)
         env.setdefault("CREDENTIALS_PATH", target_creds_path)
+        env.setdefault("GOOGLE_OAUTH_CREDENTIALS", target_oauth_path)
+
+        if refresh_token:
+            # nspady/google-calendar-mcp keeps tokens per account in its own file; with no access token
+            # it refreshes on start. Rewritten every launch, so a new sign-in takes effect.
+            calendar_tokens = (home_dir or Path.home()) / ".config" / "google-calendar-mcp" / "tokens.json"
+            calendar_tokens.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            _write_private(calendar_tokens, json.dumps({"normal": {"refresh_token": refresh_token, "token_type": "Bearer"}}))
+            env.setdefault("GOOGLE_CALENDAR_MCP_TOKEN_PATH", str(calendar_tokens))
+
+        if client_id and client_secret:
+            # xing5/mcp-google-sheets reads a google-auth authorized-user file and won't start without
+            # credentials. Signed in: the refresh token, refreshed at start. Not yet: a token marked
+            # valid, so it starts and lists its tools (the vendor's Connect) and a call answers 401.
+            sheets_token = (home_dir or Path.home()) / ".config" / "mcp-google-sheets" / "token.json"
+            sheets_token.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            token_info = {
+                "refresh_token": refresh_token or "", "client_id": client_id, "client_secret": client_secret,
+                "token_uri": "https://oauth2.googleapis.com/token",
+            }
+            if not refresh_token:
+                token_info.update(token="not-signed-in", expiry="2999-01-01T00:00:00Z")
+            _write_private(sheets_token, json.dumps(token_info))
+            env.setdefault("TOKEN_PATH", str(sheets_token))
 
     # Never log env values — they hold credentials.
     logger.info(

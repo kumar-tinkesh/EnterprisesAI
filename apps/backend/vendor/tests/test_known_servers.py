@@ -247,3 +247,71 @@ async def test_the_gmail_migration_fixes_existing_rows(admin_client, db):
     await db.commit()
     await db.refresh(server)
     _assert_gmail(server)
+
+
+async def test_google_calendar_gets_its_files_not_the_id_as_a_path(tmp_path, monkeypatch):
+    """Client ID and secret typed into the analysed path fields reach the server as the files it reads."""
+    import json
+    from types import SimpleNamespace
+
+    from vendor.services import known_servers
+    from vendor.services.mcp_client import stdio
+
+    async def _prep(command, source_repo_url):
+        return "node", ["build/index.js"], str(tmp_path)
+
+    monkeypatch.setattr(stdio, "_prepare_local_repo_stdio", _prep)
+    row = SimpleNamespace(source_repo_url="https://github.com/nspady/google-calendar-mcp", source_repo=None, server_url=None)
+    creds = known_servers.alias_credentials(row, {
+        "GOOGLE_OAUTH_CREDENTIALS": "id.apps.googleusercontent.com", "GOOGLE_SERVICE_ACCOUNT_KEY": "GOCSPX-x",
+        "refresh_token": "rt",
+    })
+    assert "GOOGLE_OAUTH_CREDENTIALS" not in creds and "GOOGLE_SERVICE_ACCOUNT_KEY" not in creds
+
+    params = await stdio.build_stdio_params("node", creds, home_dir=tmp_path / "home")
+    keys = json.loads(Path(params.env["GOOGLE_OAUTH_CREDENTIALS"]).read_text())
+    assert keys["installed"]["client_id"] == "id.apps.googleusercontent.com"
+    assert keys["installed"]["client_secret"] == "GOCSPX-x"
+    tokens = json.loads(Path(params.env["GOOGLE_CALENDAR_MCP_TOKEN_PATH"]).read_text())
+    assert tokens == {"normal": {"refresh_token": "rt", "token_type": "Bearer"}}
+    assert "GOOGLE_SERVICE_ACCOUNT_KEY" not in params.env
+
+
+async def test_google_sheets_runs_the_package_with_a_token_file(tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
+
+    from vendor.services import known_servers
+    from vendor.services.mcp_client import stdio
+
+    async def _prep(command, source_repo_url):
+        return "uvx", ["mcp-google-sheets@0.6.3"], None
+
+    monkeypatch.setattr(stdio, "_prepare_local_repo_stdio", _prep)
+    profile = known_servers.profile_for("https://github.com/xing5/mcp-google-sheets")
+    assert (profile["command"], profile["args"]) == ("uvx", ["--with", "mcp<2", "mcp-google-sheets@0.6.3"])
+    row = SimpleNamespace(source_repo_url="https://github.com/xing5/mcp-google-sheets", source_repo=None, server_url=None)
+    creds = known_servers.alias_credentials(row, {
+        "client_id": "id", "client_secret": "secret", "refresh_token": "rt", "CREDENTIALS_PATH": "id",
+    })
+    assert "CREDENTIALS_PATH" not in creds
+
+    params = await stdio.build_stdio_params("uvx", creds, home_dir=tmp_path / "home")
+    token = json.loads(Path(params.env["TOKEN_PATH"]).read_text())
+    assert token == {"refresh_token": "rt", "client_id": "id", "client_secret": "secret",
+                     "token_uri": "https://oauth2.googleapis.com/token"}
+
+
+async def test_google_sheets_starts_before_anyone_signs_in(tmp_path, monkeypatch):
+    import json
+
+    from vendor.services.mcp_client import stdio
+
+    async def _prep(command, source_repo_url):
+        return "uvx", ["mcp-google-sheets@0.6.3"], None
+
+    monkeypatch.setattr(stdio, "_prepare_local_repo_stdio", _prep)
+    params = await stdio.build_stdio_params("uvx", {"GOOGLE_CLIENT_ID": "id", "GOOGLE_CLIENT_SECRET": "secret"},
+                                            home_dir=tmp_path / "home")
+    token = json.loads(Path(params.env["TOKEN_PATH"]).read_text())
+    assert token["token"] == "not-signed-in" and token["refresh_token"] == ""

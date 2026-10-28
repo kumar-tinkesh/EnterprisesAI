@@ -19,6 +19,18 @@ package-runner command is never cloned, see ``mcp_client.stdio._prepare_local_re
   (refresh_token, client_id, client_secret) are passed on under the GMAIL_* names it reads. It runs at
   GMAIL_ACCESS_LEVEL=FULL (read, drafts, send, organize); the agents' "ask before tools run" still asks
   before a sending or deleting tool.
+* nspady/google-calendar-mcp — reads GOOGLE_OAUTH_CREDENTIALS as the *path* of a client JSON file and its
+  tokens from a tokens.json written by its own browser sign-in; analysis offered GOOGLE_OAUTH_CREDENTIALS
+  and GOOGLE_SERVICE_ACCOUNT_KEY as fields, so the client ID and secret typed into them were read as file
+  paths ("could not be read as JSON: ENOENT"). Same OAuth shape as Gmail: the admin gives the client ID and
+  secret, every person signs in with Google, and at launch both files are written from what is stored
+  (``mcp_client.stdio.build_stdio_params``). An ID and secret already saved under the old names are passed
+  on under the new ones, and the old names are never passed on as paths (``drop``).
+* xing5/mcp-google-sheets — Python, run from its PyPI package. Same OAuth shape: it reads a google-auth
+  token file (TOKEN_PATH, written at launch with the refresh token, client ID and secret) and without one
+  starts a browser sign-in on the server, so a person signs in with Google ("Connect via OAuth") first.
+  It asks for spreadsheets + full drive (it lists and shares spreadsheets through Drive). Its package
+  doesn't pin ``mcp`` and fails on mcp 2.x, so it runs with ``mcp<2``.
 
 Applied at analysis (the add-server preview and registration), when a server is connected or run (an older
 row fixes itself) and by migrations e8f9a0b1c2d3 / f0a1b2c3d4e5 for rows already there. LinkedIn has its
@@ -66,6 +78,50 @@ PROFILES: list[dict] = [
         ],
         "aliases": {"refresh_token": "GMAIL_REFRESH_TOKEN", "client_id": "GMAIL_CLIENT_ID", "client_secret": "GMAIL_CLIENT_SECRET"},
     },
+    {
+        "repo": "nspady/google-calendar-mcp",
+        "env_vars": {},
+        "auth_type": "oauth2",
+        "oauth": {
+            "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
+            "token_endpoint": "https://oauth2.googleapis.com/token",
+            # The server's own sign-in asks for exactly this (src/auth/server.ts).
+            "scopes_supported": ["https://www.googleapis.com/auth/calendar"],
+            "extra_authorize_params": {"access_type": "offline", "prompt": "consent"},
+        },
+        "fields": [
+            {"name": "GOOGLE_CLIENT_ID", "label": "Google OAuth Client ID", "type": "string", "required": True, "location": "env"},
+            {"name": "GOOGLE_CLIENT_SECRET", "label": "Google OAuth Client Secret", "type": "secret", "required": True, "location": "env"},
+        ],
+        "aliases": {
+            "refresh_token": "GOOGLE_REFRESH_TOKEN", "client_id": "GOOGLE_CLIENT_ID", "client_secret": "GOOGLE_CLIENT_SECRET",
+            "GOOGLE_OAUTH_CREDENTIALS": "GOOGLE_CLIENT_ID", "GOOGLE_SERVICE_ACCOUNT_KEY": "GOOGLE_CLIENT_SECRET",
+        },
+        "drop": ["GOOGLE_OAUTH_CREDENTIALS", "GOOGLE_SERVICE_ACCOUNT_KEY"],
+    },
+    {
+        "repo": "xing5/mcp-google-sheets",
+        "command": "uvx",
+        # It imports mcp.server.fastmcp and doesn't pin mcp; 2.x renamed it, so it can't start.
+        "args": ["--with", "mcp<2", "mcp-google-sheets@0.6.3"],
+        "runtime_type": "python",
+        "env_vars": {},
+        "auth_type": "oauth2",
+        "oauth": {
+            "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
+            "token_endpoint": "https://oauth2.googleapis.com/token",
+            # The server's own SCOPES (src/mcp_google_sheets/server.py).
+            "scopes_supported": ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"],
+            "extra_authorize_params": {"access_type": "offline", "prompt": "consent"},
+        },
+        "fields": [
+            {"name": "GOOGLE_CLIENT_ID", "label": "Google OAuth Client ID", "type": "string", "required": True, "location": "env"},
+            {"name": "GOOGLE_CLIENT_SECRET", "label": "Google OAuth Client Secret", "type": "secret", "required": True, "location": "env"},
+        ],
+        "aliases": {"refresh_token": "GOOGLE_REFRESH_TOKEN", "client_id": "GOOGLE_CLIENT_ID", "client_secret": "GOOGLE_CLIENT_SECRET"},
+        # Paths analysis offered as fields; a value typed into one would be read as a file.
+        "drop": ["CREDENTIALS_PATH", "TOKEN_PATH", "SERVICE_ACCOUNT_PATH", "CREDENTIALS_CONFIG"],
+    },
 ]
 
 
@@ -109,6 +165,8 @@ def alias_credentials(server, credentials: dict[str, str]) -> dict[str, str]:
     for old, new in p["aliases"].items():
         if out.get(old) and not out.get(new):
             out[new] = out[old]
+    for name in p.get("drop", []):
+        out.pop(name, None)
     return out
 
 
