@@ -246,7 +246,7 @@ def start_of_day(now: datetime) -> datetime:
 
 async def start_public_run(
     db: AsyncSession, key: BuilderPublicKey, *, text: str, variables: dict, caller_user_id: str | None = None,
-    run_as: CurrentUser | None = None, stream: bool = True,
+    run_as: CurrentUser | None = None, attachments: list[dict] | None = None, stream: bool = True,
 ) -> BuilderRun:
     """Run what ``key`` published, as its publisher — or as ``run_as`` (a
     visitor on a "visitor" share link: their connections, their approvals).
@@ -274,7 +274,7 @@ async def start_public_run(
             owners = {sid: user for sid in share_publisher_servers(key)}
             definition["tool_owners"] = {sid: key.owner_id for sid in owners}
         user = run_as
-    if key.kind == "agent" and not text.strip():
+    if key.kind == "agent" and not text.strip() and not attachments:
         raise PublishError(422, "Send an input.")
     problems = await definition_problems(db, user, definition, variables, owners)
     if problems:
@@ -282,7 +282,7 @@ async def start_public_run(
     key.last_used_at = now
     return await create_run(
         db, user, key.kind, target.id, definition=definition, version=version, text=text, variables=variables,
-        purpose="public", public_key_id=key.id, caller_user_id=caller_user_id, stream=stream,
+        purpose="public", public_key_id=key.id, caller_user_id=caller_user_id, attachments=attachments, stream=stream,
     )
 
 

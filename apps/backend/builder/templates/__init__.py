@@ -7,9 +7,10 @@ template never depends on server ids and is picked up as systems get connected.
 """
 from __future__ import annotations
 
+from builder.templates.job_finder import TEMPLATE as JOB_FINDER
 from builder.templates.lead_research import TEMPLATE as LEAD_RESEARCH
 
-TEMPLATES: dict[str, dict] = {t["key"]: t for t in (LEAD_RESEARCH,)}
+TEMPLATES: dict[str, dict] = {t["key"]: t for t in (LEAD_RESEARCH, JOB_FINDER)}
 
 
 def template_needs(body: dict) -> list[dict]:

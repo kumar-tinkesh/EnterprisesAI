@@ -442,3 +442,24 @@ async def test_a_waiting_branch_does_not_hold_up_the_others(tenant_client, llm, 
     run = await get_run(tenant_client, run_id)
     assert run["status"] == "succeeded" and "helper result" in run["output_text"]
     assert len(llm.calls("You are Helper")) == 1  # not run again on resume
+
+
+async def test_a_file_sent_with_a_run_reaches_only_the_steps_after_the_input(tenant_client, llm, runtime):
+    reader, writer = await agent(tenant_client, "Reader"), await agent(tenant_client, "Writer")
+    llm.when("You are Reader", "Skills: Python, SQL").when("You are Writer", "Matched.")
+    wf = await workflow(tenant_client, [INPUT, {"id": "r", "type": "agent", "agent_id": reader},
+                                        {"id": "w", "type": "agent", "agent_id": writer}, OUTPUT],
+                        [("in", "r"), ("r", "w"), ("w", "out")], answer_general_questions=True)
+    r = await tenant_client.post("/api/v1/builder/attachments", files={"file": ("resume.txt", b"Asha - Python, SQL, 2026 batch", "text/plain")})
+    assert r.status_code == 201, r.text
+    r = await tenant_client.post(f"{WF}/{wf['id']}/runs", json={"input": "", "attachment_ids": [r.json()["id"]]})
+    assert r.status_code == 202, r.text
+    await worker(runtime).drain()
+
+    run = await get_run(tenant_client, r.json()["id"])
+    # A file is a task: the front desk doesn't answer it as small talk.
+    assert run["status"] == "succeeded" and run["output_text"] == "Matched.", run
+    (to_reader,) = llm.calls("You are Reader")
+    (to_writer,) = llm.calls("You are Writer")
+    assert "2026 batch" in to_reader.messages[-1].content and 'name="resume.txt"' in to_reader.messages[-1].content
+    assert "2026 batch" not in to_writer.messages[-1].content

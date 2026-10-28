@@ -28,8 +28,8 @@ export type ChatTarget = { kind: "agent" | "workflow"; id: string };
 
 const TONE_DOT = { info: "text-zinc-400", ok: "text-emerald-500", warn: "text-amber-500", error: "text-red-500" } as const;
 // What the attach button offers: what the backend can read (builder/api/v1/attachments.py).
-const ACCEPT = ".pdf,.docx,.xlsx,.csv,.md,.txt,.png,.jpg,.jpeg";
-const MAX_FILES = 5;
+export const ACCEPT = ".pdf,.docx,.xlsx,.csv,.md,.txt,.png,.jpg,.jpeg";
+export const MAX_FILES = 5;
 
 const DEPTHS: { id: AnswerDepth; label: string; hint: string }[] = [
   { id: "short", label: "Short", hint: "a line or two" },
@@ -272,7 +272,7 @@ export function ChatPanel({
         const v = coerce(f, values[f.name] ?? "");
         if (v !== undefined) variables[f.name] = v;
       }
-      return builderApi.startWorkflowRun(token, id, text, variables, depth, ref, streamOn);
+      return builderApi.startWorkflowRun(token, id, text, variables, depth, ref, streamOn, files.map((f) => f.id));
     },
     onMutate: (text) => setPendingText(text),
     onSuccess: async (run) => {
@@ -296,7 +296,7 @@ export function ChatPanel({
   const stop = useMutation({ mutationFn: () => builderApi.cancelRun(token, liveRunId!) });
 
   const busy = send.isPending || (!!liveRunId && !isFinished(view.status));
-  const canSend = !busy && uploading === 0 && !!token && (input.trim().length > 0 || (kind === "workflow" && fields.length > 0)) && missingRequired.length === 0;
+  const canSend = !busy && uploading === 0 && !!token && (input.trim().length > 0 || (kind === "workflow" && (fields.length > 0 || files.length > 0))) && missingRequired.length === 0;
   const submit = (text = input) => {
     if (busy || uploading > 0 || (!text.trim() && kind === "agent")) return;
     if (missingRequired.length) {
@@ -586,7 +586,7 @@ export function ChatPanel({
             }}
             className="rounded-2xl border border-[var(--border-strong)] bg-[var(--surface)] px-3 pb-2 pt-3 transition focus-within:border-[var(--accent-hover)]"
           >
-            {kind === "agent" && (files.length > 0 || uploading > 0 || fileError) && (
+            {(files.length > 0 || uploading > 0 || fileError) && (
               <div className="mb-2 flex flex-wrap items-center gap-1.5">
                 {files.map((f) => (
                   <FileChip key={f.id} file={f} onRemove={() => setFiles((cur) => cur.filter((x) => x.id !== f.id))} />
@@ -611,31 +611,27 @@ export function ChatPanel({
               className="block max-h-40 min-h-[36px] w-full resize-none bg-transparent px-1 py-1 text-sm text-zinc-900 outline-none placeholder:text-zinc-500"
             />
             <div className="mt-1 flex items-center gap-1">
-              {kind === "agent" && (
-                <>
-                  <input
-                    ref={picker}
-                    type="file"
-                    multiple
-                    accept={ACCEPT}
-                    className="hidden"
-                    onChange={(e) => {
-                      void attach(e.target.files);
-                      e.target.value = "";
-                    }}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => picker.current?.click()}
-                    disabled={busy || files.length >= MAX_FILES}
-                    aria-label="Attach files"
-                    title="Attach a document (PDF, Word, Excel, CSV, text) or an image (JPG, PNG)"
-                    className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-40 cursor-pointer"
-                  >
-                    <Paperclip className="h-4 w-4" />
-                  </button>
-                </>
-              )}
+              <input
+                ref={picker}
+                type="file"
+                multiple
+                accept={ACCEPT}
+                className="hidden"
+                onChange={(e) => {
+                  void attach(e.target.files);
+                  e.target.value = "";
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => picker.current?.click()}
+                disabled={busy || files.length >= MAX_FILES}
+                aria-label="Attach files"
+                title="Attach a document (PDF, Word, Excel, CSV, text) or an image (JPG, PNG)"
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-40 cursor-pointer"
+              >
+                <Paperclip className="h-4 w-4" />
+              </button>
               <Menu
                 label="Answer settings"
                 trigger={<>Length: {DEPTHS.find((d) => d.id === depth)?.label} <ChevronDown className="h-3.5 w-3.5" /></>}

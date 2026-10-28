@@ -130,3 +130,25 @@ async def test_lead_research_template(db, tenant_client, tenant_user, runtime):
     assert {p["node_id"] for p in problems} == {n["id"] for n in agents if n["id"] != "b1" and n["id"] not in ("q1", "w1")}
 
     assert (await tenant_client.post("/api/v1/builder/templates/nope")).status_code == 404
+
+
+async def test_job_finder_template(db, tenant_client, tenant_user, runtime):
+    r = await tenant_client.get("/api/v1/builder/templates")
+    (finder,) = [t for t in r.json() if t["key"] == "job_finder"]
+    systems = {s["system"]: s for s in finder["systems"]}
+    assert {"JobSpy", "Startup Jobs", "Job Scout", "LinkedIn", "Tavily", "Firecrawl", "Google Sheets", "Gmail",
+            "WhatsApp"} == set(systems)
+    # Only the tracker can't do without its system; Gmail and WhatsApp are skipped when not connected.
+    assert [s for s, v in systems.items() if v["required"]] == ["Google Sheets"]
+
+    r = await tenant_client.post("/api/v1/builder/templates/job_finder")
+    assert r.status_code == 201, r.text
+    wf = r.json()
+    agents = [n for n in wf["nodes"] if n["type"] == "agent"]
+    assert len(agents) == 10 and all(n.get("agent_id") and not n.get("draft_agent") for n in agents)
+    sources = lambda target: {e["source"] for e in wf["edges"] if e["target"] == target}  # noqa: E731
+    # Nothing is saved or sent before the approval.
+    assert sources("s1") == sources("s2") == {"ap"} and sources("wa") == {"b1", "ap", "s1", "s2"}
+    assert sources("m1") == {"b1", "k1"}
+    saved = {a.name: a for a in (await db.execute(select(BuilderAgent).where(BuilderAgent.workflow_id == wf["id"]))).scalars()}
+    assert [n["system"] for n in saved["Tracker Saver"].config["tool_needs"]] == ["Google Sheets"]

@@ -95,6 +95,8 @@ class StepContext:
     tool_owners: dict[str, CurrentUser] = field(default_factory=dict)
     # Stream this agent step's answer as it's written (it feeds the run's output).
     stream: bool = False
+    # Files sent with the run (builder_attachments ids): only the steps right after its input get them.
+    attachment_ids: list[str] = field(default_factory=list)
 
     @property
     def node_id(self) -> str:
@@ -172,6 +174,7 @@ async def run_agent_step(ctx: StepContext) -> NodeOutcome:
         user=ctx.user, agent=agent, config=config, input_text=task, approvals=approvals, emit=ctx.emit,
         dry_run=ctx.dry_run, depth=ctx.depth, sub_agents=ctx.sub_agents, memory=ctx.memory,
         knowledge_tenant_id=ctx.knowledge_tenant_id, tool_owners=ctx.tool_owners, stream=ctx.stream,
+        attachment_ids=ctx.attachment_ids,
     )
     try:
         result = await run_agent(agent_ctx)

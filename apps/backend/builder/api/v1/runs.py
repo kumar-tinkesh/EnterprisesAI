@@ -64,7 +64,7 @@ class RunStart(BaseModel):
     # A playground chat: continue this one, or start a new one with this message.
     conversation_id: str | None = None
     new_conversation: bool = False
-    # Files uploaded to /attachments, sent with this message (agents only).
+    # Files uploaded to /attachments, sent with this message (a workflow's first steps get them).
     attachment_ids: list[str] = Field(default_factory=list, max_length=5)
     # Send the answer as it's written ("output_delta" events on /runs/{id}/events).
     stream: bool = True
@@ -134,13 +134,14 @@ async def start_workflow_run(
     wf = await _get_workflow(db, workflow_id, user)
     if not wf.nodes:
         raise HTTPException(status_code=422, detail="This workflow has no steps yet.")
+    attachments = await attachments_for_run(db, user, payload.attachment_ids)
     problems = await workflow_run_problems(db, user, wf, payload.variables)
     if problems:
         return problems_response("This workflow can't run yet.", problems)
     conv = await _open_chat(db, user, "workflow", wf.id, payload)
     run = await create_workflow_run(
         db, user, wf, text=payload.input, variables=payload.variables, depth=payload.depth,
-        conversation_id=conv.id if conv else None, stream=payload.stream,
+        conversation_id=conv.id if conv else None, attachments=attachments, stream=payload.stream,
     )
     return await run_view(db, run, detail=False)
 

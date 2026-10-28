@@ -115,10 +115,11 @@ def _step_summary(state: dict, graph: S.Graph, agents: dict) -> str:
 
 def _asks_front_desk(run: BuilderRun, config: WorkflowConfig, variables: dict) -> bool:
     """Only a message someone typed (app chat, a share link) — never a schedule,
-    a webhook, a test, or a run given its inputs as fields."""
+    a webhook, a test, or a run given its inputs as fields or files."""
     return (
         config.answer_general_questions and run.purpose in ("run", "public")
         and not run.schedule_id and not run.webhook_id and not variables
+        and not (run.input or {}).get("attachments")
     )
 
 
@@ -178,6 +179,9 @@ async def execute_workflow(run: BuilderRun, user: CurrentUser, worker_id: str, *
         tool_owners=tool_owners or {},
     )
     stream = (run.input or {}).get("stream", True) and not dry_run
+    # Files sent with the run go to the steps its input feeds (a resume to the step that reads it), not to every step.
+    attachment_ids = [a["id"] for a in (run.input or {}).get("attachments") or [] if a.get("id")]
+    after_input = {e["target"] for e in graph.edges.values() if graph.nodes.get(e["source"], {}).get("type") in TRIGGER_TYPES}
 
     async def run_step(node_id: str, node_run_id: str, attempt: int) -> NodeOutcome:
         node = graph.nodes[node_id]
@@ -195,6 +199,7 @@ async def execute_workflow(run: BuilderRun, user: CurrentUser, worker_id: str, *
             emit=emit_event, **step_extras, depth=depth if node_id in feeds_output else "auto",
             # Only a step whose answer is the run's answer is worth watching being written.
             stream=stream and node_id in feeds_output,
+            attachment_ids=attachment_ids if node_id in after_input else [],
         )
         return await RUNNERS[node["type"]](ctx)
 

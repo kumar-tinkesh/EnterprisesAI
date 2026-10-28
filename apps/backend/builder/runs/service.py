@@ -132,7 +132,7 @@ async def workflow_definition(db: AsyncSession, tenant_id: str, workflow: dict, 
 async def create_workflow_run(
     db: AsyncSession, user: CurrentUser, workflow, *, text: str, variables: dict | None = None,
     schedule_id: str | None = None, purpose: str = "run", depth: str = "auto", conversation_id: str | None = None,
-    stream: bool = True,
+    attachments: list[dict] | None = None, stream: bool = True,
 ) -> BuilderRun:
     """Freezes the workflow and every agent its steps use, so edits made while
     it runs (or before a resume) don't change what this run does."""
@@ -140,7 +140,7 @@ async def create_workflow_run(
     return await create_run(
         db, user, "workflow", workflow.id, definition=definition, version=workflow.version,
         text=text, variables=variables, schedule_id=schedule_id, purpose=purpose, depth=depth,
-        conversation_id=conversation_id, stream=stream,
+        conversation_id=conversation_id, attachments=attachments, stream=stream,
     )
 
 

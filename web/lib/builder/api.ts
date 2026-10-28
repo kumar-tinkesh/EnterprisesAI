@@ -141,8 +141,8 @@ export const builderApi = {
   /** ``stream``: send the answer as it's written (the default; off = only when it's done). */
   startAgentRun: (t: string, id: string, input: string, depth: AnswerDepth = "auto", chat: ChatRef = {}, attachmentIds: string[] = [], stream = true) =>
     call<Run>(t, `/agents/${id}/runs`, "POST", { input, depth, ...chat, ...(attachmentIds.length ? { attachment_ids: attachmentIds } : {}), stream }),
-  startWorkflowRun: (t: string, id: string, input: string, variables: Record<string, unknown>, depth: AnswerDepth = "auto", chat: ChatRef = {}, stream = true) =>
-    call<Run>(t, `/workflows/${id}/runs`, "POST", { input, variables, depth, ...chat, stream }),
+  startWorkflowRun: (t: string, id: string, input: string, variables: Record<string, unknown>, depth: AnswerDepth = "auto", chat: ChatRef = {}, stream = true, attachmentIds: string[] = []) =>
+    call<Run>(t, `/workflows/${id}/runs`, "POST", { input, variables, depth, ...chat, ...(attachmentIds.length ? { attachment_ids: attachmentIds } : {}), stream }),
   /** Run one step by itself, as it is on the canvas (unsaved edits too). */
   testStep: (t: string, workflowId: string, node: WorkflowNode, input: string, variables: Record<string, unknown> = {}) =>
     call<Run>(t, `/workflows/${workflowId}/steps/test`, "POST", { node, input, variables }),
@@ -248,7 +248,8 @@ export const sharedApi = {
   info: (slug: string) => request<SharedInfo>(`/shared/${encodeURIComponent(slug)}`, {}, undefined, BACKEND_API_URL),
   outline: (slug: string) => request<SharedOutline>(`/shared/${encodeURIComponent(slug)}/outline`, {}, undefined, BACKEND_API_URL),
   needs: (t: string, slug: string) => request<SharedNeeds>(`/shared/${encodeURIComponent(slug)}/needs`, {}, t, BACKEND_API_URL),
-  run: (t: string, slug: string, body: { input: string; variables: Record<string, unknown>; wait_seconds: number; stream: boolean }) =>
+  /** ``attachment_ids``: files uploaded to /builder/attachments — a link that runs with the caller's own apps only. */
+  run: (t: string, slug: string, body: { input: string; variables: Record<string, unknown>; wait_seconds: number; stream: boolean; attachment_ids?: string[] }) =>
     request<SharedRun>(`/shared/${encodeURIComponent(slug)}/runs`, { method: "POST", body: JSON.stringify(body) }, t, BACKEND_API_URL),
   runs: (t: string, slug: string) => request<SharedRun[]>(`/shared/${encodeURIComponent(slug)}/runs`, {}, t, BACKEND_API_URL),
   get: (t: string, slug: string, runId: string) =>

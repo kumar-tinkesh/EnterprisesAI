@@ -414,3 +414,28 @@ async def test_a_workflows_outline_is_its_steps_in_order_with_side_by_side_ones_
     steps = r.json()["steps"]
     assert [(s["title"], s["level"]) for s in steps] == [("Input", 0), ("Searcher", 1), ("Reader", 1), ("Answer", 2)]
     assert steps[1]["apps"] == ["demo"] and steps[1]["hint"] == "Search the web"
+
+
+async def test_a_visitor_sends_their_own_file_and_a_publisher_link_refuses_one(db, tenant_client, make_user_client, demo, gateway, runtime):
+    await visitor_account(db)
+    agent = await make_agent(tenant_client, demo, [])
+    visitor = await make_user_client(outsider())
+    r = await visitor.post(f"{B}/attachments", files={"file": ("resume.txt", b"Ravi - Java, 2025 batch", "text/plain")})
+    assert r.status_code == 201, r.text
+    doc = r.json()["id"]
+
+    theirs = await publish(tenant_client, "agents", agent["id"], share=True, tool_mode="visitor")
+    gw = gateway([reply("Java developer, 2025.")])
+    # A file alone is enough to start it.
+    r = await visitor.post(f"{S}/{theirs['share_slug']}/runs", json={"input": "", "attachment_ids": [doc], "wait_seconds": 0})
+    assert r.status_code == 202, r.text
+    await worker(runtime).drain()
+    row = await db.get(BuilderRun, r.json()["run_id"])
+    await db.refresh(row)
+    assert row.status == "succeeded", (row.status, row.error)
+    assert "2025 batch" in gw.requests[0].messages[-1].content
+    assert (await db.get(BuilderRun, r.json()["run_id"])).input["attachments"][0]["filename"] == "resume.txt"
+
+    mine = await publish(tenant_client, "agents", agent["id"], share=True)
+    r = await visitor.post(f"{S}/{mine['share_slug']}/runs", json={"input": "x", "attachment_ids": [doc]})
+    assert r.status_code == 422 and "your own apps" in r.json()["detail"]

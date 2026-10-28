@@ -4,7 +4,8 @@ from a link, signed in.
     GET  /{slug}                        what the link runs: name, who shared it, what to send (no login)
     GET  /{slug}/needs                  "visitor"/"mixed" links: the systems it uses and which I still have to connect
     GET  /{slug}/outline                how it works: its steps and their apps (when the publisher shows it; no login)
-    POST /{slug}/runs                   run it: {"input": "...", "variables": {...}, "wait_seconds": 20}
+    POST /{slug}/runs                   run it: {"input": "...", "variables": {...}, "wait_seconds": 20,
+                                        "attachment_ids": [...]} (files: a "visitor"/"mixed" link only)
                                         200 when it finished within wait_seconds, else 202 — then poll
     GET  /{slug}/runs                   my runs through this link, newest first
     GET  /{slug}/runs/{run_id}          one of them
@@ -45,6 +46,7 @@ from src.api.deps import CurrentUser, get_current_user
 from src.db.session import get_db
 from src.models import User
 
+from builder.api.v1.attachments import attachments_for_run
 from builder.api.v1.public import _wait
 from builder.models import BuilderApproval, BuilderPublicKey, BuilderRun
 from builder.publishing.service import (
@@ -67,6 +69,8 @@ class SharedRunIn(BaseModel):
     wait_seconds: float = Field(default=20, ge=0, le=30)
     # Send the answer as it's written, on GET .../events (off: only the finished answer).
     stream: bool = True
+    # Files the caller uploaded to /builder/attachments (a "visitor"/"mixed" link: the run is theirs).
+    attachment_ids: list[str] = Field(default_factory=list, max_length=5)
 
 
 def _fail(exc: PublishError) -> JSONResponse:
@@ -188,10 +192,14 @@ async def start(
     visitor = key.tool_mode in ("visitor", "mixed")
     if visitor and not user.tenant_id:
         raise HTTPException(status_code=403, detail=NEEDS_WORKSPACE)
+    # A run as the publisher reads only the publisher's files, so a caller's file can't go with it.
+    if payload.attachment_ids and not visitor:
+        raise HTTPException(status_code=422, detail="Files can be sent only on a link that runs with your own apps.")
+    attachments = await attachments_for_run(db, user, payload.attachment_ids)
     try:
         run = await start_public_run(
             db, key, text=payload.input, variables=payload.variables, caller_user_id=user.id, run_as=user if visitor else None,
-            stream=payload.stream,
+            attachments=attachments, stream=payload.stream,
         )
     except PublishError as exc:
         return _fail(exc)

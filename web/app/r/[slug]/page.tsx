@@ -4,7 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUp, Check, ChevronRight, Circle, History, Info, LogIn, RotateCw, ShieldAlert, Square, UserPlus, X, XCircle } from "lucide-react";
+import { ArrowUp, Check, ChevronRight, Circle, History, Info, LogIn, Paperclip, RotateCw, ShieldAlert, Square, UserPlus, X, XCircle } from "lucide-react";
 
 import { buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,15 +12,16 @@ import { Menu } from "@/components/ui/menu";
 import { Spinner } from "@/components/ui/spinner";
 import { Field, Select } from "@/components/builder/fields";
 import { ApprovalCard } from "@/components/builder/approval-card";
-import { CopyButton } from "@/components/builder/chat/chat-message";
+import { CopyButton, FileChip } from "@/components/builder/chat/chat-message";
+import { ACCEPT, MAX_FILES } from "@/components/builder/chat/chat-panel";
 import { MarkdownView } from "@/components/builder/chat/markdown-view";
 import { AnswerView } from "@/components/builder/run-output";
 import { NeedsList } from "@/components/builder/tool-needs";
 import { TypeIcon } from "@/components/builder/type-icon";
 import { ApiError } from "@/lib/api";
-import { sharedApi } from "@/lib/builder/api";
+import { builderApi, sharedApi } from "@/lib/builder/api";
 import { formatCost, formatDuration, formatTokens } from "@/lib/builder/chat";
-import type { InputVariable, SharedInfo, SharedNeeds, SharedRun, SharedStep, ToolMode } from "@/lib/builder/types";
+import type { Attachment, InputVariable, SharedInfo, SharedNeeds, SharedRun, SharedStep, ToolMode } from "@/lib/builder/types";
 import { useStreamPref } from "@/lib/builder/stream-pref";
 import { useAuthStore } from "@/stores/auth-store";
 import { cn } from "@/lib/utils";
@@ -269,6 +270,10 @@ function Runner({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [live, setLive] = useState<Live | null>(null);
+  const [files, setFiles] = useState<Attachment[]>([]);
+  const [uploading, setUploading] = useState(0);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const picker = useRef<HTMLInputElement>(null);
   const [streamOn] = useStreamPref();
   const alive = useRef(true);
   const watching = useRef<AbortController | null>(null);
@@ -347,15 +352,37 @@ function Runner({
     return out;
   };
 
+  // Files go with the run only on a link that runs with the visitor's own apps (the run is theirs).
+  const attach = async (list: FileList | null) => {
+    setFileError(null);
+    const chosen = Array.from(list ?? []).slice(0, Math.max(0, MAX_FILES - files.length));
+    if ((list?.length ?? 0) > chosen.length) setFileError(`At most ${MAX_FILES} files per run.`);
+    for (const file of chosen) {
+      setUploading((n) => n + 1);
+      try {
+        const uploaded = await builderApi.uploadAttachment(token, file);
+        setFiles((cur) => [...cur, uploaded]);
+      } catch (err) {
+        setFileError(err instanceof Error ? `${file.name}: ${err.message}` : `Couldn't attach ${file.name}.`);
+      } finally {
+        setUploading((n) => n - 1);
+      }
+    }
+  };
+
   const submit = async (input = text) => {
     setBusy(true);
     setError(null);
     try {
       // Streaming: start at once and watch it being written; otherwise wait a little for the whole answer.
-      const run = await sharedApi.run(token, slug, { input: input.trim(), variables: variables(), wait_seconds: streamOn ? 0 : 20, stream: streamOn });
+      const run = await sharedApi.run(token, slug, {
+        input: input.trim(), variables: variables(), wait_seconds: streamOn ? 0 : 20, stream: streamOn,
+        ...(files.length ? { attachment_ids: files.map((f) => f.id) } : {}),
+      });
       setCurrent(run);
       setLive(null);
       setText("");
+      setFiles([]);
       refreshHistory();
       if (!DONE.has(run.status)) void (streamOn ? watch(run) : follow(run));
     } catch (err) {
@@ -395,7 +422,7 @@ function Runner({
   const missing = inputs.filter((v) => v.required && !(values[v.name] ?? "").trim());
   const blocked = own && (!needs.data || needs.data.problems.length > 0);
   const running = !!current && !DONE.has(current.status);
-  const canSend = !busy && !running && missing.length === 0 && !blocked && (kind === "workflow" || !!text.trim());
+  const canSend = !busy && !running && uploading === 0 && missing.length === 0 && !blocked && (kind === "workflow" || !!text.trim() || files.length > 0);
 
   return (
     <div className="flex h-full">
@@ -446,6 +473,15 @@ function Runner({
               }}
               className="rounded-2xl border border-[var(--border-strong)] bg-[var(--surface)] px-3 pb-2 pt-2.5 transition focus-within:border-[var(--accent-hover)]"
             >
+              {(files.length > 0 || uploading > 0 || fileError) && (
+                <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                  {files.map((f) => (
+                    <FileChip key={f.id} file={f} onRemove={() => setFiles((cur) => cur.filter((x) => x.id !== f.id))} />
+                  ))}
+                  {uploading > 0 && <span className="inline-flex items-center gap-1.5 text-xs text-zinc-500"><Spinner className="h-3 w-3" /> Reading {uploading} file{uploading === 1 ? "" : "s"}…</span>}
+                  {fileError && <span className="text-xs text-red-600">{fileError}</span>}
+                </div>
+              )}
               <textarea
                 ref={box}
                 rows={1}
@@ -463,6 +499,31 @@ function Runner({
                 className="block max-h-40 min-h-[36px] w-full resize-none bg-transparent px-1 py-1 text-sm text-zinc-900 outline-none placeholder:text-zinc-500"
               />
               <div className="mt-1 flex items-center gap-2">
+                {own && (
+                  <>
+                    <input
+                      ref={picker}
+                      type="file"
+                      multiple
+                      accept={ACCEPT}
+                      className="hidden"
+                      onChange={(e) => {
+                        void attach(e.target.files);
+                        e.target.value = "";
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => picker.current?.click()}
+                      disabled={busy || running || files.length >= MAX_FILES}
+                      aria-label="Attach files"
+                      title="Attach a document (PDF, Word, Excel, CSV, text) or an image (JPG, PNG)"
+                      className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-40 cursor-pointer"
+                    >
+                      <Paperclip className="h-4 w-4" />
+                    </button>
+                  </>
+                )}
                 <p className="min-w-0 flex-1 truncate text-xs text-zinc-500">
                   {missing.length ? `Fill in ${missing.map((v) => v.label || v.name).join(", ")} first.` : limit ? `Up to ${limit} runs a day.` : ""}
                 </p>
