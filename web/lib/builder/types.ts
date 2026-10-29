@@ -53,9 +53,11 @@ export interface AgentConfig {
   tool_ids?: string[];
   /** Systems picked up at run time once connected (see ToolNeed). */
   tool_needs?: ToolNeed[];
+  /** None of its systems connected: the step still runs without them (an optional extra, e.g. an alert). */
+  runs_without_needs?: boolean;
   knowledge_base_ids?: string[];
   response?: { tone?: string; verbosity?: string; language?: string; citations?: string; formats?: string[] };
-  tools?: { max_calls?: number; timeout_seconds?: number; on_failure?: string };
+  tools?: { max_calls?: number; timeout_seconds?: number; on_failure?: string; side_by_side?: boolean };
   reliability?: { retries?: number; request_timeout_seconds?: number | null; fallback_model?: string; retry_on?: string[] };
   approvals?: ApprovalPolicy;
   guardrails?: GuardrailSettings;
@@ -482,6 +484,8 @@ export interface SharedStep {
   title: string;
   kind: string;
   status: "pending" | "running" | "succeeded" | "failed" | "waiting" | "skipped";
+  /** The step's "▸ " progress lines — only on a run that's the caller's own (builder.publishing.outline). */
+  notes?: string[];
 }
 
 /** One of my runs through a share link: only what a caller may see. */

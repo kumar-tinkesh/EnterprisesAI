@@ -19,6 +19,11 @@ engine_kwargs: dict = {"echo": settings.DB_ECHO}
 # SQLite in-memory requires NullPool to avoid cross-connection empty DBs.
 if "sqlite" in settings.DATABASE_URL and ":memory:" in settings.DATABASE_URL:
     engine_kwargs["poolclass"] = NullPool
+elif "sqlite" not in settings.DATABASE_URL:
+    # Past these, a session waits for a free connection instead of opening one the server refuses.
+    engine_kwargs.update(
+        pool_size=settings.DB_POOL_SIZE, max_overflow=settings.DB_MAX_OVERFLOW, pool_timeout=settings.DB_POOL_TIMEOUT,
+    )
 
 engine = create_async_engine(settings.DATABASE_URL, **engine_kwargs)
 SessionLocal = async_sessionmaker(

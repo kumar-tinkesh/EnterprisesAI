@@ -96,7 +96,8 @@ def _shows(key: BuilderPublicKey) -> bool:
 
 async def _view(db: AsyncSession, run: BuilderRun, user: CurrentUser, steps: bool) -> dict:
     view = {**public_view(run), "input": (run.input or {}).get("text") or "", "created_at": as_utc(run.created_at).isoformat(), "approvals": []}
-    view["steps"] = await run_steps(db, run) if steps else []
+    # Its steps' notes only when the run is the caller's own (a visitor link): what a step found is theirs.
+    view["steps"] = await run_steps(db, run, notes=run.owner_id == user.id) if steps else []
     # What it took, as the run's own page shows it: time, tokens, cost (None until known).
     took = (as_utc(run.finished_at) - as_utc(run.started_at)).total_seconds() * 1000 if run.started_at and run.finished_at else None
     tokens = (run.prompt_tokens or 0) + (run.completion_tokens or 0)

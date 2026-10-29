@@ -439,3 +439,34 @@ async def test_a_visitor_sends_their_own_file_and_a_publisher_link_refuses_one(d
     mine = await publish(tenant_client, "agents", agent["id"], share=True)
     r = await visitor.post(f"{S}/{mine['share_slug']}/runs", json={"input": "x", "attachment_ids": [doc]})
     assert r.status_code == 422 and "your own apps" in r.json()["detail"]
+
+
+async def test_a_visitor_sees_their_own_runs_step_notes(db, tenant_client, make_user_client, gateway, runtime):
+    await visitor_account(db)
+    body = {
+        "name": "Finder",
+        "nodes": [
+            {"id": "in", "type": "input"},
+            {"id": "a", "type": "agent", "draft_agent": {"name": "Searcher", "role": "r", "goal": "Search"}},
+            {"id": "out", "type": "output"},
+        ],
+        "edges": [{"id": "e1", "source": "in", "target": "a"}, {"id": "e2", "source": "a", "target": "out"}],
+    }
+    wf = (await tenant_client.post(f"{B}/workflows", json=body)).json()
+    visitor = await make_user_client(outsider())
+
+    theirs = await publish(tenant_client, "workflows", wf["id"], share=True, tool_mode="visitor")
+    gateway([reply("| Job |\n|---|\n| A |\n▸ 1 job found on Naukri\n▸ Tip: put Python first")])
+    r = await visitor.post(f"{S}/{theirs['share_slug']}/runs", json={"input": "go", "wait_seconds": 0})
+    await worker(runtime).drain()
+    done = (await visitor.get(f"{S}/{theirs['share_slug']}/runs/{r.json()['run_id']}")).json()
+    assert done["steps"] == [{"id": "a", "title": "Searcher", "kind": "agent", "status": "succeeded",
+                              "notes": ["1 job found on Naukri", "Tip: put Python first"]}]
+
+    # A run with the publisher's apps is theirs: its steps say only where it is.
+    mine = await publish(tenant_client, "workflows", wf["id"], share=True)
+    gateway([reply("▸ secret")])
+    r = await visitor.post(f"{S}/{mine['share_slug']}/runs", json={"input": "go", "wait_seconds": 0})
+    await worker(runtime).drain()
+    done = (await visitor.get(f"{S}/{mine['share_slug']}/runs/{r.json()['run_id']}")).json()
+    assert "notes" not in done["steps"][0]

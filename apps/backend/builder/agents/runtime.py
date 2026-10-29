@@ -15,6 +15,10 @@ again — after an approval, or on another worker after a crash:
   ``started`` (the worker died mid-call) is re-run only if it's a read tool —
   a data-changing one becomes an ``uncertain_call`` approval: "this may
   already have run — run it again?"
+* **Side by side.** A turn's read-only calls that won't ask anyone run
+  together (at most ``MAX_PARALLEL_CALLS``), so five searches take about as
+  long as the slowest; writes, sends and anything needing a yes run one at a
+  time after them. Answers go back in the order asked.
 * **Approvals.** The agent's approval policy (read / edit / delete) decides
   which calls need a yes first. The run then pauses (``Paused``) and the
   worker lets go; the decision re-queues it.
@@ -64,7 +68,7 @@ from builder.pricing import add_cost, estimate_cost_usd
 from builder.runs import states
 from builder.runs.db import session_factory, utcnow
 from builder.runs.tool_calls import OUTBOUND_DECLINED, CallSite, Paused, ledgered_call
-from builder.services.tool_runtime.classification import outbound_draft
+from builder.services.tool_runtime.classification import classify_tool, is_outbound_tool, outbound_draft
 from builder.services.tool_runtime.errors import InvalidArguments
 
 logger = logging.getLogger("builder.agents.runtime")
@@ -503,6 +507,51 @@ async def _run_call(
     return await _guard_tool_result(ctx, state, tool.tool_name, _model_text(outcome.text))
 
 
+# How many of one turn's read-only calls run at once (each also takes a database connection for a moment).
+MAX_PARALLEL_CALLS = 3
+
+
+def _runs_alongside(ctx: AgentContext, by_fn: dict[str, AgentTool], call: dict) -> bool:
+    """A call that may run side by side with its turn's others: it only reads, and won't stop to ask a person.
+    Anything else (writes, sends, hand-offs, memory, a read that needs a yes) runs one at a time, in order."""
+    if call["name"] == KNOWLEDGE_TOOL:
+        return bool(ctx.config.knowledge_base_ids)
+    tool = by_fn.get(call["name"])
+    if tool is None or not ctx.config.tools.side_by_side or ctx.approvals.read or is_outbound_tool(tool.tool_name):
+        return False
+    return classify_tool(tool.tool_name, tool.annotations).risk == "read"
+
+
+async def _run_turn_calls(
+    ctx: AgentContext, by_fn: dict[str, AgentTool], subs: dict[str, dict], calls: list[tuple[int, dict]], state: dict
+) -> dict[str, str | BaseException]:
+    """The turn's read-only calls, run together: {call id: result text, or what it raised}."""
+    alongside = [(i, c) for i, c in calls if _runs_alongside(ctx, by_fn, c)]
+    if len(alongside) < 2:
+        return {}
+    limit = asyncio.Semaphore(MAX_PARALLEL_CALLS)
+
+    async def one(index: int, call: dict) -> str:
+        async with limit:
+            return await _run_call(ctx, by_fn, subs, state["turn"], index, call, state)
+
+    # Each call has its own ledger key, so a resumed run reuses what finished.
+    results = await asyncio.gather(*(one(i, c) for i, c in alongside), return_exceptions=True)
+    return {c["id"]: r for (_, c), r in zip(alongside, results)}
+
+
+def _open_turn(messages: list[dict]) -> dict | None:
+    """The model's last turn, if it asked for tools and some have no answer yet. Not just the last message: a
+    run paused (or crashed) between two of a turn's calls resumes with an answer last and calls still to make."""
+    for m in reversed(messages):
+        if m["role"] == "assistant":
+            if not m.get("tool_calls"):
+                return None
+            answered = {x.get("tool_call_id") for x in messages if x["role"] == "tool"}
+            return m if any(c["id"] not in answered for c in m["tool_calls"]) else None
+    return None
+
+
 def _with_kept_drafts(text: str, state: dict) -> str:
     """The answer, with every message the person chose not to send added under it —
     not left to the model to repeat: "don't send" means "keep it", and it must be there."""
@@ -604,12 +653,19 @@ async def run_agent(ctx: AgentContext) -> AgentResult:
 
     while True:
         last = messages[-1]
-        if last["role"] == "assistant" and last.get("tool_calls"):
+        turn = _open_turn(messages)
+        if turn is not None:
             answered = {m.get("tool_call_id") for m in messages if m["role"] == "tool"}
-            for index, call in enumerate(last["tool_calls"]):
-                if call["id"] in answered:
-                    continue
-                text = await _run_call(ctx, by_fn, subs, state["turn"], index, call, state)
+            pending = [(index, call) for index, call in enumerate(turn["tool_calls"]) if call["id"] not in answered]
+            done = await _run_turn_calls(ctx, by_fn, subs, pending, state)
+            # Answers go back in the order the model asked; the rest run one at a time, here.
+            for index, call in pending:
+                if call["id"] in done:
+                    text = done[call["id"]]
+                    if isinstance(text, BaseException):
+                        raise text
+                else:
+                    text = await _run_call(ctx, by_fn, subs, state["turn"], index, call, state)
                 messages.append({"role": "tool", "tool_call_id": call["id"], "content": text})
                 state["tool_calls"] += 1
                 await _checkpoint(ctx, state)

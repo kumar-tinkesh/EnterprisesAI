@@ -136,9 +136,10 @@ async def resolve_needs(
     return states
 
 
-def need_problems(states: list[NeedState], *, node_id: str | None = None) -> list[GraphProblem]:
+def need_problems(states: list[NeedState], *, node_id: str | None = None, optional: bool = False) -> list[GraphProblem]:
     """What stops a step with these needs from running: a required system
-    that isn't ready, or — when none is required — not one of them ready."""
+    that isn't ready, or — when none is required — not one of them ready
+    (unless ``optional``: AgentConfig.runs_without_needs)."""
     if not states:
         return []
 
@@ -153,7 +154,7 @@ def need_problems(states: list[NeedState], *, node_id: str | None = None) -> lis
     required = [s for s in states if s.need.required and s.status != "ready"]
     if required:
         return [problem(s) for s in required]
-    if any(s.status == "ready" for s in states):
+    if optional or any(s.status == "ready" for s in states):
         return []
     # Not one connected: offer the nearest (connectable ones first).
     nearest = sorted(states, key=lambda s: _RANK[s.status])

@@ -9,14 +9,26 @@ Built like ``lead_research`` (same ``need`` / ``agent_node`` helpers, tools from
   wins over the resume, an empty one is read from it.
 * Three collectors search side by side (job boards, LinkedIn, the open web for Internshala / Unstop / Wellfound,
   which have no MCP server) and write one table shape; the join goes on when one of them has answered.
+* The Profile Builder reads roles, skills, experience and place from the resume (an empty field), adds the cities
+  a commute away (Noida -> Delhi, Gurgaon…) and the title words above the candidate's level; every collector
+  builds its searches from those lines (``SEARCH``), home and nearby first, then remote – then every match
+  scoring 50+ goes on, nearest first, not a top few: the tracker gets them all in one write.
 * The checker drops duplicates, old posts and scams before anything is scored – a student is the easy target of
-  "pay a registration fee" internships.
+  "pay a registration fee" internships. The Contact Finder then looks for the recruiters and published hiring
+  emails of the best matches (never a guessed address), which the cover letters are addressed to.
+* Collectors are told to make their searches together in one turn: the agent runtime runs a turn's read-only
+  calls side by side, so a lane takes about as long as its slowest search – except LinkedIn, one call at a time
+  (``side_by_side`` off), since it answers a burst with HTTP 429 and drops the session.
 * Nothing is written before a person approves the report: the tracker rows (only jobs the sheet doesn't have yet,
-  by apply URL), the Gmail drafts (saved, never sent) and the WhatsApp message all come after the approval.
+  by apply URL), the Gmail drafts (saved, never sent) and the WhatsApp summary all come after the approval, side by
+  side. (No "search started" WhatsApp: a send always asks first, so it would stop the run at its start.) The
+  WhatsApp and Gmail steps run without their system (``runs_without_needs``) and say they skipped, so a student
+  without them can still run it.
+* While it runs, the steps' "▸ " lines (what each found, resume tips) show live on the share page.
 
     in -> Profile Builder -> {Job Boards, LinkedIn, Web} -> join -> Job Checker (+ profile) -> Matcher (+ profile)
-       -> Report Writer (+ profile) -> approval -> {Tracker Saver, Draft Saver}
-       -> WhatsApp Notifier (+ profile, + approval: the report) -> output (+ approval: the report itself, + savers)
+       -> Contact Finder (+ profile) -> Report Writer (+ profile, + matcher) -> approval
+       -> {Tracker Saver, Draft Saver, WhatsApp Notifier (+ profile)} -> output (+ approval: the report, + all three)
 """
 from __future__ import annotations
 
@@ -29,10 +41,27 @@ GMAIL = ("Gmail", ["jimsimoy/gmail-mcp"])
 WHATSAPP = ("WhatsApp", ["lharries/whatsapp-mcp"])
 
 TRACKER = "Internship Tracker"
-TRACKER_COLUMNS = "Date found | Company | Role | Location | Type | Pay | Score | Deadline | Apply URL | Status | Found via"
+TRACKER_COLUMNS = (
+    "Date found | Company | Role | Location | Type | Pay | Score | Deadline | Apply URL | Status | Found via | Contact | "
+    "Contact link"
+)
+# The column an older tracker (before contacts) ends at, and the ones it gets added.
+OLD_LAST, NEW_COLUMNS = "K", ["Contact", "Contact link"]
+# A "▸ " line in a step's answer is shown live to the person running it (builder.publishing.outline: Notes).
+NOTE = "▸ "
+# Searches made together in one turn run side by side (builder.agents.runtime).
+TOGETHER = "Make all your searches in ONE turn – call the tools together, they run side by side – then answer. "
 
 
 # ── Shared rules ─────────────────────────────────────────────────────────────
+
+# Every collector builds its searches from the same profile lines, nearest places first.
+SEARCH = (
+    "Build EVERY search from the PROFILE block: keywords = its Search phrases (the role titles, some with the "
+    "strongest skill), place = Home first, then Nearby, then Remote (other Locations after those), level = its "
+    "Seniority, type = its Type, recency = its Posted within. Never search a city or country the profile does not "
+    "list. "
+)
 
 JOB_TABLE = "Company | Role | Location | Work type | Job type | Pay | Posted | Deadline | Apply URL | Requirements | Found via"
 
@@ -42,11 +71,15 @@ JOB_RULES = (
     "given; Posted and Deadline = YYYY-MM-DD, empty if not given; Apply URL = the post's own link; Requirements = "
     "the post's OWN words for skills and eligibility (degree, batch / graduation year, years of experience), at most "
     "30 words – never your summary; Found via = the system and the site, e.g. \"JobSpy (Naukri)\", \"LinkedIn\", "
-    "\"Startup Jobs\", \"Job Scout (Greenhouse)\", \"Tavily (Internshala)\". Follow the profile: skip roles above its "
-    "Experience (senior, lead, 3+ years for a fresher), the Type it did not ask for, its Exclude list, and posts older "
-    "than 30 days. Never invent a company, role, pay, date or URL – what you did not read in a tool result does not "
+    "\"Startup Jobs\", \"Job Scout (Greenhouse)\", \"Tavily (Internshala)\". Follow the profile: skip a title with a "
+    "word from its Skip titles, a post whose minimum years asked is more than its Experience + 1 (a fresher: more "
+    "than 1), the Type it did not ask for, its Exclude list, posts older than its Posted within days, and jobs "
+    "outside its Home, Nearby and Locations – a job in another country counts only when it is remote AND open to "
+    "people in the profile's Home country (never a US-only or visa-needed role for a candidate in India). List EVERY job that fits – no top few. Never invent "
+    "a company, role, pay, date or URL – what you did not read in a tool result does not "
     "exist. If a source fails or is not connected, use the others and say which in one line under the table. If "
-    "nothing fits, answer \"No jobs found.\" and nothing else."
+    "nothing fits, answer \"No jobs found.\". Then, as the LAST line, \"" + NOTE + "<n> jobs found on <the sites you "
+    "searched>\" (n = your table's rows; 0 when none) – it is shown to the person while the search runs."
 )
 
 
@@ -69,15 +102,34 @@ PROFILE = dict(
         "Skills: <comma-separated, strongest first, only what the resume or the fields say>\n"
         "Projects: <at most 3, a few words each>\n"
         "Roles: <comma-separated>\n"
-        "Locations: <comma-separated cities, Remote, or Any>\n"
-        "Type: <internship, full-time or both – internship if not given>\n"
-        "Experience: <fresher, or years – fresher if not given>\n"
+        "Home: <city, country – where the resume says they live or work now (current job, address); empty if it "
+        "doesn't say>\n"
+        "Nearby: <comma-separated cities a daily commute from Home, biggest job markets first (Noida -> Delhi, "
+        "Gurgaon, Greater Noida, Ghaziabad, Faridabad; Pune -> Pimpri-Chinchwad, Mumbai only if under 3 hours); empty "
+        "if Home is empty>\n"
+        "Region: <the metro area job sites use for Home and Nearby together, e.g. \"Delhi NCR\", \"Mumbai Metropolitan "
+        "Region\", \"Bengaluru\"; empty if Home is empty>\n"
+        "Locations: <the Locations field when filled in; otherwise Home, Nearby and Remote (e.g. \"Noida, Delhi, "
+        "Gurgaon, Remote\"); Any only when the field says Any or neither it nor the resume names a place – never "
+        "add Any yourself>\n"
+        "Type: <the field when filled in; otherwise internship for a student or fresher, full-time for someone with "
+        "work experience>\n"
+        "Experience: <the field when filled in; otherwise the resume's years of full-time work, e.g. \"2.5 years\" "
+        "(internships alone = fresher)>\n"
+        "Seniority: <fresher (no full-time work), junior (under 5 years) or mid (5 years or more)>\n"
+        "Skip titles: <title words above the Seniority – fresher and junior: Senior, Sr, Lead, Principal, Staff, "
+        "Architect, Manager, Head, Director; mid: Principal, Director, Head, VP>\n"
         "Min pay: <as given, or Any>\n"
+        "Posted within: <the Posted within field in days, or 14>\n"
         "Exclude: <comma-separated – always include unpaid and roles asking for a fee>\n"
         "WhatsApp: <the WhatsApp number field, digits with country code, or none>\n"
-        "Then, in at most 6 bullets: for each role, 3-4 search phrases job boards use (\"SDE Intern\", \"Software "
-        "Engineering Intern\", \"Backend Developer Intern\"; for full-time also \"Graduate Engineer Trainee\", \"Associate "
-        "Software Engineer\"). Never name companies – the collectors find them."
+        "Search phrases: <4-6 phrases separated by \" ; \", best first, each at most 4 words as job boards title "
+        "them, from the Roles and the Experience (\"SDE Intern\", \"Backend Developer Intern\"; full-time also "
+        "\"Graduate Engineer Trainee\", \"Associate Software Engineer\"); 2 of them add the strongest skill "
+        "(\"Python Developer FastAPI\"); never a word from Skip titles, never \"full-time\" or a company>\n"
+        "End with exactly 4 lines the person sees while the search runs: \"" + NOTE + "Looking for <first 2 Roles> in "
+        "<Home and Nearby, then Remote>, posted in the last <Posted within> days (<Experience>)\", then 3 lines \"" + NOTE + "Tip: <one "
+        "short, concrete tip for THIS resume – what to add, move up or reword to fit the Roles>\"."
     ),
 )
 
@@ -86,20 +138,29 @@ BOARDS = dict(
     role="job board researcher",
     goal="Find live openings on job boards that fit the profile.",
     instructions=(
-        "Search with the profile's phrases, in each of its Locations (Remote as a remote search). Use EVERY source you "
-        "have at least once: JobSpy search_jobs with site_name [\"indeed\", \"naukri\", \"glassdoor\", \"google\"] (never "
-        "linkedin – another step searches it), country_indeed \"india\" for Indian cities (the country's name "
-        "otherwise), hours_old 720, results_wanted 15, job_type \"internship\" for internships; Startup Jobs search_jobs "
-        "with q, country \"IN\" (or the location's code), employment_type \"internship\" or \"full-time\" and "
-        "posted_after 30 days back; Job Scout search_jobs with query, location, remoteOnly for Remote and postedAfter 30 "
-        "days back. At most 8 searches; aim for 10-25 jobs. " + JOB_RULES
+        SEARCH + TOGETHER + "Use EVERY source you have:\n"
+        "- JobSpy search_jobs (site_name [\"indeed\", \"naukri\", \"glassdoor\", \"google\"] – never linkedin, another "
+        "step searches it – results_wanted 30, country_indeed \"india\" for Indian places, the country's name "
+        "otherwise): 2 searches at Home with distance 30 (it reaches the Nearby cities), the first and second Search "
+        "phrase; 1 at the biggest Nearby city with the first phrase; 1 remote (is_remote true, location = the Home "
+        "country) with the first phrase. Each with google_search_term \"<phrase> jobs near <place> since <Posted "
+        "within> days\" and hours_old = Posted within × 24 – except internships: job_type \"internship\" and no "
+        "hours_old (Indeed can't take both); for full-time leave job_type out (its other values filter everything "
+        "away). A search with 0 jobs gets ONE retry with a shorter phrase (e.g. \"AI Engineer\") and no hours_old.\n"
+        "- Startup Jobs search_jobs: q = the first and second phrase (2 searches), country \"IN\" (or the Home "
+        "country's code), employment_type \"internship\" or \"full-time\", posted_after = Posted within days back, "
+        "limit 50.\n"
+        "- Job Scout search_jobs: query = the first phrase, location = Home, then once more remoteOnly true; "
+        "postedAfter = Posted within days back, limit 50.\n"
+        "At most 10 searches in that turn; if Startup Jobs gave a next_cursor, fetch that one next page after. "
+        + JOB_RULES
     ),
     needs=[
         need(JOBSPY, ["search_jobs"]),
         need(STARTUP_JOBS, ["search_jobs", "get_job"]),
         need(JOB_SCOUT, ["search_jobs", "list_company_jobs"]),
     ],
-    max_calls=10, timeout=150,
+    max_calls=12, timeout=150,
 )
 
 LINKEDIN_JOBS = dict(
@@ -107,13 +168,22 @@ LINKEDIN_JOBS = dict(
     role="LinkedIn job researcher",
     goal="Find live LinkedIn openings that fit the profile.",
     instructions=(
-        "Use LinkedIn search_jobs with keywords = one of the profile's phrases, location = one of its Locations, "
-        "date_posted \"past_month\", experience_level \"internship\" for internships and \"entry\" for fresher full-time "
-        "roles, work_type \"remote\" for Remote, max_pages 1. At most 3 searches (each takes about a minute), then "
-        "get_job_details for at most 6 of the best-looking jobs to read their requirements and pay. " + JOB_RULES
+        "LinkedIn rate-limits fast or parallel searches, so make ONE call per turn. " + SEARCH + "At most 4 "
+        "search_jobs, in this order: 1) the first Search phrase at Home, work_type \"on_site,hybrid\"; 2) the second "
+        "phrase at the biggest Nearby city (Home again if none), same work_type; 3) the first phrase, location = the "
+        "Home country, work_type \"remote\"; 4) only if 1-3 gave fewer than 10 jobs that fit, the third phrase at "
+        "Home. Each with "
+        "job_type \"internship\" for internships or \"full_time\", experience_level \"internship\" for internships, "
+        "\"entry\" for a fresher, \"entry,associate\" for junior, \"associate,mid_senior\" for mid, date_posted "
+        "\"past_week\" when Posted within is 7 or less (\"past_month\" otherwise), max_pages 2. Then pick from the "
+        "results: never a title with a Skip titles word, jobs not in promoted_job_ids first (promoted ones are "
+        "often senior), Home and Nearby before Remote – and get_job_details for at most 6 of them to read their "
+        "requirements and pay. If LinkedIn answers with a login or rate-limit error, stop calling it and answer with "
+        "what you have. " + JOB_RULES
     ),
     needs=[need(LINKEDIN, ["search_jobs", "get_job_details"])],
-    max_calls=9, timeout=150,
+    # One at a time: LinkedIn answers parallel searches with HTTP 429 and drops the session.
+    max_calls=10, timeout=150, side_by_side=False,
 )
 
 WEB = dict(
@@ -121,17 +191,20 @@ WEB = dict(
     role="internship web researcher",
     goal="Find openings on sites with no job-board connector: Internshala, Unstop, Wellfound, company career pages.",
     instructions=(
-        "Search the open web with the profile's phrases and Locations, one site at a time: Tavily search (or Firecrawl "
-        "search) with \"site:internshala.com\", \"site:unstop.com\", \"site:wellfound.com\" and \"careers\" pages of "
-        "companies hiring freshers, last 30 days. A result page that lists many jobs is not a job: open at most 4 "
-        "promising pages with Tavily extract or Firecrawl scrape and take the jobs from them. Found via = \"Tavily "
-        "(<site>)\" or \"Firecrawl (<site>)\". At most 8 calls. " + JOB_RULES
+        SEARCH + "Search the open web, one site per search: Tavily search (or Firecrawl search) with \"<first Search "
+        "phrase> <Home> site:internshala.com\", the same for site:unstop.com and site:wellfound.com, \"<first "
+        "phrase> <Region> site:naukri.com OR site:foundit.in\", \"<second phrase> <biggest Nearby city> careers\", "
+        "and one \"<first phrase> work from home <Home country>\" on internshala or wellfound – within Posted within "
+        "days. " + TOGETHER + "A result page that lists "
+        "many jobs is not a job: then open at most 5 promising pages with Tavily extract or Firecrawl scrape, together "
+        "in one turn, and take the jobs from them. Found via = \"Tavily (<site>)\" or \"Firecrawl (<site>)\". At most "
+        "12 calls. " + JOB_RULES
     ),
     needs=[
         need(TAVILY, ["tavily_search", "tavily_extract"]),
         need(FIRECRAWL, ["firecrawl_search", "firecrawl_scrape"]),
     ],
-    timeout=120,
+    max_calls=12, timeout=120,
 )
 
 CHECKER = dict(
@@ -143,11 +216,12 @@ CHECKER = dict(
         "from two sources is ONE row (keep the most complete one, Found via lists both). 2) Drop a job when: it asks "
         "the candidate to pay (registration, training, security or \"kit\" fee); it is unpaid when the profile's "
         "Exclude says unpaid; it has no company name or the company is a staffing agency posting for an unnamed client; "
-        "it asks to apply only by WhatsApp or a personal Gmail; its Posted date is more than 30 days ago or its Deadline "
-        "has passed; it has no Apply URL. 3) For at most 3 kept jobs whose Requirements cell is empty, read the post with "
+        "it asks to apply only by WhatsApp or a personal Gmail; its Posted date is older than the profile's Posted within "
+        "days or its Deadline has passed; it has no Apply URL. 3) For at most 3 kept jobs whose Requirements cell is empty, read the post with "
         "Firecrawl scrape and fill it in from the post's own words. Answer with the kept jobs as ONE markdown table, "
         "the same columns as your input, then a heading \"Dropped\" and one line per dropped job: <Company – Role>: "
-        "<reason>. Never add a job that was not in your input."
+        "<reason>. Never add a job that was not in your input. Last line: \"" + NOTE + "Checked <n> jobs: <kept> kept, "
+        "<duplicates> duplicates and <scams> fee-asking or fake posts removed\"."
     ),
     needs=[need(FIRECRAWL, ["firecrawl_scrape"])],
     max_calls=3, timeout=60,
@@ -156,18 +230,50 @@ CHECKER = dict(
 MATCHER = dict(
     name="Matcher",
     role="job fit scorer",
-    goal="Score every checked job against the student's profile and keep the best 15.",
+    goal="Score every checked job against the student's profile and keep every good match.",
     instructions=(
         "Your input is the PROFILE block and the Job Checker's table. Score each job 0-100: Skills 40 (how many of the "
         "post's required skills are in the profile's Skills or Projects), Eligibility 25 (degree, graduation year / "
-        "batch, experience – 0 if the post rules the student out), Location 15 (in Locations, or remote when Remote is "
-        "asked), Pay 10 (at or above Min pay; 5 if not stated), Freshness 10 (posted in the last 7 days). A job the "
-        "post rules the student out of (wrong batch, needs 2+ years for a fresher) goes, whatever its score. Keep the "
-        "best 15, highest first. Answer with ONLY one markdown table: Score | Company | Role | Location | Type | Pay | "
+        "batch, experience – 25 when the minimum years asked is at most the profile's Experience, 12 when it is up "
+        "to 1 year more, 0 if the post rules the student out), Location 15 (15 at Home, 13 in a Nearby city, 10 "
+        "remote and open to the Home country, 8 another city the Locations name, 3 elsewhere in the Home country), "
+        "Pay 10 (at or above Min pay; 5 if not stated), Freshness 10 (posted in the last 7 days). A job the "
+        "post rules the student out of (wrong batch, needs 2+ years for a fresher, more than Experience + 1 years, a "
+        "Skip titles word in the title, in another country and not remote-open to the Home country) goes, whatever "
+        "its score. Keep EVERY job scoring 50 or more – no limit – and order them nearest first: Home and Nearby "
+        "jobs, then Remote, then the rest, each group highest score first. Answer with ONLY one markdown table: Score | Company | Role | Location | Type | Pay | "
         "Posted | Deadline | Apply URL | Why it fits | Missing skills | Found via. Why it fits QUOTES the post's words "
         "it matched (\"React, Node.js\", \"2026 batch\"); Missing skills = what the post asks that the profile lacks, "
-        "or empty. Never invent a requirement."
+        "or empty. Never invent a requirement. Last line: \"" + NOTE + "<k> matches scored 50+ – best: <Score> · <Role> @ "
+        "<Company>\" (or \"" + NOTE + "No job scored 50+\")."
     ),
+    max_output_tokens=8000,
+)
+
+CONTACTS = dict(
+    name="Contact Finder",
+    role="recruiter contact researcher",
+    goal="Find the recruiters and published hiring contacts for the best matches.",
+    instructions=(
+        "Your input is the PROFILE block and the Matcher's table. For the jobs scoring 60 or more, best first, at most 10 "
+        "companies, look in three places. " + TOGETHER.replace("searches", "lookups of each kind") + "1) the post "
+        "itself: Firecrawl scrape the Apply URL of at most 4 posts that may name a recruiter or an email; 2) LinkedIn "
+        "search_people with keywords \"recruiter <Company>\" or \"talent acquisition <Company>\" and location = the "
+        "profile's Home city (at most 2 searches – LinkedIn rate-limits; skip it after a login or rate-limit error) – keep up to 2 people per company whose title says recruiter, talent "
+        "acquisition, HR or the hiring manager of the role's team; 3) the company's careers or contact page: Tavily "
+        "search or Firecrawl search \"<Company> careers email\" (at most 4) – an address printed there such as careers@ "
+        "or hr@. Answer with ONLY one markdown table: Company | Role | Name | Title | Email | Contact link | Source URL. "
+        "Email = only an address a page printed – never built from a name pattern, never a personal address or phone; "
+        "Contact link = the person's LinkedIn profile URL or the page; one row per person or contact point. A company "
+        "with nothing found gets one row with Name \"none found\". Never invent a person. Last line: \"" + NOTE + "Found "
+        "<p> recruiters and <e> hiring emails for <c> companies\"."
+    ),
+    needs=[
+        need(LINKEDIN, ["search_people"]),
+        need(FIRECRAWL, ["firecrawl_scrape", "firecrawl_search"]),
+        need(TAVILY, ["tavily_search"]),
+    ],
+    max_calls=14, timeout=90,
 )
 
 WRITER = dict(
@@ -175,23 +281,28 @@ WRITER = dict(
     role="career report writer",
     goal="Write one report: the matches, the skill gaps, and a cover letter for each top match.",
     instructions=(
-        "Your input is the PROFILE block and the Matcher's table. Write in Markdown, exactly these parts:\n"
+        "Your input is the PROFILE block, the Matcher's table and the Contact Finder's contacts. Write in Markdown, "
+        "exactly these parts:\n"
         "# Job matches – <today's date>\n"
-        "One line: how many matches, how many internships and full-time.\n"
+        "One line: how many matches, how many internships and full-time, how many near you (Home and Nearby), "
+        "remote and elsewhere.\n"
         "## Matches\n"
-        "The Matcher's table exactly as you received it (later steps copy its rows to a sheet).\n"
+        "EVERY row of the Matcher's table, in its order, with its columns as received plus two at the end: Contact (the "
+        "best contact for that company: \"<Name> (<Title>)\" or the email, empty if none found) and Contact link (its "
+        "LinkedIn URL, email or page). Later steps copy these rows to a sheet – never drop or change one.\n"
         "## Skill gaps\n"
         "At most 5 bullets: a skill asked by several matches that the profile lacks, how many asked for it, and one "
         "concrete way to learn or show it (a small project idea). \"None\" if there are none.\n"
         "## Cover letters\n"
         "For each match scoring 70 or more, best first, at most 5: a heading \"### <Company> – <Role>\", a line "
-        "\"To: <the recruiter's email if the post gave one, otherwise none>\", a line \"Subject: Application for <Role> "
-        "– <Name>\", then a cover letter of at most 150 words that names the role, links ONE real project or skill from "
+        "\"To: <the contact's email from the Contact Finder or the post, otherwise the word none>\", a line \"Subject: Application "
+        "for <Role> – <Name>\", then a cover letter of at most 150 words – \"Dear <contact's name>\" when you have one – "
+        "that names the role, links ONE real project or skill from "
         "the profile to ONE quoted requirement of the post, and asks for a conversation. Then \"Resume tips:\" with 2 "
         "bullets – what to move up or reword for this post. Never claim a skill, grade or experience the profile does "
         "not have. If no match scores 70, say \"No match scored 70 or more – no cover letters.\""
     ),
-    max_output_tokens=8000,
+    max_output_tokens=12000,
 )
 
 TRACKER_SAVER = dict(
@@ -202,14 +313,15 @@ TRACKER_SAVER = dict(
         "Your input is the approved report; its Matches table holds the jobs. Use exactly these calls:\n"
         f"1) search_spreadsheets with query \"{TRACKER}\" – take the spreadsheet titled exactly \"{TRACKER}\". If there is "
         f"none: create_spreadsheet with title \"{TRACKER}\", then list_sheets for its first sheet's name, then "
-        "update_cells on that sheet, range A1:K1, data [[" + ", ".join(f'"{c}"' for c in TRACKER_COLUMNS.split(" | ")) + "]].\n"
+        "update_cells on that sheet, range A1:M1, data [[" + ", ".join(f'"{c}"' for c in TRACKER_COLUMNS.split(" | ")) + "]].\n"
         "2) list_sheets (if you have not) and get_sheet_data for the first sheet – note every Apply URL already in "
-        "column I and the number of rows that have data, header included (N).\n"
+        "column I and the number of rows that have data, header included (N). If its header row ends at column "
+        f"{OLD_LAST} (an older tracker), update_cells range L1:M1, data [[" + ", ".join(f'"{c}"' for c in NEW_COLUMNS) + "]].\n"
         "3) The new jobs are the Matches rows whose Apply URL is not in the sheet. If there are none, answer \"Tracker: "
         "no new jobs – https://docs.google.com/spreadsheets/d/<id>\" and stop.\n"
-        "4) update_cells on the first sheet, range A<N+1>:K<N+k> for k new jobs, one row each: today's date "
-        "(YYYY-MM-DD), Company, Role, Location, Type, Pay, Score, Deadline, Apply URL, \"New\", Found via – copied from "
-        "the table, never changed.\n"
+        "4) ONE update_cells on the first sheet for ALL k new jobs, range A<N+1>:M<N+k>, one row each: today's date "
+        "(YYYY-MM-DD), Company, Role, Location, Type, Pay, Score, Deadline, Apply URL, \"New\", Found via, Contact, "
+        "Contact link – copied from the table, never changed.\n"
         "Then answer with ONLY: \"Tracker: <k> new jobs added – https://docs.google.com/spreadsheets/d/<id>\". Never say "
         "rows were added unless update_cells succeeded – on an error, answer with the error."
     ),
@@ -226,13 +338,14 @@ DRAFT_SAVER = dict(
         "Your input is the approved report; its Cover letters part holds the letters. If it has none, answer \"Gmail: "
         "no cover letters to save.\" and stop. If you have no Gmail tools, answer \"Gmail is not connected – drafts "
         "skipped.\" and stop. Otherwise call get_profile once for the student's own address, then create_draft once per "
-        "letter: to = the letter's To address, or the student's own address when it is none (they forward it or "
-        "paste it into the application form); subject = its Subject line; body_text = the letter exactly as written "
+        "letter: to = the letter's To address ONLY when it is a real email (has an @); when it says none, is empty or "
+        "is anything else, to = the student's own address from get_profile – never the word \"none\" (they forward "
+        "it or paste it into the application form); subject = its Subject line; body_text = the letter exactly as written "
         "(not the resume tips). Never send. Then answer with ONLY: \"Gmail: <n> drafts saved\" and, on the next lines, "
         "<Company – Role> for each. On an error, answer with the error."
     ),
     needs=[need(GMAIL, ["get_profile", "create_draft"])],
-    max_calls=7, timeout=60,
+    max_calls=7, timeout=60, runs_without_needs=True,
 )
 
 NOTIFIER = dict(
@@ -240,18 +353,19 @@ NOTIFIER = dict(
     role="job alert sender",
     goal="Send the student one short WhatsApp message with today's best matches.",
     instructions=(
-        "Your input is the PROFILE block, the approved report and the savers' answers (the tracker link, the "
-        "drafts). If the profile's "
+        "Your input is the PROFILE block and the approved report (the savers run beside you). If the profile's "
         "WhatsApp line is none, answer \"WhatsApp: no number given – skipped.\" and stop. If you have no WhatsApp tools, "
         "answer \"WhatsApp is not connected – skipped.\" and stop. Otherwise call send_message once, recipient = the "
-        "WhatsApp number (digits only, with country code), message = at most 8 lines: \"🎯 <k> job matches today\" "
+        "WhatsApp number (digits only, with country code), message = at most 9 lines: \"🎯 <k> job matches\" "
         "(k = rows in the report's Matches table), then its top 3 rows as \"<Score> · <Role> @ <Company> – <Apply "
-        "URL>\", then the tracker link from the Tracker Saver's answer, then \"<n> cover letters are in your Gmail "
-        "drafts\" when the Draft Saver saved any. Then answer with ONLY \"WhatsApp: sent\", or the error."
+        f"URL>\" (plus \" · <Contact>\" when it has one), then \"All <k> are going into your {TRACKER} sheet\", then "
+        "\"Cover letters for the top <n> are being saved to your Gmail drafts\" when the report has cover letters. Then "
+        "answer with ONLY \"WhatsApp: sent\", or the error."
     ),
     needs=[need(WHATSAPP, ["send_message"])],
-    max_calls=2, timeout=60,
+    max_calls=2, timeout=60, runs_without_needs=True,
 )
+
 
 
 def build() -> dict:
@@ -265,10 +379,11 @@ def build() -> dict:
             "variables": [
                 # All optional: the resume (attached, or in the knowledge base) fills in what's empty.
                 {"name": "roles", "label": "Roles you want", "description": "e.g. SDE Intern, Data Analyst – empty = from your resume"},
-                {"name": "locations", "label": "Locations", "description": "e.g. Bangalore, Pune, Remote – empty = anywhere"},
-                {"name": "job_type", "label": "Internship or full-time", "description": "internship, full-time or both – empty = internship"},
-                {"name": "experience", "label": "Experience", "description": "e.g. fresher, 1 year – empty = fresher"},
+                {"name": "locations", "label": "Locations", "description": "e.g. Bangalore, Pune, Remote – empty = your resume's city, the cities near it and Remote"},
+                {"name": "job_type", "label": "Internship or full-time", "description": "internship, full-time or both – empty = from your resume (internship for a fresher)"},
+                {"name": "experience", "label": "Experience", "description": "e.g. fresher, 1 year – empty = from your resume"},
                 {"name": "min_pay", "label": "Minimum stipend / salary", "description": "e.g. ₹10,000/month – empty = any"},
+                {"name": "posted_within", "label": "Posted within (days)", "type": "number", "description": "e.g. 7 – empty = 14"},
                 {"name": "skills", "label": "Skills", "description": "e.g. Python, React, SQL – empty = from your resume"},
                 {"name": "exclude", "label": "Never show", "description": "e.g. sales roles, these companies"},
                 {"name": "whatsapp", "label": "WhatsApp number for alerts", "description": "with country code, e.g. 919876543210 – empty = no message"},
@@ -281,14 +396,16 @@ def build() -> dict:
          "join_policy": {"mode": "count", "min_required": 1}},
         agent_node("k1", x(4), 300, **_llm(CHECKER)),
         agent_node("m1", x(5), 300, **_llm(MATCHER)),
-        agent_node("w1", x(6), 300, **_llm(WRITER)),
-        {"id": "ap", "type": "human_approval", "label": "Review the matches", "position": {"x": x(7), "y": 300},
+        agent_node("c1", x(6), 300, **_llm(CONTACTS)),
+        agent_node("w1", x(7), 300, **_llm(WRITER)),
+        {"id": "ap", "type": "human_approval", "label": "Review the matches", "position": {"x": x(8), "y": 300},
          "approval_message": "Review the matches and cover letters before they're added to your tracker sheet, saved as "
                              "Gmail drafts and sent to your WhatsApp."},
         # Approved just above, so the saves themselves don't ask again.
-        agent_node("s1", x(8), 180, **_llm(TRACKER_SAVER)),
-        agent_node("s2", x(8), 420, **_llm(DRAFT_SAVER)),
-        agent_node("wa", x(9), 300, **_llm(NOTIFIER)),
+        # Side by side: nothing here waits for another.
+        agent_node("s1", x(9), 120, **_llm(TRACKER_SAVER)),
+        agent_node("s2", x(9), 300, **_llm(DRAFT_SAVER)),
+        agent_node("wa", x(9), 480, **_llm(NOTIFIER)),
         {"id": "out", "type": "output", "label": "Job matches", "position": {"x": x(10), "y": 300},
          "output_config": {"format": "markdown", "compose": "off"}},
     ]
@@ -299,10 +416,11 @@ def build() -> dict:
         # The checker, matcher and writer each see the profile next to the jobs.
         ("b1", "k1"), ("j1", "k1"),
         ("b1", "m1"), ("k1", "m1"),
-        ("b1", "w1"), ("m1", "w1"),
+        ("b1", "c1"), ("m1", "c1"),
+        # The writer puts each match next to its contact.
+        ("b1", "w1"), ("m1", "w1"), ("c1", "w1"),
         ("w1", "ap"),
-        ("ap", "s1"), ("ap", "s2"),
-        ("b1", "wa"), ("ap", "wa"), ("s1", "wa"), ("s2", "wa"),
+        ("ap", "s1"), ("ap", "s2"), ("ap", "wa"), ("b1", "wa"),
         # The output gets the report (through the approval) and what each save did.
         ("ap", "out"), ("s1", "out"), ("s2", "out"), ("wa", "out"),
     ]
@@ -312,10 +430,11 @@ def build() -> dict:
         "description": (
             "Attach your resume (📎) and run it – every field is optional and is read from the resume when empty (or "
             "add the resume to the workflow's knowledge base for a daily schedule). Searches job boards, LinkedIn, "
-            "Internshala, Unstop and Wellfound live for internships and fresher jobs, drops duplicates, old posts and "
-            "scams, scores every job against your profile with the post's own words, writes cover letters for the best "
-            f"ones and – after you approve – adds new jobs to a Google Sheet called \"{TRACKER}\", saves the letters as "
-            "Gmail drafts and sends you a WhatsApp summary. Schedule it daily for fresh matches every morning."
+            "Internshala, Unstop and Wellfound live – for your resume's roles, skills and experience, in its city first, then the cities near it and remote, posted in the last 14 days – "
+            "drops duplicates, old posts and scams, scores every job against your profile with the post's own words, "
+            "finds recruiters and published hiring emails for the best ones, writes cover letters to them and – after "
+            f"you approve – adds every match to a Google Sheet called \"{TRACKER}\", saves the letters as Gmail drafts "
+            "and sends you a WhatsApp summary. Schedule it daily for fresh matches every morning."
         ),
         "nodes": nodes,
         "edges": edges,

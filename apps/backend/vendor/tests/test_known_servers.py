@@ -268,7 +268,7 @@ async def test_google_calendar_gets_its_files_not_the_id_as_a_path(tmp_path, mon
     })
     assert "GOOGLE_OAUTH_CREDENTIALS" not in creds and "GOOGLE_SERVICE_ACCOUNT_KEY" not in creds
 
-    params = await stdio.build_stdio_params("node", creds, home_dir=tmp_path / "home")
+    params = await stdio.build_stdio_params("node", creds, source_repo_url=row.source_repo_url, home_dir=tmp_path / "home")
     keys = json.loads(Path(params.env["GOOGLE_OAUTH_CREDENTIALS"]).read_text())
     assert keys["installed"]["client_id"] == "id.apps.googleusercontent.com"
     assert keys["installed"]["client_secret"] == "GOCSPX-x"
@@ -296,10 +296,16 @@ async def test_google_sheets_runs_the_package_with_a_token_file(tmp_path, monkey
     })
     assert "CREDENTIALS_PATH" not in creds
 
-    params = await stdio.build_stdio_params("uvx", creds, home_dir=tmp_path / "home")
+    params = await stdio.build_stdio_params("uvx --with 'mcp<2' mcp-google-sheets@0.6.3", creds, home_dir=tmp_path / "home")
     token = json.loads(Path(params.env["TOKEN_PATH"]).read_text())
     assert token == {"refresh_token": "rt", "client_id": "id", "client_secret": "secret",
                      "token_uri": "https://oauth2.googleapis.com/token"}
+
+    # Gmail starting for the same person leaves the Sheets token (and Calendar's) alone.
+    gmail = await stdio.build_stdio_params("uv run gmail-mcp", {"client_id": "id", "client_secret": "secret", "refresh_token": "gmail-rt"},
+                                           source_repo_url="https://github.com/jimsimoy/gmail-mcp", home_dir=tmp_path / "home")
+    assert "TOKEN_PATH" not in gmail.env and "GOOGLE_CALENDAR_MCP_TOKEN_PATH" not in gmail.env
+    assert json.loads(Path(params.env["TOKEN_PATH"]).read_text())["refresh_token"] == "rt"
 
 
 async def test_google_sheets_starts_before_anyone_signs_in(tmp_path, monkeypatch):
@@ -311,7 +317,7 @@ async def test_google_sheets_starts_before_anyone_signs_in(tmp_path, monkeypatch
         return "uvx", ["mcp-google-sheets@0.6.3"], None
 
     monkeypatch.setattr(stdio, "_prepare_local_repo_stdio", _prep)
-    params = await stdio.build_stdio_params("uvx", {"GOOGLE_CLIENT_ID": "id", "GOOGLE_CLIENT_SECRET": "secret"},
+    params = await stdio.build_stdio_params("uvx mcp-google-sheets@0.6.3", {"GOOGLE_CLIENT_ID": "id", "GOOGLE_CLIENT_SECRET": "secret"},
                                             home_dir=tmp_path / "home")
     token = json.loads(Path(params.env["TOKEN_PATH"]).read_text())
     assert token["token"] == "not-signed-in" and token["refresh_token"] == ""

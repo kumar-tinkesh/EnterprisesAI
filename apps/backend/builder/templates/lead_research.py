@@ -60,11 +60,13 @@ RESEARCH = {"approvals": {"read": False}, "reliability": {"retries": 1, "request
 
 
 def agent_node(node_id: str, x: int, y: int, *, name: str, role: str, goal: str, instructions: str,
-               needs: list[dict] | None = None, max_calls: int = 8, timeout: float = 30, **config) -> dict:
+               needs: list[dict] | None = None, max_calls: int = 8, timeout: float = 30, side_by_side: bool = True,
+               **config) -> dict:
     cfg = {
         **RESEARCH,
         "tool_needs": needs or [],
-        "tools": {"max_calls": max_calls, "timeout_seconds": timeout, "on_failure": "continue"},
+        "tools": {"max_calls": max_calls, "timeout_seconds": timeout, "on_failure": "continue",
+                  **({} if side_by_side else {"side_by_side": False})},
         "response": {"citations": "off"},
         **config,
     }

@@ -44,6 +44,9 @@ class ToolSettings(_Strict):
     max_calls: int = Field(default=8, ge=1, le=20)
     timeout_seconds: float = Field(default=30.0, ge=5, le=300)
     on_failure: Literal["retry", "continue", "stop"] = "continue"
+    # A turn's read-only calls run side by side (builder.agents.runtime); off for a system that rate-limits or
+    # can't take two at once (a logged-in browser session such as LinkedIn).
+    side_by_side: bool = True
 
 
 class ReliabilitySettings(_Strict):
@@ -154,6 +157,9 @@ class AgentConfig(_Strict):
     tool_ids: list[str] = Field(default_factory=list, max_length=50)
     # Systems whose tools are added at run time, once connected (ToolNeed).
     tool_needs: list[ToolNeed] = Field(default_factory=list, max_length=10)
+    # None of its (optional) systems connected: the step still runs, without their tools, instead of stopping
+    # the run — for an extra like a WhatsApp alert, whose instructions say what to answer then.
+    runs_without_needs: bool = False
     knowledge_base_ids: list[str] = Field(default_factory=list, max_length=10)
     response: ResponseSettings = Field(default_factory=ResponseSettings)
     tools: ToolSettings = Field(default_factory=ToolSettings)

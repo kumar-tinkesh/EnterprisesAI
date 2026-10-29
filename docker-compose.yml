@@ -36,6 +36,9 @@ services:
       # SQLite on a named volume by default; for Postgres use e.g.:
       # DATABASE_URL: postgresql+asyncpg://auth:auth@db:5432/auth
       DATABASE_URL: ${AUTH_DATABASE_URL:-sqlite+aiosqlite:////data/auth.db}
+      # Shares of the database's client limit (Supabase session mode: 15) — auth 3 + backend 4 + worker 6.
+      DB_POOL_SIZE: ${AUTH_DB_POOL_SIZE:-3}
+      DB_MAX_OVERFLOW: "0"
       BACKEND_CORS_ORIGINS: '["http://localhost:3000","http://127.0.0.1:3000","http://localhost:3001","http://127.0.0.1:3001"]'
       # Override secrets via .env at the repo root or your shell.
       CSRF_SECRET_KEY: ${CSRF_SECRET_KEY:-change-me-in-production}
@@ -165,6 +168,8 @@ services:
       BACKEND_API_V1_PREFIX: /api/v1
       # Reuse the same database as auth service
       DATABASE_URL: ${AUTH_DATABASE_URL:-sqlite+aiosqlite:////data/auth.db}
+      DB_POOL_SIZE: ${BACKEND_DB_POOL_SIZE:-4}
+      DB_MAX_OVERFLOW: "0"
       BACKEND_CORS_ORIGINS: '["http://localhost:3000","http://127.0.0.1:3000","http://localhost:3001","http://127.0.0.1:3001"]'
       # Share the same JWT settings as auth service
       JWT_ISSUER: enterprise-ai-auth
@@ -218,6 +223,8 @@ services:
     environment:
       ENV: production
       DATABASE_URL: ${AUTH_DATABASE_URL:-sqlite+aiosqlite:////data/auth.db}
+      DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:-6}
+      DB_MAX_OVERFLOW: "0"
       BUILDER_QUEUE_BACKEND: redis
       REDIS_URL: redis://redis:6379/0
     volumes:

@@ -17,6 +17,7 @@ itself is shared in the tenant.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import Any, Literal
 
 import jwt as pyjwt
@@ -355,4 +356,6 @@ async def run_events(websocket: WebSocket, run_id: str, token: str = Query(...))
         await stream_run_events(websocket, run_id)
     except (WebSocketDisconnect, RuntimeError, asyncio.CancelledError):
         return
-    await websocket.close(code=status.WS_1000_NORMAL_CLOSURE)
+    # The client may leave between the last event and the close.
+    with contextlib.suppress(WebSocketDisconnect, RuntimeError):
+        await websocket.close(code=status.WS_1000_NORMAL_CLOSURE)

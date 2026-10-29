@@ -679,12 +679,29 @@ function Steps({ steps, running }: { steps: SharedStep[]; running: boolean }) {
   const summary = running
     ? now ? `${now.title}… (step ${steps.indexOf(now) + 1} of ${steps.length})` : `Working… ${done} of ${steps.length} done`
     : `${steps.length} step${steps.length === 1 ? "" : "s"}${failed ? `, ${failed} failed` : ""}`;
+  // What the finished steps found so far, as they finish: something to read while it runs.
+  const notes = steps.flatMap((s) => (s.notes ?? []).map((text, i) => ({ key: `${s.id}-${i}`, text })));
   return (
     <div className="mb-2">
       <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="inline-flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-900 cursor-pointer">
         <ChevronRight className={cn("h-3.5 w-3.5 transition-transform", open && "rotate-90")} />
         {summary}
       </button>
+      {notes.length > 0 && (
+        <ul className="mt-1.5 space-y-1 rounded-lg border border-zinc-200 bg-[var(--surface)] px-3 py-2" aria-label="Progress">
+          {notes.map((n) => (
+            <li key={n.key} className="flex gap-2 text-xs text-zinc-700">
+              <ChevronRight className="mt-0.5 h-3 w-3 shrink-0 text-[var(--accent-hover)]" />
+              <span className="min-w-0 break-words">{n.text}</span>
+            </li>
+          ))}
+          {running && (
+            <li className="flex items-center gap-2 text-xs text-zinc-500">
+              <Spinner className="h-3 w-3" /> {now ? `${now.title}…` : "Working…"}
+            </li>
+          )}
+        </ul>
+      )}
       {open && (
         <ol className="mt-1.5 space-y-1 border-l-2 border-zinc-200 pl-3">
           {steps.map((s) => (

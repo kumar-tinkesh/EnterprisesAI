@@ -94,6 +94,12 @@ def start_instance(
         if hmac.compare_digest(_container_token(existing), token):
             if existing.status != "running":
                 existing.start()
+            elif _bridge_status(name, existing).get("status") != "connected":
+                # Connect always means a fresh QR: a bridge still waiting has an
+                # expired one (WhatsApp's last ~20-60s), or is stuck after a
+                # timeout or a logout. A linked session (kept in the volume) is
+                # left alone.
+                existing.restart(timeout=5)
             return {"status": "starting"}
         # Token rotated (e.g. after "forget"): a container's env is fixed at
         # creation, so recreate it — the session volume is kept.
@@ -144,9 +150,12 @@ def instance_status(instance_id: str, x_api_key: str | None = Header(None)):
         return {"status": "not_started", "qr": ""}
     if c.status != "running":
         return {"status": c.status, "qr": ""}
+    return _bridge_status(name, c)
 
-    # Proxy the bridge's own /api/status over the bridge network. A bridge
-    # still booting isn't answering HTTP yet — that's "starting", not an error.
+
+def _bridge_status(name: str, c) -> dict:
+    """Proxy the bridge's own /api/status over the bridge network. A bridge
+    still booting isn't answering HTTP yet — that's "starting", not an error."""
     req = urllib.request.Request(
         f"http://{name}:8080/api/status",
         headers={"X-Bridge-Token": _container_token(c)},

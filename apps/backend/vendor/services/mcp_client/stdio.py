@@ -1,6 +1,7 @@
 """Stdio transport execution, repo resolution, and OAuth credential files provisioning for mcp_client."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import shlex
@@ -25,6 +26,16 @@ _PACKAGE_RUNNER_COMMANDS = {
 
 _REPO_CLONE_TIMEOUT = 120  # seconds
 _REPO_BUILD_TIMEOUT = 120
+# One prepare (clone / npm install / build) per repo checkout at a time — they share its directory.
+_repo_locks: dict[str, asyncio.Lock] = {}
+
+
+async def _run(cmd: list[str], **kwargs):
+    """subprocess.run off the event loop: a clone or an npm build takes seconds, and on the loop it would
+    stall every other run on the worker (its queue reads time out meanwhile)."""
+    import subprocess
+
+    return await asyncio.to_thread(subprocess.run, cmd, **kwargs)
 
 
 def _python_module_base(root: Path, mod: str) -> Path | None:
@@ -333,46 +344,47 @@ async def _prepare_local_repo_stdio(
                     except OSError:
                         return False
 
-                if tmp_dir.exists() and not _has_manifest():
-                    logger.info("removing stale repo cache %s", tmp_dir)
-                    shutil.rmtree(tmp_dir, ignore_errors=True)
-
-                if not _has_manifest():
-                    try:
-                        subprocess.run(
-                            ["git", "clone", "--depth", "1", canonical_git_url, str(tmp_dir)],
-                            check=True,
-                            capture_output=True,
-                            timeout=_REPO_CLONE_TIMEOUT,
-                        )
-                    except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as clone_exc:
-                        logger.warning(
-                            "git clone failed for %s (%s); falling back to tarball download",
-                            canonical_git_url,
-                            clone_exc,
-                        )
+                async with _repo_locks.setdefault(str(tmp_dir), asyncio.Lock()):
+                    if tmp_dir.exists() and not _has_manifest():
+                        logger.info("removing stale repo cache %s", tmp_dir)
                         shutil.rmtree(tmp_dir, ignore_errors=True)
-                        await _fetch_repo_tarball(owner, repo, tmp_dir)
 
-                target_dir = (tmp_dir / subpath) if (subpath and (tmp_dir / subpath).is_dir()) else tmp_dir
+                    if not _has_manifest():
+                        try:
+                            await _run(
+                                ["git", "clone", "--depth", "1", canonical_git_url, str(tmp_dir)],
+                                check=True,
+                                capture_output=True,
+                                timeout=_REPO_CLONE_TIMEOUT,
+                            )
+                        except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as clone_exc:
+                            logger.warning(
+                                "git clone failed for %s (%s); falling back to tarball download",
+                                canonical_git_url,
+                                clone_exc,
+                            )
+                            shutil.rmtree(tmp_dir, ignore_errors=True)
+                            await _fetch_repo_tarball(owner, repo, tmp_dir)
 
-                if (target_dir / "package.json").exists():
-                    subprocess.run(
-                        ["npm", "install", "--no-audit", "--no-fund"],
-                        cwd=target_dir, capture_output=True, timeout=_REPO_BUILD_TIMEOUT,
-                    )
-                    subprocess.run(
-                        ["npm", "run", "build"],
-                        cwd=target_dir, capture_output=True, timeout=_REPO_BUILD_TIMEOUT,
-                    )
+                    target_dir = (tmp_dir / subpath) if (subpath and (tmp_dir / subpath).is_dir()) else tmp_dir
 
-                if (target_dir / "go.mod").exists():
-                    subprocess.run(
-                        ["go", "mod", "download"],
-                        cwd=target_dir, capture_output=True, timeout=_REPO_BUILD_TIMEOUT,
-                    )
+                    if (target_dir / "package.json").exists():
+                        await _run(
+                            ["npm", "install", "--no-audit", "--no-fund"],
+                            cwd=target_dir, capture_output=True, timeout=_REPO_BUILD_TIMEOUT,
+                        )
+                        await _run(
+                            ["npm", "run", "build"],
+                            cwd=target_dir, capture_output=True, timeout=_REPO_BUILD_TIMEOUT,
+                        )
 
-                cwd = str(target_dir)
+                    if (target_dir / "go.mod").exists():
+                        await _run(
+                            ["go", "mod", "download"],
+                            cwd=target_dir, capture_output=True, timeout=_REPO_BUILD_TIMEOUT,
+                        )
+
+                    cwd = str(target_dir)
 
                 from vendor.services import mcp_client
                 pick_fn = getattr(mcp_client, "_pick_local_entry", _pick_local_entry)
@@ -540,7 +552,11 @@ async def build_stdio_params(
         env.setdefault("CREDENTIALS_PATH", target_creds_path)
         env.setdefault("GOOGLE_OAUTH_CREDENTIALS", target_oauth_path)
 
-        if refresh_token:
+        # A person's servers share one home, so a server's own token file is written only when that server
+        # starts — another Google server's launch would put its token (and scopes) there ("invalid_scope").
+        launching = f"{command} {source_repo_url or ''}".lower()
+
+        if refresh_token and "google-calendar-mcp" in launching:
             # nspady/google-calendar-mcp keeps tokens per account in its own file; with no access token
             # it refreshes on start. Rewritten every launch, so a new sign-in takes effect.
             calendar_tokens = (home_dir or Path.home()) / ".config" / "google-calendar-mcp" / "tokens.json"
@@ -548,7 +564,7 @@ async def build_stdio_params(
             _write_private(calendar_tokens, json.dumps({"normal": {"refresh_token": refresh_token, "token_type": "Bearer"}}))
             env.setdefault("GOOGLE_CALENDAR_MCP_TOKEN_PATH", str(calendar_tokens))
 
-        if client_id and client_secret:
+        if client_id and client_secret and "mcp-google-sheets" in launching:
             # xing5/mcp-google-sheets reads a google-auth authorized-user file and won't start without
             # credentials. Signed in: the refresh token, refreshed at start. Not yet: a token marked
             # valid, so it starts and lists its tools (the vendor's Connect) and a call answers 401.

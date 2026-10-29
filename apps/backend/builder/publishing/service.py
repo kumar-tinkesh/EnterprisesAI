@@ -151,8 +151,9 @@ async def connection_problems(
     theirs: list[GraphProblem] = []
     for owner, tids in by_owner.values():
         theirs += await tool_problems(db, owner, tids, check_connection=True)
-    for needs in _needs_in(definition):
-        for p in need_problems(await resolve_needs(db, user, needs, user_for=lambda sid: owners.get(sid, user))):
+    for config in (AgentConfig.model_validate(a.get("config") or {}) for a in _agents_in(definition)):
+        states = await resolve_needs(db, user, config.tool_needs, user_for=lambda sid: owners.get(sid, user))
+        for p in need_problems(states, optional=config.runs_without_needs):
             (theirs if p.server_id in owners else problems).append(p)
     names = {s.id: s.name for s in (await db.execute(select(VendorMCPServer).where(VendorMCPServer.id.in_(list(owners) or [""])))).scalars()}
     messages = [p.message for p in problems] + [

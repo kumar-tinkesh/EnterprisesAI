@@ -58,6 +58,12 @@ class Settings(BaseSettings):
     # --- Database ---------------------------------------------------------
     DATABASE_URL: str = "sqlite+aiosqlite:///./auth.db"
     DB_ECHO: bool = False
+    # Connections this process keeps open / may open beyond that, and how long a session waits for one.
+    # Every process sharing a pooled database (Supabase session mode allows 15 clients in all) needs a
+    # share of that limit, or a burst of steps opens more and the pooler refuses them.
+    DB_POOL_SIZE: int = 5
+    DB_MAX_OVERFLOW: int = 10
+    DB_POOL_TIMEOUT: float = 30.0
 
     # --- JWT / RS256 ------------------------------------------------------
     JWT_PRIVATE_KEY: str = ""

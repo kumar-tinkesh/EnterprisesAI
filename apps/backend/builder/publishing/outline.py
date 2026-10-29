@@ -3,10 +3,16 @@
 The outline is the steps — their names, kinds and the apps each uses — and
 whether it asks before changing data. Never instructions, prompts, tool
 arguments or anything a step produced: those stay the publisher's (and, on a
-visitor link, the caller's own runs say only which step is where).
+visitor link, the caller's own runs say only which step is where — plus the
+step's notes, below).
 
-    outline(db, kind, definition) -> {"kind", "steps": [...], "apps": [...], "asks_before_changes"}
-    run_steps(db, run)            -> [{"id", "title", "kind", "status"}]
+    outline(db, kind, definition)      -> {"kind", "steps": [...], "apps": [...], "asks_before_changes"}
+    run_steps(db, run, notes=False)    -> [{"id", "title", "kind", "status", "notes"?}]
+
+**Notes.** A workflow step's answer may carry lines starting with "▸ " — a
+step written to show progress ("▸ LinkedIn: 7 jobs in Hyderabad"). They are
+for the person who runs it, so they're given only with ``notes`` (a run that
+is the caller's own, with their own apps), at most ``MAX_NOTES`` per step.
 """
 from __future__ import annotations
 
@@ -17,7 +23,7 @@ from vendor.models import VendorMCPServer
 
 from builder.agents.config import AgentConfig
 from builder.graph.schema import parse_tool_id
-from builder.models import BuilderRun, BuilderToolCall
+from builder.models import BuilderNodeRun, BuilderRun, BuilderToolCall
 from builder.workflows import scheduler as S
 
 # A step's own name when it has none; mirrors the canvas (web/lib/builder/graph.ts NODE_META).
@@ -30,6 +36,16 @@ KIND_HINT = {
     "condition": "Picks which way to go", "join": "Waits for the steps before it", "human_approval": "Waits for a person to approve",
     "output": "Writes the final answer",
 }
+NOTE_PREFIX = "▸"
+MAX_NOTES = 4
+
+
+def step_notes(text: str | None) -> list[str]:
+    """A step answer's "▸ " lines, in order (builder.publishing.outline: Notes)."""
+    lines = [ln.strip() for ln in (text or "").splitlines()]
+    return [_short(ln[len(NOTE_PREFIX):].strip(), 200) for ln in lines if ln.startswith(NOTE_PREFIX) and ln[1:].strip()][:MAX_NOTES]
+
+
 # How far a step got, in the words the page uses.
 STEP_STATUS = {S.DONE: "succeeded", S.FAILED: "failed", S.RUNNING: "running", S.PAUSED: "waiting", S.PRUNED: "skipped"}
 
@@ -134,19 +150,32 @@ async def outline(db: AsyncSession, kind: str, definition: dict) -> dict:
     return {"kind": kind, "steps": steps, "apps": apps, "asks_before_changes": asks}
 
 
-async def run_steps(db: AsyncSession, run: BuilderRun) -> list[dict]:
+async def run_steps(db: AsyncSession, run: BuilderRun, *, notes: bool = False) -> list[dict]:
     """How far each step of a run got: a workflow's working steps (not its
-    start and end), or the tools an agent called — names and status only."""
+    start and end), or the tools an agent called — names and status only
+    (and, with ``notes``, each step's "▸ " lines)."""
     if run.kind == "workflow":
         workflow = (run.definition or {}).get("workflow") or {}
         agents = (run.definition or {}).get("agents") or {}
         state = (run.state or {}).get("nodes") or {}
+        # A step's own row is written the moment it ends; the run's state only on the engine's next save, so
+        # a side-by-side step that finished would still show as running.
+        rows = (
+            await db.execute(select(BuilderNodeRun).where(BuilderNodeRun.run_id == run.id).order_by(BuilderNodeRun.created_at))
+        ).scalars().all()
+        latest = {r.node_id: r for r in rows}
         out = []
         for n in workflow.get("nodes") or []:
             if n.get("type") in ("input", "manual_trigger", "schedule_trigger", "output"):
                 continue
             status = STEP_STATUS.get((state.get(n.get("id")) or {}).get("status"), "pending")
-            out.append({"id": n.get("id"), "title": _title(n, agents, {}), "kind": n.get("type"), "status": status})
+            row = latest.get(n.get("id"))
+            if status == "running" and row is not None and row.status in ("succeeded", "failed"):
+                status = row.status
+            step = {"id": n.get("id"), "title": _title(n, agents, {}), "kind": n.get("type"), "status": status}
+            if notes:
+                step["notes"] = step_notes(row.output_text) if row is not None and status == "succeeded" else []
+            out.append(step)
         return out
     calls = (
         await db.execute(select(BuilderToolCall).where(BuilderToolCall.run_id == run.id).order_by(BuilderToolCall.created_at))
@@ -159,4 +188,4 @@ async def run_steps(db: AsyncSession, run: BuilderRun) -> list[dict]:
     ]
 
 
-__all__ = ["outline", "run_steps"]
+__all__ = ["MAX_NOTES", "NOTE_PREFIX", "outline", "run_steps", "step_notes"]

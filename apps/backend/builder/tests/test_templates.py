@@ -145,10 +145,34 @@ async def test_job_finder_template(db, tenant_client, tenant_user, runtime):
     assert r.status_code == 201, r.text
     wf = r.json()
     agents = [n for n in wf["nodes"] if n["type"] == "agent"]
-    assert len(agents) == 10 and all(n.get("agent_id") and not n.get("draft_agent") for n in agents)
+    assert len(agents) == 11 and all(n.get("agent_id") and not n.get("draft_agent") for n in agents)
     sources = lambda target: {e["source"] for e in wf["edges"] if e["target"] == target}  # noqa: E731
-    # Nothing is saved or sent before the approval.
-    assert sources("s1") == sources("s2") == {"ap"} and sources("wa") == {"b1", "ap", "s1", "s2"}
-    assert sources("m1") == {"b1", "k1"}
+    # Nothing is saved or sent before the approval, and the three after it don't wait for each other.
+    assert sources("s1") == sources("s2") == {"ap"} and sources("wa") == {"b1", "ap"}
+    assert sources("m1") == {"b1", "k1"} and sources("w1") == {"b1", "m1", "c1"}
     saved = {a.name: a for a in (await db.execute(select(BuilderAgent).where(BuilderAgent.workflow_id == wf["id"]))).scalars()}
     assert [n["system"] for n in saved["Tracker Saver"].config["tool_needs"]] == ["Google Sheets"]
+    # Gmail and WhatsApp are extras: without them their steps run and say they skipped.
+    assert {n for n, a in saved.items() if a.config.get("runs_without_needs")} == {"Draft Saver", "WhatsApp Notifier"}
+    # LinkedIn answers a burst of searches with 429: its collector calls it one at a time.
+    assert [n for n, a in saved.items() if a.config["tools"].get("side_by_side") is False] == ["LinkedIn Collector"]
+    # Every collector searches from the profile's lines – nearby cities and the level the resume says.
+    from builder.templates.job_finder import SEARCH
+    assert all(SEARCH in saved[n].instructions for n in ("Job Boards Collector", "LinkedIn Collector", "Web Collector"))
+    assert all(f"\n{line}:" in saved["Profile Builder"].instructions for line in ("Nearby", "Region", "Seniority", "Skip titles"))
+
+
+async def test_a_step_that_runs_without_its_systems(db, tenant_client, demo):
+    gleif = {"system": "GLEIF", "match": ["pipeworx-io/mcp-gleif"]}
+
+    async def problems(**config) -> list[dict]:
+        r = await tenant_client.post("/api/v1/builder/agents", json={
+            "name": "Alert", "role": "assistant", "goal": "Alert", "config": {"tool_needs": [gleif], **config},
+        })
+        r = await tenant_client.post(f"/api/v1/builder/agents/{r.json()['id']}/runs", json={"input": "go"})
+        return r.json().get("problems") or [] if r.status_code == 422 else []
+
+    assert (await problems())[0]["code"] == "need_missing"
+    assert await problems(runs_without_needs=True) == []
+    # A required system still stops it.
+    assert (await problems(runs_without_needs=True, tool_needs=[{**gleif, "required": True}]))[0]["code"] == "need_missing"
