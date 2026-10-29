@@ -185,6 +185,9 @@ services:
     volumes:
       - ./data:/data  # Shared database with auth service
       - ./data/.keys:/app/apps/auth/.keys  # Shared RSA keypair with auth service
+      - mcp_repos:/tmp/mcp_repos  # MCP servers built from GitHub (npm install / uv sync) – kept across restarts
+      - mcp_cache:/root/.cache    # uv / uvx packages
+      - npm_cache:/root/.npm
     networks:
       - default
       - whatsapp  # to reach users' bridge containers (token-guarded)
@@ -229,6 +232,11 @@ services:
       REDIS_URL: redis://redis:6379/0
     volumes:
       - ./data:/data
+      # Same as the backend's: a restart must not throw away the servers built from GitHub – rebuilding them
+      # takes minutes, longer than a run waits for a tool to start.
+      - mcp_repos:/tmp/mcp_repos
+      - mcp_cache:/root/.cache
+      - npm_cache:/root/.npm
     networks:
       - default
       - whatsapp  # agent runs call users' WhatsApp bridge containers
@@ -324,6 +332,9 @@ services:
 volumes:
   pgdata:
   redisdata:
+  mcp_repos:
+  mcp_cache:
+  npm_cache:
 
 networks:
   # Users' WhatsApp bridge containers live here, not on `default` — they have

@@ -11,7 +11,7 @@ PNPM := $(shell command -v pnpm >/dev/null 2>&1 && echo pnpm || echo "npx --yes 
 
 .PHONY: help install install-api install-web upgrade downgrade stamp revision \
         seed-admin api web test test-api test-web docker-up docker-dev docker-down clean help \
-        db-status db-check db-backup db-local db-supabase ngrok-up ngrok-down
+        db-status db-check db-backup db-local db-supabase ngrok-up ngrok-down mcp-warm mcp-rebuild
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -141,3 +141,11 @@ db-local: ## Run on data/auth.db (refreshed from Supabase first when reachable);
 
 db-supabase: ## Run on Supabase again (SUPABASE_DATABASE_URL in .env); YES=1 skips the question
 	@uv run python scripts/db.py supabase
+
+# ── MCP servers built from GitHub (npm install / uv sync) ──
+
+mcp-warm: ## Install/build every GitHub MCP server in the worker now (the worker also does it when it starts)
+	docker compose exec worker sh -c "cd apps/backend && python -m vendor.services.mcp_client.warm"
+
+mcp-rebuild: ## Throw away the built MCP servers and build them again: make mcp-rebuild [repo=tavily-ai_tavily-mcp]
+	docker compose exec worker sh -c "rm -rf /tmp/mcp_repos/$(if $(repo),$(repo),*) && cd apps/backend && python -m vendor.services.mcp_client.warm"

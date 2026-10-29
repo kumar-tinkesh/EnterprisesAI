@@ -39,7 +39,12 @@ async def main() -> None:
         loop.add_signal_handler(sig, stop.set)
     await worker.start()
     await worker.reap()  # pick up anything left behind by a previous worker right away
+    # Build the GitHub MCP servers now, not when a run first waits on one (vendor.services.mcp_client.warm).
+    from vendor.services.mcp_client.warm import warm_all
+
+    warm = asyncio.create_task(warm_all(), name="mcp-warm")
     await stop.wait()
+    warm.cancel()
     await worker.stop()
     await shutdown_pool()
 

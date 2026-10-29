@@ -6,6 +6,7 @@ import logging
 import os
 import shlex
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -25,7 +26,10 @@ _PACKAGE_RUNNER_COMMANDS = {
 }
 
 _REPO_CLONE_TIMEOUT = 120  # seconds
-_REPO_BUILD_TIMEOUT = 120
+# A first npm install of a server can take minutes; it is done once (see _PREPARED_MARKER).
+_REPO_BUILD_TIMEOUT = 300
+# Written into a checkout once npm install / build succeeded – later starts skip both.
+_PREPARED_MARKER = ".mcp-prepared"
 # One prepare (clone / npm install / build) per repo checkout at a time — they share its directory.
 _repo_locks: dict[str, asyncio.Lock] = {}
 
@@ -36,6 +40,27 @@ async def _run(cmd: list[str], **kwargs):
     import subprocess
 
     return await asyncio.to_thread(subprocess.run, cmd, **kwargs)
+
+
+def _has_npm_script(project_dir: Path, name: str) -> bool:
+    import json
+
+    try:
+        return name in (json.loads((project_dir / "package.json").read_text()).get("scripts") or {})
+    except (OSError, ValueError):
+        return False
+
+
+def _describe_build_error(exc: Exception) -> str:
+    import subprocess
+
+    if isinstance(exc, subprocess.TimeoutExpired):
+        return f"{' '.join(exc.cmd)} took more than {exc.timeout:.0f}s"
+    if isinstance(exc, subprocess.CalledProcessError):
+        err = exc.stderr.decode(errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+        tail = " ".join(err.strip().splitlines()[-3:])[:300]
+        return f"{' '.join(exc.cmd)} failed" + (f": {tail}" if tail else "")
+    return str(exc)
 
 
 def _python_module_base(root: Path, mod: str) -> Path | None:
@@ -368,15 +393,19 @@ async def _prepare_local_repo_stdio(
 
                     target_dir = (tmp_dir / subpath) if (subpath and (tmp_dir / subpath).is_dir()) else tmp_dir
 
-                    if (target_dir / "package.json").exists():
+                    # Installed and built once, not on every start: a checkout that has the marker is ready.
+                    marker = target_dir / _PREPARED_MARKER
+                    if (target_dir / "package.json").exists() and not marker.exists():
                         await _run(
                             ["npm", "install", "--no-audit", "--no-fund"],
-                            cwd=target_dir, capture_output=True, timeout=_REPO_BUILD_TIMEOUT,
+                            cwd=target_dir, capture_output=True, timeout=_REPO_BUILD_TIMEOUT, check=True,
                         )
-                        await _run(
-                            ["npm", "run", "build"],
-                            cwd=target_dir, capture_output=True, timeout=_REPO_BUILD_TIMEOUT,
-                        )
+                        if _has_npm_script(target_dir, "build"):
+                            await _run(
+                                ["npm", "run", "build"],
+                                cwd=target_dir, capture_output=True, timeout=_REPO_BUILD_TIMEOUT, check=True,
+                            )
+                        marker.touch()
 
                     if (target_dir / "go.mod").exists():
                         await _run(
@@ -402,6 +431,10 @@ async def _prepare_local_repo_stdio(
                     parts = found
         except Exception as exc:  # noqa: BLE001
             logger.warning("failed_to_prepare_local_repo %s: %s", git_url, exc)
+            # Starting the original command anyway only fails later with a confusing "Cannot find module
+            # '/app/apps/backend/build/index.js'" – say what went wrong instead.
+            if isinstance(exc, (subprocess.TimeoutExpired, subprocess.CalledProcessError)):
+                raise RuntimeError(f"couldn't set up {git_url}: {_describe_build_error(exc)}") from exc
 
     if not parts:
         raise ValueError(
