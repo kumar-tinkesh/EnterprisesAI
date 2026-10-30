@@ -41,7 +41,8 @@ from builder.workflows.nodes import RUNNERS, NodeOutcome, StepContext, run_trigg
 
 logger = logging.getLogger("builder.workflows.engine")
 
-PARALLEL_STEPS = 8
+# 8 search lanes of a job search, plus a step beside them.
+PARALLEL_STEPS = 12
 
 
 class LostLease(Exception):
@@ -278,7 +279,7 @@ async def execute_workflow(run: BuilderRun, user: CurrentUser, worker_id: str, *
                     state["sources"] = list(dict.fromkeys(state["sources"] + outcome.sources))
                     if outcome.final:
                         state["final"] = {"text": outcome.output, "node_id": node_id}
-                    S.complete(state, graph, node_id, outcome.output, take=outcome.take)
+                    S.complete(state, graph, node_id, outcome.output, take=outcome.take, routed=outcome.routed)
                     await emit(run.id, "node_status", node_id=node_id, status="succeeded", preview=outcome.output[:300])
                     continue
 

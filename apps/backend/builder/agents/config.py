@@ -47,6 +47,9 @@ class ToolSettings(_Strict):
     # A turn's read-only calls run side by side (builder.agents.runtime); off for a system that rate-limits or
     # can't take two at once (a logged-in browser session such as LinkedIn).
     side_by_side: bool = True
+    # Stop calling tools once the step has run this long and answer with what it has (a search lane that must not
+    # hold up the steps waiting on it). None = only max_calls limits it.
+    time_budget_seconds: float | None = Field(default=None, ge=10, le=1800)
 
 
 class ReliabilitySettings(_Strict):

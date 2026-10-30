@@ -23,6 +23,7 @@ export const NODE_META: Record<NodeType, { title: string; hint: string; tone: st
   join: { title: "Join", hint: "Waits for parallel branches", tone: "violet" },
   human_approval: { title: "Approval", hint: "Waits for a person to approve", tone: "rose" },
   output: { title: "Output", hint: "Shapes the final answer", tone: "zinc" },
+  code: { title: "Code", hint: "Sorts and checks, without AI", tone: "zinc" },
 };
 
 /** Steps the palette offers (a workflow has exactly one trigger, replaced not added). */

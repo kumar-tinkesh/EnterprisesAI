@@ -9,7 +9,9 @@ export type NodeType =
   | "condition"
   | "join"
   | "human_approval"
-  | "output";
+  | "output"
+  // Fixed logic a template adds (sorting, filtering) – no AI; not offered in the palette.
+  | "code";
 
 export type Risk = "read" | "edit" | "delete";
 
@@ -237,6 +239,8 @@ export interface WorkflowNode {
   } | null;
   join_policy?: { mode: "all" | "any" | "count"; min_required?: number | null } | null;
   approval_message?: string | null;
+  /** code: the registered function it runs (a template's sorting / filtering step). */
+  code?: string | null;
   output_config?: OutputConfig | null;
   /** schedule_trigger: when the workflow runs by itself. */
   schedule?: TriggerSchedule | null;

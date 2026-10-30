@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Handle, NodeToolbar, Position, type Node, type NodeProps } from "@xyflow/react";
 import {
-  AlertTriangle, BookOpen, Bot, CalendarClock, CheckCircle2, CircleDot, Copy, FileText, GitBranch, Hand, Loader2, LogIn, Merge,
+  AlertTriangle, BookOpen, Bot, CalendarClock, CheckCircle2, CircleDot, Code2, Copy, FileText, GitBranch, Hand, Loader2, LogIn, Merge,
   Play, PlayCircle, Plus, RotateCcw, Send, Settings2, Trash2, Unplug, Wrench, XCircle,
 } from "lucide-react";
 
@@ -85,6 +85,9 @@ const LOOK: Record<NodeType, Look> = {
   },
   output: {
     label: "Output", badge: "Output", hint: "Final answer", Icon: Send, head: "from-emerald-400 to-green-600",
+  },
+  code: {
+    label: "Code", badge: "Code", hint: "Sorts and checks, without AI", Icon: Code2, head: "from-zinc-400 to-zinc-600",
   },
 };
 export const NODE_LOOK = LOOK;
@@ -309,6 +312,8 @@ function Body({ node, ctx }: { node: WorkflowNode; ctx: CanvasCtx }) {
           <Chip>Sources</Chip>
         </div>
       );
+    case "code":
+      return <p className="text-xs text-zinc-400">Runs {node.code || "code"} – no AI</p>;
   }
 }
 

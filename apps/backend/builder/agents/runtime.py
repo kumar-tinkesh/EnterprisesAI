@@ -645,6 +645,8 @@ async def run_agent(ctx: AgentContext) -> AgentResult:
             "cost_usd": None,
             "sources": [],
             "guardrails": [],
+            # Wall clock, so a resumed step still counts the time it already had (tools.time_budget_seconds).
+            "started_at": time.time(),
         }
         await _note(ctx, state, checked.flags)
         await _checkpoint(ctx, state)
@@ -693,9 +695,12 @@ async def run_agent(ctx: AgentContext) -> AgentResult:
                 cost_usd=state.get("cost_usd"),
             )
 
-        out_of_budget = state["tool_calls"] >= ctx.config.tools.max_calls
+        budget = ctx.config.tools.time_budget_seconds
+        out_of_time = bool(budget) and time.time() - state.setdefault("started_at", time.time()) >= budget
+        out_of_budget = out_of_time or state["tool_calls"] >= ctx.config.tools.max_calls
         if out_of_budget and not state.get("budget_note"):
-            messages.append({"role": "system", "content": "You have used all the tool calls allowed for this task. Answer now with what you have."})
+            used = "the time" if out_of_time else "all the tool calls"
+            messages.append({"role": "system", "content": f"You have used {used} allowed for this task. Answer now with what you have."})
             state["budget_note"] = True
         live = _Live(ctx, state["turn"] + 1) if _streams(ctx) else None
         response = await _complete(ctx, messages, None if out_of_budget else (tool_defs or None), live)

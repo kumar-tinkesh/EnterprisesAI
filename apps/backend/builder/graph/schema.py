@@ -24,6 +24,7 @@ NodeType = Literal[
     "join",
     "human_approval",
     "output",
+    "code",
 ]
 TRIGGER_TYPES = frozenset({"input", "manual_trigger", "schedule_trigger"})
 NODE_TYPES = frozenset(NodeType.__args__)
@@ -100,6 +101,8 @@ class WorkflowNode(BaseModel):
     join_policy: JoinPolicy | None = None
     # human_approval
     approval_message: str | None = Field(default=None, max_length=2000)
+    # code: which registered function runs (builder.workflows.code_steps) – fixed logic, no AI
+    code: str | None = Field(default=None, max_length=100)
     # output (builder.graph.output_config)
     output_config: dict[str, Any] | None = None
     # schedule_trigger: {"cron": "0 9 * * 1-5", "timezone": "Asia/Kolkata",

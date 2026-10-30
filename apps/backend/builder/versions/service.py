@@ -36,6 +36,7 @@ WORKFLOW_FIELDS = ("name", "description", "nodes", "edges", "config")
 _STEP_TITLES = {
     "input": "Input", "manual_trigger": "Manual trigger", "schedule_trigger": "Schedule", "agent": "Agent",
     "tool": "Tool", "condition": "Condition", "join": "Join", "human_approval": "Approval", "output": "Output",
+    "code": "Code",
 }
 
 

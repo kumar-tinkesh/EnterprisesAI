@@ -111,6 +111,8 @@ def _describe(nodes: list[dict], edges: list[dict], agents: dict[str, dict]) -> 
             detail = f" does: {n.get('need') or n.get('tool_id') or '(no tool yet)'}"
         elif n.get("type") == "human_approval":
             detail = f" asks: {n.get('approval_message') or ''}"
+        elif n.get("type") == "code":
+            detail = f" runs: {n.get('code')}"
         elif n.get("type") in ("output", "condition", "join"):
             cfg = n.get("output_config") or n.get("condition_config") or n.get("join_policy")
             detail = f" {json.dumps(cfg)}" if cfg else ""

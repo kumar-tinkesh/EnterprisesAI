@@ -145,21 +145,34 @@ async def test_job_finder_template(db, tenant_client, tenant_user, runtime):
     assert r.status_code == 201, r.text
     wf = r.json()
     agents = [n for n in wf["nodes"] if n["type"] == "agent"]
-    assert len(agents) == 11 and all(n.get("agent_id") and not n.get("draft_agent") for n in agents)
+    assert len(agents) == 19 and all(n.get("agent_id") and not n.get("draft_agent") for n in agents)
+    assert {n["id"]: n["code"] for n in wf["nodes"] if n["type"] == "code"} == {
+        "cf": "job_filter", "rk": "job_rank", "rp": "job_report"}
     sources = lambda target: {e["source"] for e in wf["edges"] if e["target"] == target}  # noqa: E731
-    # Nothing is saved or sent before the approval, and the three after it don't wait for each other.
-    assert sources("s1") == sources("s2") == {"ap"} and sources("wa") == {"b1", "ap"}
-    assert sources("m1") == {"b1", "k1"} and sources("w1") == {"b1", "m1", "c1"}
+    lanes = {f"l{i}" for i in range(1, 9)}
+    # Eight lanes side by side, all from the profile; the join also gets the tracker's URLs.
+    assert all(sources(lane) == {"b1"} for lane in lanes) and sources("j1") == lanes | {"sj"}
+    assert sources("cf") == {"b1", "j1"} and all(sources(f"m{i}") == {"cf"} for i in range(1, 5))
+    assert sources("rk") == {"cf", "j2"} and sources("rp") == {"rk", "c1", "w1"}
+    # Auto: no approval step, and the saves don't wait for each other.
+    assert not [n for n in wf["nodes"] if n["type"] == "human_approval"]
+    assert sources("s1") == sources("s2") == {"rp"} and sources("wa") == {"b1", "rp"}
+    assert wf["config"]["approval_overrides"]["edit"] == "never"
+    # A failed lane isn't run again: the join goes on without it.
+    assert all(n.get("retry") == {"max_attempts": 1} for n in wf["nodes"] if n["id"] in lanes)
     saved = {a.name: a for a in (await db.execute(select(BuilderAgent).where(BuilderAgent.workflow_id == wf["id"]))).scalars()}
     assert [n["system"] for n in saved["Tracker Saver"].config["tool_needs"]] == ["Google Sheets"]
-    # Gmail and WhatsApp are extras: without them their steps run and say they skipped.
-    assert {n for n, a in saved.items() if a.config.get("runs_without_needs")} == {"Draft Saver", "WhatsApp Notifier"}
-    # LinkedIn answers a burst of searches with 429: its collector calls it one at a time.
-    assert [n for n, a in saved.items() if a.config["tools"].get("side_by_side") is False] == ["LinkedIn Collector"]
-    # Every collector searches from the profile's lines – nearby cities and the level the resume says.
+    # Gmail, WhatsApp and the tracker read are extras: without them their steps run and say they skipped.
+    assert {n for n, a in saved.items() if a.config.get("runs_without_needs")} == {"Draft Saver", "WhatsApp Notifier", "Seen Jobs"}
+    # LinkedIn answers a burst of searches with 429: its lane calls it one at a time.
+    assert [n for n, a in saved.items() if a.config["tools"].get("side_by_side") is False] == ["LinkedIn"]
+    # Every lane has a time budget, so the join never waits long on one source.
+    lane_agents = [saved[n["label"]] for n in wf["nodes"] if n["id"] in lanes]
+    assert all(a.config["tools"]["time_budget_seconds"] for a in lane_agents)
+    # Every lane searches from the profile's lines – nearby cities and the level the resume says.
     from builder.templates.job_finder import SEARCH
-    assert all(SEARCH in saved[n].instructions for n in ("Job Boards Collector", "LinkedIn Collector", "Web Collector"))
-    assert all(f"\n{line}:" in saved["Profile Builder"].instructions for line in ("Nearby", "Region", "Seniority", "Skip titles"))
+    assert all(SEARCH in a.instructions for a in lane_agents)
+    assert all(f"\n{line}:" in saved["Profile Builder"].instructions for line in ("Nearby", "Region", "Seniority", "Skip titles", "Query", "Target"))
 
 
 async def test_a_step_that_runs_without_its_systems(db, tenant_client, demo):
@@ -176,3 +189,51 @@ async def test_a_step_that_runs_without_its_systems(db, tenant_client, demo):
     assert await problems(runs_without_needs=True) == []
     # A required system still stops it.
     assert (await problems(runs_without_needs=True, tool_needs=[{**gleif, "required": True}]))[0]["code"] == "need_missing"
+
+
+def test_job_finder_code_steps():
+    """Filter -> Rank -> Report on a small sample: duplicates merged, old / fee / senior / tracked jobs dropped,
+    one batch per Matcher, 50+ kept nearest first."""
+    import json
+    from datetime import date, timedelta
+
+    from builder.templates.job_finder_steps import job_filter, job_rank, job_report
+    from builder.workflows.code_steps import CodeInput
+
+    today, old = date.today().isoformat(), (date.today() - timedelta(days=40)).isoformat()
+    profile = ("PROFILE\nSkills: Python, LangChain\nRoles: Generative AI Engineer\nHome: Noida, India\nNearby: Delhi\n"
+               "Type: full-time\nSkip titles: Senior, Lead\nPosted within: 14\nTarget: 1\nExclude: unpaid, roles asking for a fee")
+    j = lambda **k: json.dumps(k)  # noqa: E731
+    lanes = "\n\n".join([
+        "--- Indeed ---\n" + "\n".join([
+            j(company="Acme AI", role="Generative AI Engineer", location="Noida", job_type="full-time", posted=today,
+              url="https://in.indeed.com/viewjob?jk=1&utm_source=x", requirements="Python, LangChain"),
+            j(company="Old Co", role="AI Engineer", location="Delhi", posted=old, url="https://x.com/old"),
+            j(company="Big Co", role="Senior AI Engineer", location="Delhi", url="https://x.com/sr"),
+            j(company="Scam", role="AI Engineer", location="Delhi", url="https://x.com/s", requirements="registration fee"),
+        ]),
+        "--- LinkedIn ---\n" + "\n".join([
+            j(company="ACME AI", role="Generative AI Engineer", url="https://linkedin.com/jobs/view/9", pay="15 LPA"),
+            j(company="Remote Inc", role="Python Developer", location="Remote", work_type="remote", url="https://r.io/1"),
+            j(company="Seen Co", role="AI Engineer", location="Noida", url="https://seen.com/1"),
+        ]),
+        "--- Seen Jobs ---\nSEEN\nhttps://seen.com/1",
+    ])
+    f = job_filter(CodeInput(parts=[("Profile Builder", profile), ("All jobs", lanes)], request="",
+                             targets=[("m1", "agent"), ("m2", "agent"), ("m3", "agent"), ("rk", "code")]))
+    jobs = json.loads(f.routed["rk"])["jobs"]
+    assert [x["company"] for x in jobs] == ["Acme AI", "Remote Inc"]
+    assert jobs[0]["pay"] == "15 LPA" and "LinkedIn" in jobs[0]["source"]  # the duplicate's details are kept
+    assert '"id": "J1"' in f.routed["m1"] and '"id": "J2"' in f.routed["m2"] and f.routed["m3"] == "NO JOBS"
+
+    scores = "--- Matcher 1 ---\n" + j(id="J1", score=82, why="Python") + "\n--- Matcher 2 ---\n" + j(id="J2", score=64)
+    r = job_rank(CodeInput(parts=[("Code Filter", f.routed["rk"]), ("All scores", scores)], request="",
+                           targets=[("w1", "agent"), ("rp", "code")]))
+    ranked = json.loads(r.routed["rp"])
+    assert [x["company"] for x in ranked["top"]] == ["Acme AI"] and [x["company"] for x in ranked["extra"]] == ["Remote Inc"]
+
+    contact = j(company="Acme AI", name="Riya", title="Recruiter", link="https://linkedin.com/in/riya")
+    report = job_report(CodeInput(parts=[("Rank", r.routed["rp"]), ("Contact Finder", contact),
+                                         ("Report Writer", "## Skill gaps\nNone")], request="", targets=[])).output
+    assert "## Matches" in report and "## More matches" in report and "Riya (Recruiter)" in report
+    assert report.splitlines()[2].startswith("2 matches scored 50+")

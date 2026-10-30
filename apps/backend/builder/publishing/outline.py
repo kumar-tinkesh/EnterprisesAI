@@ -29,12 +29,12 @@ from builder.workflows import scheduler as S
 # A step's own name when it has none; mirrors the canvas (web/lib/builder/graph.ts NODE_META).
 KIND_TITLE = {
     "input": "Input", "manual_trigger": "Start", "schedule_trigger": "Schedule", "agent": "Agent", "tool": "Tool",
-    "condition": "Decide", "join": "Join", "human_approval": "Approval", "output": "Answer",
+    "condition": "Decide", "join": "Join", "human_approval": "Approval", "output": "Answer", "code": "Process",
 }
 KIND_HINT = {
     "input": "What you type", "manual_trigger": "Starts when you run it", "schedule_trigger": "Starts on a schedule",
     "condition": "Picks which way to go", "join": "Waits for the steps before it", "human_approval": "Waits for a person to approve",
-    "output": "Writes the final answer",
+    "output": "Writes the final answer", "code": "Sorts and checks, without AI",
 }
 NOTE_PREFIX = "▸"
 MAX_NOTES = 4

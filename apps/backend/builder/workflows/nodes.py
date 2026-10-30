@@ -52,6 +52,7 @@ class NodeOutcome:
     output: str = ""
     error: str | None = None
     take: set[str] | None = None  # condition: targets to go on to
+    routed: dict[str, str] | None = None  # code: the text a given next step gets instead of ``output``
     final: bool = False  # output step: this is the run's answer
     sources: list[str] = field(default_factory=list)
     never_skip: bool = False  # a person (or a guardrail) said no: don't paper over it with "skip"
@@ -385,6 +386,23 @@ async def run_join(ctx: StepContext) -> NodeOutcome:
     return NodeOutcome(ok=True, output=ctx.input_text)
 
 
+async def run_code_step(ctx: StepContext) -> NodeOutcome:
+    from builder.workflows.code_steps import CodeInput, code_step
+
+    fn = code_step(ctx.node.get("code"))
+    if fn is None:
+        return NodeOutcome(ok=False, error=f"This step's code is missing: {ctx.node.get('code') or '(none)'}.")
+    targets = [
+        (t, ctx.graph.nodes[t]["type"]) for t in (ctx.graph.edges[e]["target"] for e in ctx.graph.out_edges[ctx.node_id])
+    ]
+    try:
+        result = fn(CodeInput(parts=list(ctx.parts), request=ctx.original_input, targets=targets))
+    except Exception as exc:  # noqa: BLE001 — a bug in the code fails this step, not the run's worker
+        logger.exception("code step %s failed", ctx.node.get("code"))
+        return NodeOutcome(ok=False, error=f"{ctx.node.get('code')} failed: {exc}")
+    return NodeOutcome(ok=True, output=result.output, routed=result.routed or None)
+
+
 async def run_human_approval(ctx: StepContext) -> NodeOutcome:
     if ctx.dry_run:
         await ctx.emit("node_note", node_id=ctx.node_id, message="Approved automatically: this is a test run.")
@@ -484,6 +502,7 @@ RUNNERS = {
     "join": run_join,
     "human_approval": run_human_approval,
     "output": run_output,
+    "code": run_code_step,
 }
 
 __all__ = ["NodeOutcome", "StepContext", "Paused", "RUNNERS", "run_trigger", "quick_llm", "shape_output", "KIND_MISSING_INPUT"]

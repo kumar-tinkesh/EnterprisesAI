@@ -872,7 +872,7 @@ function Editor({ id, onBack, onSwitch }: EditorProps) {
                     className="!hidden !rounded-xl !border !border-white/10 md:!block"
                     style={{ background: "#18181b" }}
                     maskColor="rgba(9,9,11,0.6)"
-                    nodeColor={(n) => ({ input: "#0ea5e9", manual_trigger: "#3b82f6", schedule_trigger: "#14b8a6", agent: "#8b5cf6", tool: "#f97316", condition: "#eab308", join: "#64748b", human_approval: "#f43f5e", output: "#10b981" })[(n.data as { node: WorkflowNode }).node.type] ?? "#6366f1"}
+                    nodeColor={(n) => ({ input: "#0ea5e9", manual_trigger: "#3b82f6", schedule_trigger: "#14b8a6", agent: "#8b5cf6", tool: "#f97316", condition: "#eab308", join: "#64748b", human_approval: "#f43f5e", output: "#10b981", code: "#71717a" })[(n.data as { node: WorkflowNode }).node.type] ?? "#6366f1"}
                   />
                 </ReactFlow>
 
