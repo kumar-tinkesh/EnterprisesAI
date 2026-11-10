@@ -268,6 +268,7 @@ export function ChatPanel({
   const [showInputs, setShowInputs] = useState(false);
   const [problems, setProblems] = useState<Problem[]>([]);
   const missingRequired = fields.filter((f) => f.required && !(values[f.name] ?? "").trim());
+  const filledCount = fields.filter((f) => (values[f.name] ?? "").trim()).length;
   const inputsOpen = showInputs || missingRequired.length > 0;
 
   // ── Files for the next message (agents only) ──
@@ -587,7 +588,11 @@ export function ChatPanel({
               >
                 <SlidersHorizontal className="h-4 w-4 text-zinc-500" /> Inputs
                 <span className={cn("text-xs font-normal", missingRequired.length ? "text-amber-700" : "text-zinc-500")}>
-                  {missingRequired.length ? `${missingRequired.length} required` : `${fields.length} filled in`}
+                  {missingRequired.length
+                    ? `${missingRequired.length} required`
+                    : filledCount
+                      ? `${filledCount} of ${fields.length} filled in`
+                      : `${fields.length} optional field${fields.length === 1 ? "" : "s"}`}
                 </span>
                 <ChevronDown className={cn("ml-auto h-4 w-4 text-zinc-500 transition-transform", inputsOpen && "rotate-180")} />
               </button>

@@ -365,7 +365,10 @@ export interface OverviewItem {
   last_run_at: string | null;
   last_status: RunStatus | null;
   running: number;
+  /** Waiting for a decision, started in the last week. */
   waiting: number;
+  /** Still waiting, but for over a week: most likely forgotten. */
+  stale_waiting: number;
   health_status: Health["status"];
   health_score: number | null;
   schedule: string | null;
@@ -374,7 +377,7 @@ export interface OverviewItem {
 }
 export interface Overview {
   days: number;
-  totals: { runs: number; succeeded: number; failed: number; running: number; waiting: number };
+  totals: { runs: number; succeeded: number; failed: number; running: number; waiting: number; stale_waiting: number };
   items: OverviewItem[];
 }
 
@@ -395,6 +398,8 @@ export interface InsightsWindow {
   failed: number;
   success_rate: number;
   avg_latency_ms: number;
+  /** The typical run's time: one very long run doesn't move it. */
+  median_latency_ms: number;
   /** Distinct agents/workflows that ran. */
   active: number;
 }
@@ -720,6 +725,8 @@ export interface Approval {
   created_at: string;
   /** Set when the run came in through a share link: whose request you're deciding on. */
   caller?: Caller | null;
+  /** Which agent/workflow it's for (in the approvals list). */
+  run?: { kind: "agent" | "workflow"; agent_id: string | null; workflow_id: string | null; name: string | null };
 }
 
 export interface OutboundDraft {

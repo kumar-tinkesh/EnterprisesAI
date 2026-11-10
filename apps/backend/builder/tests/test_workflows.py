@@ -214,6 +214,7 @@ async def test_tool_step_waits_for_approval_and_passes_its_input_on(tenant_clien
     assert (await get_run(tenant_client, run_id))["status"] == "waiting"
     [ask] = (await tenant_client.get("/api/v1/builder/approvals")).json()
     assert ask["kind"] == "tool_call" and ask["payload"]["arguments"] == {"text": "hello world"}
+    assert ask["run"]["kind"] == "workflow" and ask["run"]["workflow_id"] == wf["id"]  # a list can name what's waiting
     assert "Workflow step" in ask["payload"]["message"]
     await tenant_client.post(f"/api/v1/builder/approvals/{ask['id']}", json={"decision": "approve"})
     await w.drain()

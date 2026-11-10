@@ -263,12 +263,28 @@ async def list_approvals(
     if status_:
         query = query.where(BuilderApproval.status == status_)
     approvals = (await db.execute(query.order_by(BuilderApproval.created_at.desc()).limit(200))).scalars().all()
+    runs = {
+        r.id: r
+        for r in (await db.execute(
+            select(BuilderRun.id, BuilderRun.kind, BuilderRun.agent_id, BuilderRun.workflow_id, BuilderRun.caller_user_id, BuilderRun.definition)
+            .where(BuilderRun.id.in_({a.run_id for a in approvals}))
+        )).all()
+    } if approvals else {}
     # Runs started through a share link: whose request each one is.
-    run_callers = dict((await db.execute(
-        select(BuilderRun.id, BuilderRun.caller_user_id).where(BuilderRun.id.in_({a.run_id for a in approvals}), BuilderRun.caller_user_id.is_not(None))
-    )).tuples().all()) if approvals else {}
-    people = await callers_of(db, run_callers.values())
-    return [approval_view(a, people.get(run_callers.get(a.run_id, ""))) for a in approvals]
+    people = await callers_of(db, [r.caller_user_id for r in runs.values() if r.caller_user_id])
+
+    def view(a: BuilderApproval) -> dict:
+        r = runs.get(a.run_id)
+        out = approval_view(a, people.get(r.caller_user_id) if r is not None and r.caller_user_id else None)
+        # Which agent/workflow it's for, so a list can name it even when the run is old.
+        if r is not None:
+            out["run"] = {
+                "kind": r.kind, "agent_id": r.agent_id, "workflow_id": r.workflow_id,
+                "name": ((r.definition or {}).get(r.kind) or {}).get("name"),
+            }
+        return out
+
+    return [view(a) for a in approvals]
 
 
 @router.post("/approvals/{approval_id}")

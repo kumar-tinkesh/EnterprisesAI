@@ -207,8 +207,9 @@ export default function ExecutionsPage() {
   const matches = (i: Item, f: Filter) => {
     const s = i.stats;
     switch (f) {
-      case "attention": return !!s && (s.health_status === "needs_attention" || s.waiting > 0 || s.last_status === "failed");
-      case "live": return !!s && s.running + s.waiting > 0;
+      // What needs you now: a fresh decision, or a recent failure (an old one, or one left waiting for weeks, doesn't).
+      case "attention": return !!s && (s.health_status === "needs_attention" || s.waiting > 0 || (s.last_status === "failed" && recent(s.last_run_at)));
+      case "live": return !!s && s.running > 0;
       case "never": return !s?.last_run_at;
       case "scheduled": return !!s?.schedule;
       case "published": return (s?.published ?? 0) > 0;
@@ -424,6 +425,11 @@ function SortHead({ id, sort, onSort, right, children }: { id: Sort; sort: Sort;
   );
 }
 
+/** Within the last week: what "needs your attention" looks back over. */
+function recent(iso: string | null): boolean {
+  return !!iso && Date.now() - new Date(iso).getTime() < 7 * 86400000;
+}
+
 /** Running, waiting for you, or how ready it is: a dot and a word. */
 function StatusLabel({ s, className }: { s: OverviewItem | undefined; className?: string }) {
   const cls = cn("items-center gap-1.5 text-sm", className);
@@ -464,6 +470,13 @@ function Row({
   // What the columns don't show: when it runs on its own, where it's live, who owns it, which apps it uses.
   const extras: React.ReactNode[] = [];
   if (s?.schedule) extras.push(<span key="s" className="inline-flex items-center gap-1" title={s.next_run_at ? `Next: ${new Date(s.next_run_at).toLocaleString()}` : s.schedule}><CalendarClock className="h-3 w-3" /> {cronLabel(s.schedule)}</span>);
+  if (s?.stale_waiting) {
+    extras.push(
+      <span key="w" className="inline-flex items-center gap-1 text-amber-700" title="Waiting for a decision for over a week. Decide in its chat, or cancel it from the Dashboard.">
+        <ShieldAlert className="h-3 w-3" /> {s.stale_waiting} old approval{s.stale_waiting === 1 ? "" : "s"}
+      </span>,
+    );
+  }
   if (s?.published) extras.push(<span key="p" className="inline-flex items-center gap-1"><Globe className="h-3 w-3" /> Published</span>);
   if (!item.mine) extras.push(<span key="m" className="inline-flex items-center gap-1" title="Shared by a teammate"><Users className="h-3 w-3" /> Shared</span>);
   if (servers.length) {

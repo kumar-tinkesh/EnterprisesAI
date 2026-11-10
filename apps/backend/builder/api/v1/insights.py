@@ -10,6 +10,7 @@ schedules). Test-case runs and public-key calls have their own views.
 """
 from __future__ import annotations
 
+import statistics
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query
@@ -36,6 +37,7 @@ class Window(BaseModel):
     failed: int
     success_rate: float  # of the finished ones, 0–1
     avg_latency_ms: int  # of the finished ones that started
+    median_latency_ms: int  # the typical one: a single very long run doesn't move it
     active: int  # distinct agents/workflows that ran
 
 
@@ -81,6 +83,7 @@ def _window(rows: list) -> Window:
         failed=sum(1 for r in finished if r.status == states.FAILED),
         success_rate=round(ok / len(finished), 4) if finished else 0.0,
         avg_latency_ms=round(sum(latency) / len(latency)) if latency else 0,
+        median_latency_ms=round(statistics.median(latency)) if latency else 0,
         active=len({(r.kind, r.workflow_id if r.kind == "workflow" else r.agent_id) for r in rows}),
     )
 
@@ -117,24 +120,26 @@ async def insights(
         elif r.status == states.FAILED:
             bucket[1] += 1
 
+    # Busiest over the chart's days (both windows), among the ones that still exist.
     counts: dict[tuple[str, str], list] = {}
     for r in rows:
         target = r.workflow_id if r.kind == "workflow" else r.agent_id
-        if not target:
+        if not target or as_utc(r.created_at) < prev_start:
             continue
         c = counts.setdefault((r.kind, target), [0, 0, None])
         c[0] += 1
         c[1] += r.status == states.SUCCEEDED
         # The name it had when it ran, for ones deleted since.
         c[2] = c[2] or ((r.definition or {}).get(r.kind) or {}).get("name")
-    top = sorted(counts.items(), key=lambda kv: -kv[1][0])[:5]
-    agent_ids = [t for (k, t), _ in top if k == "agent"]
-    workflow_ids = [t for (k, t), _ in top if k == "workflow"]
+    agent_ids = [t for (k, t) in counts if k == "agent"]
+    workflow_ids = [t for (k, t) in counts if k == "workflow"]
     names: dict[str, str] = {}
     if agent_ids:
         names.update((await db.execute(select(BuilderAgent.id, BuilderAgent.name).where(BuilderAgent.id.in_(agent_ids)))).tuples().all())
     if workflow_ids:
         names.update((await db.execute(select(BuilderWorkflow.id, BuilderWorkflow.name).where(BuilderWorkflow.id.in_(workflow_ids)))).tuples().all())
+
+    top = sorted(((key, c) for key, c in counts.items() if key[1] in names), key=lambda kv: -kv[1][0])[:5]
 
     finished = [r for r in rows if r.status in states.TERMINAL]
     return InsightsOut(
@@ -166,7 +171,8 @@ class OverviewItem(BaseModel):
     last_run_at: datetime | None
     last_status: str | None
     running: int  # queued or running now
-    waiting: int  # waiting for a person
+    waiting: int  # waiting for a person (started in the last STALE_WAIT_DAYS days)
+    stale_waiting: int  # still waiting, but started longer ago than that: most likely forgotten
     health_status: str
     health_score: int | None
     schedule: str | None  # its cron, when an enabled schedule exists
@@ -180,6 +186,11 @@ class OverviewTotals(BaseModel):
     failed: int
     running: int
     waiting: int
+    stale_waiting: int
+
+
+# A run still waiting for a decision after this long is shown apart, as forgotten, not as needing you now.
+STALE_WAIT_DAYS = 7
 
 
 class OverviewOut(BaseModel):
@@ -206,17 +217,19 @@ async def overview(
         .where(BuilderRun.owner_id == user.id, BuilderRun.purpose == "run")
     )).all()
     live = {states.QUEUED, states.RUNNING}
+    stale_before = utcnow() - timedelta(days=STALE_WAIT_DAYS)
     per: dict[tuple[str, str], dict] = {}
     for r in rows:
         target = r.workflow_id if r.kind == "workflow" else r.agent_id
         if not target:
             continue
-        p = per.setdefault((r.kind, target), {"runs": 0, "ok": 0, "bad": 0, "daily": [0] * days, "last": None, "last_status": None, "running": 0, "waiting": 0})
+        p = per.setdefault((r.kind, target), {"runs": 0, "ok": 0, "bad": 0, "daily": [0] * days, "last": None, "last_status": None, "running": 0, "waiting": 0, "stale": 0})
         created = as_utc(r.created_at)
         if p["last"] is None or created > p["last"]:
             p["last"], p["last_status"] = created, r.status
         p["running"] += r.status in live
-        p["waiting"] += r.status == states.WAITING
+        if r.status == states.WAITING:
+            p["stale" if created < stale_before else "waiting"] += 1
         if created >= since:
             p["runs"] += 1
             p["ok"] += r.status == states.SUCCEEDED
@@ -233,12 +246,12 @@ async def overview(
 
     items = []
     for kind, t in targets:
-        p = per.get((kind, t.id)) or {"runs": 0, "ok": 0, "bad": 0, "daily": [0] * days, "last": None, "last_status": None, "running": 0, "waiting": 0}
+        p = per.get((kind, t.id)) or {"runs": 0, "ok": 0, "bad": 0, "daily": [0] * days, "last": None, "last_status": None, "running": 0, "waiting": 0, "stale": 0}
         h = await compute_health(db, user, t)
         sched = schedules.get((kind, t.id))
         items.append(OverviewItem(
             kind=kind, id=t.id, runs=p["runs"], succeeded=p["ok"], failed=p["bad"], daily=p["daily"],
-            last_run_at=p["last"], last_status=p["last_status"], running=p["running"], waiting=p["waiting"],
+            last_run_at=p["last"], last_status=p["last_status"], running=p["running"], waiting=p["waiting"], stale_waiting=p["stale"],
             health_status=h.status, health_score=h.score,
             schedule=sched.cron if sched else None, next_run_at=as_utc(sched.next_run_at) if sched else None,
             published=keys.get(t.id, 0),
@@ -248,6 +261,7 @@ async def overview(
         totals=OverviewTotals(
             runs=sum(i.runs for i in items), succeeded=sum(i.succeeded for i in items), failed=sum(i.failed for i in items),
             running=sum(i.running for i in items), waiting=sum(i.waiting for i in items),
+            stale_waiting=sum(i.stale_waiting for i in items),
         ),
         items=items,
     )
