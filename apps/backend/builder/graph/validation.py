@@ -211,6 +211,15 @@ def validate_graph(nodes: list[WorkflowNode], edges: list[WorkflowEdge]) -> list
 
             if code_step(n.code) is None:
                 problems.append(GraphProblem("code_missing", f"Step {_name(n)} runs code that doesn't exist: {n.code or '(none)'}.", n.id))
+            for need in n.tool_needs or []:
+                from pydantic import ValidationError
+
+                from builder.agents.config import ToolNeed
+
+                try:
+                    ToolNeed.model_validate(need)
+                except ValidationError:
+                    problems.append(GraphProblem("code_tool_need", f"Step {_name(n)} names a system it can't use: {need}.", n.id))
         elif n.type == "output":
             problem = config_problem(n.output_config)
             if problem:

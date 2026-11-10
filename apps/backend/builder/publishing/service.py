@@ -129,8 +129,10 @@ def input_fields(definition: dict) -> list[dict]:
 
 
 def _needs_in(definition: dict) -> list[list[ToolNeed]]:
-    """Each agent's ``tool_needs`` (systems it gets tools from once connected)."""
-    return [AgentConfig.model_validate(a.get("config") or {}).tool_needs for a in _agents_in(definition)]
+    """Each agent's ``tool_needs`` (systems it gets tools from once connected), and each code step's own."""
+    code = [[ToolNeed.model_validate(n) for n in node.get("tool_needs") or []]
+            for node in (definition.get("workflow") or {}).get("nodes") or [] if node.get("type") == "code"]
+    return [AgentConfig.model_validate(a.get("config") or {}).tool_needs for a in _agents_in(definition)] + [c for c in code if c]
 
 
 async def connection_problems(

@@ -103,6 +103,9 @@ class WorkflowNode(BaseModel):
     approval_message: str | None = Field(default=None, max_length=2000)
     # code: which registered function runs (builder.workflows.code_steps) – fixed logic, no AI
     code: str | None = Field(default=None, max_length=100)
+    # code: the systems whose tools it calls itself, in an agent's tool_needs shape (builder.agents.config.ToolNeed)
+    # – fixed calls a template knows in advance, made through the run's ledger (builder.workflows.code_steps).
+    tool_needs: list[dict[str, Any]] | None = Field(default=None, max_length=10)
     # output (builder.graph.output_config)
     output_config: dict[str, Any] | None = None
     # schedule_trigger: {"cron": "0 9 * * 1-5", "timezone": "Asia/Kolkata",

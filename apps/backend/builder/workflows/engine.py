@@ -32,7 +32,7 @@ from builder.graph.schema import TRIGGER_TYPES, WorkflowConfig
 from builder.models import BuilderNodeRun, BuilderRun
 from builder.pricing import add_cost
 from builder.runs import lease, states
-from builder.runs.db import session_factory, utcnow
+from builder.runs.db import is_transient, session_factory, utcnow
 from builder.runs.events import emit
 from builder.runs.tool_calls import Paused
 from builder.workflows import front_desk
@@ -266,6 +266,10 @@ async def execute_workflow(run: BuilderRun, user: CurrentUser, worker_id: str, *
                     await emit(run.id, "node_status", node_id=node_id, status="waiting")
                     continue
                 except Exception as exc:  # noqa: BLE001 — a bug in one step fails that step, not the worker
+                    if is_transient(exc):
+                        # The database dropped out, not the step: the whole run resumes from its checkpoint
+                        # (builder.runs.executor), instead of the step using up its tries.
+                        raise
                     logger.exception("workflow step crashed run=%s node=%s", run.id, node_id)
                     outcome = NodeOutcome(ok=False, error=f"Unexpected error: {exc}")
 
@@ -302,6 +306,11 @@ async def execute_workflow(run: BuilderRun, user: CurrentUser, worker_id: str, *
     except (LostLease, asyncio.CancelledError):
         await stop_all()
         raise asyncio.CancelledError()
+    except Exception as exc:
+        if is_transient(exc):
+            # The other steps stop too; what they recorded stays for the resume.
+            await stop_all()
+        raise
 
     state["active_seconds"] = active_before + (time.monotonic() - session_started)
     await _save(run.id, worker_id, state)

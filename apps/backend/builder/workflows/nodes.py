@@ -386,7 +386,70 @@ async def run_join(ctx: StepContext) -> NodeOutcome:
     return NodeOutcome(ok=True, output=ctx.input_text)
 
 
+class _StepTools:
+    """A code step's tool_needs, ready to call (``builder.workflows.code_steps.StepTools``): every call goes through
+    the run's ledger, so it is recorded, asks first when the approvals say so, and is answered from the record on a
+    resume."""
+
+    def __init__(self, ctx: StepContext, tools: dict[str, dict[str, object]]):
+        self.ctx, self.tools = ctx, tools
+
+    def has(self, system: str, tool: str | None = None) -> bool:
+        found = self.tools.get(system) or {}
+        return bool(found) and (tool is None or tool in found)
+
+    async def call(self, system: str, tool: str, arguments: dict, *, key: str, timeout: float = 60,
+                   ask: bool | None = None, note: str = ""):
+        from builder.workflows.code_steps import ToolAnswer
+
+        agent_tool = (self.tools.get(system) or {}).get(tool)
+        if agent_tool is None:
+            return ToolAnswer(text=f"{system} {tool} is not connected.", is_error=True)
+        ctx = self.ctx
+        approvals = ctx.approval_overrides.apply(ctx.approvals) if ctx.approval_overrides else ctx.approvals
+        if ask is not None:
+            approvals = ToolApprovalPolicy(read=approvals.read, edit=ask, delete=ask or approvals.delete)
+        site = CallSite(
+            run_id=ctx.run_id, node_run_id=ctx.node_run_id, node_id=ctx.node_id, user=ctx.user, approvals=approvals,
+            timeout=timeout, requester=f'Workflow step "{ctx.graph.label(ctx.node_id)}"' + (f" ({note})" if note else ""),
+            emit=ctx.emit,
+            dry_run=ctx.dry_run, tool_owners=ctx.tool_owners,
+        )
+        try:
+            outcome = await ledgered_call(site, agent_tool, f"{ctx.node_id}:a{ctx.attempt}:{key}", arguments)
+        except InvalidArguments as exc:
+            return ToolAnswer(text=f"{tool}: {exc.message} {'; '.join(exc.errors)}", is_error=True)
+        return ToolAnswer(text=outcome.text or "", structured=outcome.structured, is_error=outcome.is_error,
+                          declined=outcome.declined, arguments=outcome.arguments)
+
+
+async def _code_tools(ctx: StepContext) -> _StepTools | None:
+    """The node's tool_needs -> {system: {the name the template asked for: the server's tool}}."""
+    from builder.agents.config import ToolNeed
+    from builder.agents.needs import resolve_needs
+
+    needs = [ToolNeed.model_validate(n) for n in ctx.node.get("tool_needs") or []]
+    if not needs:
+        return None
+    async with session_factory() as db:
+        ready = [s for s in await resolve_needs(db, ctx.user, needs, user_for=lambda sid: ctx.tool_owners.get(sid, ctx.user))
+                 if s.status == "ready"]
+        found = await resolve_agent_tools(db, [t for s in ready for t in s.tool_ids])
+    out: dict[str, dict[str, object]] = {}
+    for state in ready:
+        mine = [t for t in found if t.server_id == state.server_id]
+        for want in state.need.tools:
+            w = want.lower()
+            hit = next((t for t in mine if t.tool_name.lower() == w), None) or next(
+                (t for t in mine if t.tool_name.lower().endswith(("_" + w, "-" + w))), None)
+            if hit is not None:
+                out.setdefault(state.need.system, {})[want] = hit
+    return _StepTools(ctx, out)
+
+
 async def run_code_step(ctx: StepContext) -> NodeOutcome:
+    import inspect
+
     from builder.workflows.code_steps import CodeInput, code_step
 
     fn = code_step(ctx.node.get("code"))
@@ -395,9 +458,22 @@ async def run_code_step(ctx: StepContext) -> NodeOutcome:
     targets = [
         (t, ctx.graph.nodes[t]["type"]) for t in (ctx.graph.edges[e]["target"] for e in ctx.graph.out_edges[ctx.node_id])
     ]
+
+    async def note(message: str) -> None:
+        await ctx.emit("node_note", node_id=ctx.node_id, message=message)
+
     try:
-        result = fn(CodeInput(parts=list(ctx.parts), request=ctx.original_input, targets=targets))
+        tools = await _code_tools(ctx)
+        result = fn(CodeInput(parts=list(ctx.parts), request=ctx.original_input, targets=targets, tools=tools, note=note))
+        if inspect.isawaitable(result):
+            result = await result
+    except Paused:
+        raise  # a person has to decide on one of its calls; the step runs again once they have
     except Exception as exc:  # noqa: BLE001 — a bug in the code fails this step, not the run's worker
+        from builder.runs.db import is_transient
+
+        if is_transient(exc):
+            raise  # the database dropped out: the run resumes from its checkpoint
         logger.exception("code step %s failed", ctx.node.get("code"))
         return NodeOutcome(ok=False, error=f"{ctx.node.get('code')} failed: {exc}")
     return NodeOutcome(ok=True, output=result.output, routed=result.routed or None)

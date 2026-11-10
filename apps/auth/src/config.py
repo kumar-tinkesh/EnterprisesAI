@@ -64,6 +64,13 @@ class Settings(BaseSettings):
     DB_POOL_SIZE: int = 5
     DB_MAX_OVERFLOW: int = 10
     DB_POOL_TIMEOUT: float = 30.0
+    # A query (or a connection attempt) that gets no answer in this long fails instead of waiting forever: a
+    # connection the network dropped without a word (a laptop resuming, a Wi-Fi change) otherwise hangs the
+    # step – and the worker's heartbeat – until someone restarts it.
+    DB_COMMAND_TIMEOUT: float = 30.0
+    DB_CONNECT_TIMEOUT: float = 15.0
+    # Connections older than this are replaced before use (the pooler drops idle ones on its own).
+    DB_POOL_RECYCLE: int = 300
 
     # --- JWT / RS256 ------------------------------------------------------
     JWT_PRIVATE_KEY: str = ""

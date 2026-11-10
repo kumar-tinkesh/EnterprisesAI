@@ -509,6 +509,8 @@ async def _run_call(
 
 # How many of one turn's read-only calls run at once (each also takes a database connection for a moment).
 MAX_PARALLEL_CALLS = 3
+# The answer to a call made after the step's tools.max_calls were used up.
+OVER_BUDGET = "Not run: this step has used all the tool calls it may make. Answer with what you have."
 
 
 def _runs_alongside(ctx: AgentContext, by_fn: dict[str, AgentTool], call: dict) -> bool:
@@ -659,9 +661,17 @@ async def run_agent(ctx: AgentContext) -> AgentResult:
         if turn is not None:
             answered = {m.get("tool_call_id") for m in messages if m["role"] == "tool"}
             pending = [(index, call) for index, call in enumerate(turn["tool_calls"]) if call["id"] not in answered]
-            done = await _run_turn_calls(ctx, by_fn, subs, pending, state)
+            # tools.max_calls holds within a turn too: a model asking for 30 searches at once gets the first ones
+            # run and the rest answered "not run" (every call still needs an answer).
+            left = max(ctx.config.tools.max_calls - state["tool_calls"], 0)
+            over = {call["id"] for _, call in pending[left:]}
+            done = await _run_turn_calls(ctx, by_fn, subs, pending[:left], state)
             # Answers go back in the order the model asked; the rest run one at a time, here.
             for index, call in pending:
+                if call["id"] in over:
+                    messages.append({"role": "tool", "tool_call_id": call["id"], "content": OVER_BUDGET})
+                    await _checkpoint(ctx, state)
+                    continue
                 if call["id"] in done:
                     text = done[call["id"]]
                     if isinstance(text, BaseException):

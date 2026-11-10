@@ -21,7 +21,7 @@ from builder.agents.runtime import AgentContext, AgentFailed, GuardrailBlocked, 
 from builder.config import get_builder_settings
 from builder.models import BuilderApproval, BuilderNodeRun, BuilderRun
 from builder.runs import lease, states
-from builder.runs.db import session_factory, utcnow
+from builder.runs.db import fresh_connections, is_transient, session_factory, utcnow
 from builder.runs.events import emit
 from builder.runs.queue import enqueue_run
 
@@ -84,10 +84,36 @@ async def execute(run_id: str, worker_id: str) -> None:
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 — a bug must fail the run, not wedge it
+            if is_transient(exc):
+                await _resume_later(run_id, worker_id, exc)
+                return
             logger.exception("workflow run crashed run=%s", run.id)
             await _finish(run_id, worker_id, states.FAILED, error=f"Unexpected error: {exc}")
     else:
         await _finish(run_id, worker_id, states.FAILED, error=f"Unknown run kind {run.kind!r}.")
+
+
+# How long a run waits before trying again after the database dropped out under it.
+RESUME_AFTER_SECONDS = 3.0
+
+
+async def _resume_later(run_id: str, worker_id: str, error: BaseException) -> None:
+    """The database dropped out under the run (a connection the network killed, a timeout): not the run's fault.
+    Put it back in the queue – it resumes from its checkpoint, steps that finished aren't run again, tool calls
+    that finished are answered from the ledger. Counted as an attempt, so a database that stays down still ends
+    it (RUN_MAX_ATTEMPTS). If even that write fails, the lease lapses and the reaper re-queues it."""
+    logger.warning("database dropped out under run=%s; resuming it from its checkpoint: %s", run_id, error)
+    try:
+        await fresh_connections()
+        await asyncio.sleep(RESUME_AFTER_SECONDS)
+        async with session_factory() as db:
+            run = await db.get(BuilderRun, run_id)
+            attempts = (run.attempts if run else 0) + 1
+        if await lease.release(run_id, worker_id, status=states.QUEUED, attempts=attempts):
+            await enqueue_run(run_id)
+            await emit(run_id, "run_status", status=states.QUEUED)
+    except Exception:  # noqa: BLE001 — the reaper picks it up once the lease lapses
+        logger.warning("couldn't re-queue run=%s now; the reaper will", run_id, exc_info=True)
 
 
 async def requeue_if_decided(run_id: str) -> None:
