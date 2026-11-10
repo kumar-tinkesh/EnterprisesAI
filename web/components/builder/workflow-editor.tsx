@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
 import {
   Background,
   BackgroundVariant,
@@ -17,7 +18,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import {
-  AlertTriangle, ArrowLeft, Check, ChevronDown, Eye, MessageSquare,
+  AlertTriangle, ArrowLeft, Check, ChevronDown, Eye, MessageSquare, MessagesSquare,
   Play, Plus, Redo2, RotateCcw, Save, Sparkles, Square, Undo2, Wand2, X,
 } from "lucide-react";
 
@@ -87,6 +88,8 @@ type EditorProps = {
   /** Kept for callers; the editor has no build bar any more, so it opens and leaves nothing through these. */
   onOpen: (target: BuildTarget) => void;
   onExit?: () => void;
+  /** Open its chat (Executions → Chat). Left out: go to that page. */
+  onChat?: () => void;
 };
 
 /** The workflow canvas (same chrome as the agent editor) for one saved workflow. */
@@ -110,7 +113,8 @@ function readStored<T extends string>(key: string, allowed: readonly T[], fallba
 /** How many editors have each workflow open (a page can swap one for another). */
 const openEditors = new Map<string, number>();
 
-function Editor({ id, onBack, onSwitch }: EditorProps) {
+function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
+  const router = useRouter();
   const token = useAuthStore((s) => s.accessToken) || "";
   const queryClient = useQueryClient();
   const flow = useReactFlow();
@@ -355,6 +359,13 @@ function Editor({ id, onBack, onSwitch }: EditorProps) {
       return false;
     }
   }, [dirty, save]);
+
+  // Its chat runs the saved version: save first, then go there.
+  const openChat = async () => {
+    if (!(await ensureSaved())) return;
+    if (onChat) onChat();
+    else router.push(`/user/executions?chat=workflow:${id}&tab=chat`);
+  };
 
   const aiEdit = useMutation({
     mutationFn: (text: string) =>
@@ -738,6 +749,9 @@ function Editor({ id, onBack, onSwitch }: EditorProps) {
             )}
             <Button size="sm" variant="outline" className={cn("hidden px-2 sm:inline-flex lg:px-3", playOpen && "bg-zinc-100")} onClick={() => setPlayOpen((o) => !o)} aria-label="Test in a chat" aria-pressed={playOpen}>
               <MessageSquare /> <span className="hidden lg:inline">Test</span>
+            </Button>
+            <Button size="sm" variant="outline" className="px-2 lg:px-3" onClick={() => void openChat()} aria-label="Chat" title="Open its chat: your chats, files and history">
+              <MessagesSquare /> <span className="hidden lg:inline">Chat</span>
             </Button>
             {running ? (
               <Button size="sm" variant="outline" className="px-2 lg:px-3" onClick={() => stopRun.mutate()} aria-label="Stop the run">

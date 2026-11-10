@@ -677,6 +677,12 @@ export function ChatPanel({
                   { label: "Show the answer as it's written", checked: streamOn, divided: true, onClick: () => setStreamOn(!streamOn) },
                 ]}
               />
+              {/* Why it can't send yet, right where the dimmed send button is. */}
+              {!busy && missingRequired.length > 0 && (
+                <span className="min-w-0 flex-1 truncate text-right text-xs text-amber-700" role="status">
+                  Fill in {missingRequired.map((f) => f.label || f.name).join(", ")} first
+                </span>
+              )}
               {busy && liveRunId ? (
                 <button
                   type="button"

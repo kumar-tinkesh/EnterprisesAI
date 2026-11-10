@@ -165,6 +165,8 @@ async def run_steps(db: AsyncSession, run: BuilderRun, *, notes: bool = False) -
         ).scalars().all()
         latest = {r.node_id: r for r in rows}
         out = []
+        # A step that gathers others (a join) repeats their lines: each line is shown once, where it first appears.
+        seen: set[str] = set()
         for n in workflow.get("nodes") or []:
             if n.get("type") in ("input", "manual_trigger", "schedule_trigger", "output"):
                 continue
@@ -174,7 +176,8 @@ async def run_steps(db: AsyncSession, run: BuilderRun, *, notes: bool = False) -
                 status = row.status
             step = {"id": n.get("id"), "title": _title(n, agents, {}), "kind": n.get("type"), "status": status}
             if notes:
-                step["notes"] = step_notes(row.output_text) if row is not None and status == "succeeded" else []
+                lines = step_notes(row.output_text) if row is not None and status == "succeeded" else []
+                step["notes"] = [line for line in lines if not (line in seen or seen.add(line))]
             out.append(step)
         return out
     calls = (

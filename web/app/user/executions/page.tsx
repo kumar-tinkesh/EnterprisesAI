@@ -174,6 +174,12 @@ export default function ExecutionsPage() {
     setEditing(false);
     setChatUrl(chat, false, detail);
   };
+  /** The editor's Chat button: back from the canvas, onto its Chat tab. */
+  const openChatTab = () => {
+    setEditing(false);
+    setDetail("chat");
+    setChatUrl(chat, false, "chat");
+  };
 
   const agents = useQuery({ queryKey: ["builder-agents"], queryFn: () => builderApi.listAgents(token), enabled: !!token });
   const workflows = useQuery({ queryKey: ["builder-workflows"], queryFn: () => builderApi.listWorkflows(token), enabled: !!token });
@@ -347,9 +353,9 @@ export default function ExecutionsPage() {
         {editing && chat ? (
           <section className="flex min-w-0 flex-1 flex-col [&>div]:h-full" aria-label="Editor">
             {chat.kind === "workflow" ? (
-              <WorkflowEditor key={chat.id} id={chat.id} onBack={closeEditor} onOpen={openEditor} onSwitch={(workflowId) => openEditor({ kind: "workflow", id: workflowId })} />
+              <WorkflowEditor key={chat.id} id={chat.id} onBack={closeEditor} onChat={openChatTab} onOpen={openEditor} onSwitch={(workflowId) => openEditor({ kind: "workflow", id: workflowId })} />
             ) : (
-              <AgentEditor key={chat.id} id={chat.id} onBack={closeEditor} onOpen={openEditor} />
+              <AgentEditor key={chat.id} id={chat.id} onBack={closeEditor} onChat={openChatTab} onOpen={openEditor} />
             )}
           </section>
         ) : (

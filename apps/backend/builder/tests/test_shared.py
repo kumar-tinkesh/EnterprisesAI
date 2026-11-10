@@ -470,3 +470,29 @@ async def test_a_visitor_sees_their_own_runs_step_notes(db, tenant_client, make_
     await worker(runtime).drain()
     done = (await visitor.get(f"{S}/{mine['share_slug']}/runs/{r.json()['run_id']}")).json()
     assert "notes" not in done["steps"][0]
+
+
+async def test_a_line_a_later_step_repeats_is_shown_once(db, tenant_client, make_user_client, gateway, runtime):
+    await visitor_account(db)
+    body = {
+        "name": "Finder",
+        "nodes": [
+            {"id": "in", "type": "input"},
+            {"id": "a", "type": "agent", "draft_agent": {"name": "Searcher", "role": "r", "goal": "Search"}},
+            {"id": "b", "type": "agent", "draft_agent": {"name": "Ranker", "role": "r", "goal": "Rank"}},
+            {"id": "out", "type": "output"},
+        ],
+        "edges": [
+            {"id": "e1", "source": "in", "target": "a"},
+            {"id": "e2", "source": "a", "target": "b"},
+            {"id": "e3", "source": "b", "target": "out"},
+        ],
+    }
+    wf = (await tenant_client.post(f"{B}/workflows", json=body)).json()
+    visitor = await make_user_client(outsider())
+    link = await publish(tenant_client, "workflows", wf["id"], share=True, tool_mode="visitor")
+    gateway([reply("▸ 60 jobs on Indeed"), reply("▸ 60 jobs on Indeed\n▸ 5 matches")])
+    r = await visitor.post(f"{S}/{link['share_slug']}/runs", json={"input": "go", "wait_seconds": 0})
+    await worker(runtime).drain()
+    done = (await visitor.get(f"{S}/{link['share_slug']}/runs/{r.json()['run_id']}")).json()
+    assert [s["notes"] for s in done["steps"]] == [["60 jobs on Indeed"], ["5 matches"]]

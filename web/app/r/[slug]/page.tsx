@@ -275,6 +275,8 @@ function Runner({
   // The question just sent, shown at once while the run is being started.
   const [sending, setSending] = useState<string | null>(null);
   const [doing, setDoing] = useState<Doing | null>(null);
+  // The input fields: null = decide on our own (open until a file is attached or a run is under way); else the reader's choice.
+  const [fieldsChoice, setFieldsChoice] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [live, setLive] = useState<Live | null>(null);
@@ -368,6 +370,8 @@ function Runner({
   // Files go with the run only on a link that runs with the visitor's own apps (the run is theirs).
   const attach = async (list: FileList | null) => {
     setFileError(null);
+    setFieldsChoice(null); // a file usually answers the fields: fold them away
+
     const chosen = Array.from(list ?? []).slice(0, Math.max(0, MAX_FILES - files.length));
     if ((list?.length ?? 0) > chosen.length) setFileError(`At most ${MAX_FILES} files per run.`);
     for (const file of chosen) {
@@ -458,6 +462,8 @@ function Runner({
   }, [text]);
 
   const missing = inputs.filter((v) => v.required && !(values[v.name] ?? "").trim());
+  const filled = inputs.filter((v) => (values[v.name] ?? "").trim()).length;
+  const fieldsOpen = missing.length > 0 || (fieldsChoice ?? (files.length === 0 && uploading === 0 && !current && sending === null));
   const blocked = own && (!needs.data || needs.data.problems.length > 0);
   const running = !!current && !DONE.has(current.status);
   const canSend = !busy && !running && uploading === 0 && missing.length === 0 && !blocked && (kind === "workflow" || !!text.trim() || files.length > 0);
@@ -526,8 +532,26 @@ function Runner({
               <p className="rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-sm text-zinc-700">{needs.data.problems.join(" ")}</p>
             )}
             {inputs.length > 0 && (
-              <div className="grid gap-3 rounded-xl border border-zinc-200 bg-[var(--surface)] p-3 sm:grid-cols-2">
-                {inputs.map((v) => <InputField key={v.name} v={v} value={values[v.name] ?? ""} onChange={(x) => setValues({ ...values, [v.name]: x })} />)}
+              <div className="rounded-xl border border-zinc-200 bg-[var(--surface)]">
+                <button
+                  type="button"
+                  onClick={() => setFieldsChoice(!fieldsOpen)}
+                  disabled={missing.length > 0}
+                  aria-expanded={fieldsOpen}
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-zinc-700 hover:text-zinc-900 disabled:cursor-default cursor-pointer"
+                >
+                  <ChevronRight className={cn("h-4 w-4 shrink-0 text-zinc-500 transition-transform", fieldsOpen && "rotate-90")} />
+                  <span className="font-medium">Details</span>
+                  <span className="min-w-0 truncate text-xs text-zinc-500">
+                    · {filled ? `${filled} of ${inputs.length} filled` : `${inputs.length} optional field${inputs.length === 1 ? "" : "s"}`}
+                    {files.length > 0 && filled < inputs.length ? " · the rest from your file" : ""}
+                  </span>
+                </button>
+                {fieldsOpen && (
+                  <div className="grid max-h-[45dvh] gap-3 overflow-y-auto border-t border-zinc-200 p-3 sm:grid-cols-2">
+                    {inputs.map((v) => <InputField key={v.name} v={v} value={values[v.name] ?? ""} onChange={(x) => setValues({ ...values, [v.name]: x })} />)}
+                  </div>
+                )}
               </div>
             )}
             {error && <p className="text-sm text-red-600" role="alert">{error}</p>}
@@ -736,41 +760,55 @@ function StatusDot({ run }: { run: SharedRun }) {
 }
 
 /** "▸ 3 steps" above the answer; while it runs, the step it's on. Open: each step and where it got. */
-function Steps({ steps, running }: { steps: SharedStep[]; running: boolean }) {
+/** How many of the newest progress lines stay in view while it runs; the rest fold away. */
+const LIVE_NOTES = 3;
+
+/** Where the run is: while it runs, the newest progress lines; once done, one line that opens to all of it. */
+function Steps({ steps, running, ms }: { steps: SharedStep[]; running: boolean; ms?: number | null }) {
   const [open, setOpen] = useState(false);
   // Every step skipped: it answered directly (a greeting, a general question) — nothing to show.
   if (!steps.length || (!running && steps.every((s) => s.status === "skipped"))) return null;
   const now = steps.find((s) => s.status === "running" || s.status === "waiting");
   const done = steps.filter((s) => s.status === "succeeded").length;
   const failed = steps.filter((s) => s.status === "failed").length;
-  const summary = running
-    ? now ? `${now.title}… (step ${steps.indexOf(now) + 1} of ${steps.length})` : `Working… ${done} of ${steps.length} done`
-    : `${steps.length} step${steps.length === 1 ? "" : "s"}${failed ? `, ${failed} failed` : ""}`;
   // What the finished steps found so far, as they finish: something to read while it runs.
   const notes = steps.flatMap((s) => (s.notes ?? []).map((text, i) => ({ key: `${s.id}-${i}`, text })));
+  const summary = running
+    ? now ? `${now.title}… · step ${steps.indexOf(now) + 1} of ${steps.length}` : `Working… · ${done} of ${steps.length} done`
+    : `${steps.length} step${steps.length === 1 ? "" : "s"}${failed ? `, ${failed} failed` : ""}${notes.length ? ` · ${notes.length} update${notes.length === 1 ? "" : "s"}` : ""}${ms != null ? ` · ${formatDuration(ms)}` : ""}`;
+  const shown = open ? notes : running ? notes.slice(-LIVE_NOTES) : [];
+  const hidden = notes.length - shown.length;
   return (
-    <div className="mb-2">
-      <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="inline-flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-900 cursor-pointer">
-        <ChevronRight className={cn("h-3.5 w-3.5 transition-transform", open && "rotate-90")} />
-        {summary}
+    <div className="mb-3">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="inline-flex max-w-full items-center gap-1.5 rounded-md py-0.5 text-xs text-zinc-500 hover:text-zinc-900 cursor-pointer"
+      >
+        {running ? <Spinner className="h-3.5 w-3.5 shrink-0" /> : <ChevronRight className={cn("h-3.5 w-3.5 shrink-0 transition-transform", open && "rotate-90")} />}
+        <span className="truncate">{summary}</span>
+        {running && <ChevronRight className={cn("h-3.5 w-3.5 shrink-0 transition-transform", open && "rotate-90")} />}
       </button>
-      {notes.length > 0 && (
+      {shown.length > 0 && (
         <ul className="mt-1.5 space-y-1 rounded-lg border border-zinc-200 bg-[var(--surface)] px-3 py-2" aria-label="Progress">
-          {notes.map((n) => (
+          {hidden > 0 && (
+            <li>
+              <button type="button" onClick={() => setOpen(true)} className="text-xs text-zinc-500 hover:text-zinc-900 cursor-pointer">
+                + {hidden} earlier update{hidden === 1 ? "" : "s"}
+              </button>
+            </li>
+          )}
+          {shown.map((n) => (
             <li key={n.key} className="flex gap-2 text-xs text-zinc-700">
               <ChevronRight className="mt-0.5 h-3 w-3 shrink-0 text-[var(--accent-hover)]" />
               <span className="min-w-0 break-words">{n.text}</span>
             </li>
           ))}
-          {running && (
-            <li className="flex items-center gap-2 text-xs text-zinc-500">
-              <Spinner className="h-3 w-3" /> {now ? `${now.title}…` : "Working…"}
-            </li>
-          )}
         </ul>
       )}
       {open && (
-        <ol className="mt-1.5 space-y-1 border-l-2 border-zinc-200 pl-3">
+        <ol className="mt-2 space-y-1 border-l-2 border-zinc-200 pl-3">
           {steps.map((s) => (
             <li key={s.id} className="flex items-center gap-2 text-xs text-zinc-700">
               {s.status === "succeeded" ? <Check className="h-3.5 w-3.5 text-emerald-700" />
@@ -820,7 +858,7 @@ function Turn({
             <p className="flex items-center gap-2 text-sm text-zinc-500"><Spinner className="h-4 w-4" /> Starting…</p>
           ) : (
           <>
-          <Steps steps={run.steps ?? []} running={running} />
+          <Steps steps={run.steps ?? []} running={running} ms={run.duration_ms} />
           {run.status === "succeeded" ? (
             <AnswerView text={run.output ?? ""} />
           ) : run.status === "failed" || run.status === "cancelled" ? (

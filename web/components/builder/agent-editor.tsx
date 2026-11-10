@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
 import { Background, BackgroundVariant, Controls, ReactFlow, ReactFlowProvider, useReactFlow, type Edge, type NodeChange } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { AlertTriangle, ArrowLeft, Check, ChevronDown, Play, Save, Settings2, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Check, ChevronDown, MessagesSquare, Play, Save, Settings2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -43,6 +44,8 @@ type EditorProps = {
   onOpen: (target: BuildTarget) => void;
   /** Kept for callers; the agent editor has no build bar, so nothing leaves through it. */
   onExit?: () => void;
+  /** Open its chat (Executions → Chat). Left out: go to that page. */
+  onChat?: () => void;
 };
 
 export function AgentEditor(props: EditorProps) {
@@ -53,7 +56,8 @@ export function AgentEditor(props: EditorProps) {
   );
 }
 
-function Editor({ id, onBack, onOpen }: EditorProps) {
+function Editor({ id, onBack, onOpen, onChat }: EditorProps) {
+  const router = useRouter();
   const token = useAuthStore((s) => s.accessToken) || "";
   const queryClient = useQueryClient();
 
@@ -164,6 +168,12 @@ function Editor({ id, onBack, onOpen }: EditorProps) {
       return false;
     }
   }, [dirty, save]);
+  // Its chat runs the saved version: save first, then go there.
+  const openChat = async () => {
+    if (!(await ensureSaved())) return;
+    if (onChat) onChat();
+    else router.push(`/user/executions?chat=agent:${id}&tab=chat`);
+  };
 
   const toolIds = form?.config.tool_ids ?? [];
   const kbIds = form?.config.knowledge_base_ids ?? [];
@@ -357,6 +367,9 @@ function Editor({ id, onBack, onOpen }: EditorProps) {
           </Button>
           <Button size="sm" variant="outline" aria-label="Test" aria-pressed={playOpen} className={cn("px-2 lg:px-3", playOpen && "bg-zinc-100")} onClick={() => setPlayOpen((o) => !o)}>
             <Play /> <span className="hidden lg:inline">Test</span>
+          </Button>
+          <Button size="sm" variant="outline" aria-label="Chat" title="Open its chat: your chats, files and history" className="px-2 lg:px-3" onClick={() => void openChat()}>
+            <MessagesSquare /> <span className="hidden lg:inline">Chat</span>
           </Button>
           {!readOnly && (
             <Button size="sm" aria-label="Save" className="px-2 sm:px-3" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>

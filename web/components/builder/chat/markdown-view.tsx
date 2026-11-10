@@ -2,7 +2,7 @@
 
 import { memo, useMemo } from "react";
 
-import { parseMarkdown, type Block, type Inline } from "@/lib/builder/markdown";
+import { parseMarkdown, shortUrl, type Block, type Inline } from "@/lib/builder/markdown";
 
 function Inlines({ nodes }: { nodes: Inline[] }) {
   return (
@@ -29,12 +29,15 @@ function Inlines({ nodes }: { nodes: Inline[] }) {
                 <Inlines nodes={n.c} />
               </em>
             );
-          case "link":
+          case "link": {
+            // A bare URL reads as its short form; the full one is on hover and in the link.
+            const bare = n.c.length === 1 && n.c[0].t === "text" && n.c[0].v === n.href;
             return (
-              <a key={i} href={n.href} target="_blank" rel="noopener noreferrer" className="break-words text-indigo-600 underline decoration-indigo-300 underline-offset-2 hover:text-indigo-800">
-                <Inlines nodes={n.c} />
+              <a key={i} href={n.href} title={bare ? n.href : undefined} target="_blank" rel="noopener noreferrer" className="break-words text-indigo-600 underline decoration-indigo-300 underline-offset-2 hover:text-indigo-800">
+                {bare ? shortUrl(n.href) : <Inlines nodes={n.c} />}
               </a>
             );
+          }
         }
       })}
     </>
@@ -99,7 +102,7 @@ function Blocks({ blocks }: { blocks: Block[] }) {
                   <thead className="bg-zinc-50">
                     <tr>
                       {b.head.map((c, n) => (
-                        <th key={n} className="border-b border-zinc-200 px-2.5 py-1.5 font-semibold text-zinc-700">
+                        <th key={n} className="whitespace-nowrap border-b border-zinc-200 px-2.5 py-1.5 font-semibold text-zinc-700">
                           <Inlines nodes={c} />
                         </th>
                       ))}

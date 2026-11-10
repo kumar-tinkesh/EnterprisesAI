@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseInline, parseMarkdown, plainText } from "@/lib/builder/markdown";
+import { parseInline, parseMarkdown, plainText, shortUrl } from "@/lib/builder/markdown";
 
 describe("markdown: inline", () => {
   it("reads bold, italic, code and links", () => {
@@ -54,5 +54,13 @@ describe("markdown: blocks", () => {
 
   it("never throws on odd input", () => {
     for (const s of ["", "```", "|", "> ", "1.", "**", "[a](", "# "]) expect(() => parseMarkdown(s)).not.toThrow();
+  });
+});
+
+describe("shortUrl", () => {
+  it("drops the scheme and www, and cuts a long one", () => {
+    expect(shortUrl("https://www.glassdoor.co.in/job-listing/j?jl=1010311320986")).toBe("glassdoor.co.in/job-listing/j?jl=10…");
+    expect(shortUrl("https://unstop.com/")).toBe("unstop.com");
+    expect(shortUrl("mailto:a@b.io")).toBe("a@b.io");
   });
 });
