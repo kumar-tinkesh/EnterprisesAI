@@ -2,10 +2,11 @@
 
     event: run     {...the caller's view of the run}   first, then whenever its state changes
     event: delta   {"turn": 2, "at": 0, "text": "..."} the answer as it's written (runs started with stream on)
+    event: doing   {"what": "tool" | "thinking"}       it started using a tool / went back to thinking
 
 Only what a caller may see goes out — the same view as polling (refreshed as
 each step starts and ends), plus the answer's text while it's being written.
-Tool calls, their arguments and results never do, nor what a step produced
+Which tool, its arguments and results never do (only that one is in use), nor what a step produced
 beyond the view's own step list. The stream ends after the event
 that shows the run finished. ``at`` is where ``text`` starts in that turn's
 answer: a caller who isn't exactly there (joined late, or the model request
@@ -47,6 +48,8 @@ async def caller_events(run_id: str, view: Callable[[], Awaitable[dict]], *, idl
             kind = event.get("type")
             if kind == "output_delta":
                 yield _sse("delta", {"turn": event.get("turn"), "at": event.get("at"), "text": event.get("text") or ""})
+            elif kind == "tool_call":
+                yield _sse("doing", {"what": "tool" if event.get("phase") == "started" else "thinking"})
             elif kind in _STATE_EVENTS:
                 current = await view()
                 yield _sse("run", current)

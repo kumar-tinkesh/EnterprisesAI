@@ -60,8 +60,11 @@ async function readEvents(res: Response, on: (event: string, data: unknown) => v
   }
 }
 
-/** The answer being written: one turn's text, built from batches that must line up (``at``). */
-type Live = { runId: string; turn: number; text: string };
+/** The answer being written: one turn's text, built from batches that must line up (``at``).
+ * ``paused``: it went on to use a tool; the text stays in view, dimmed, until the next turn writes. */
+type Live = { runId: string; turn: number; text: string; paused?: boolean };
+/** What it's doing now (the "doing" event): using a tool, or thinking. Never which tool. */
+type Doing = { runId: string; what: "tool" | "thinking" };
 
 function errorText(err: unknown): string {
   if (err instanceof ApiError) {
@@ -267,6 +270,11 @@ function Runner({
   const [text, setText] = useState("");
   const [values, setValues] = useState<Record<string, string>>({});
   const [current, setCurrent] = useState<SharedRun | null>(null);
+  // Earlier questions of this visit stay in view above the current one (each answered on its own).
+  const [earlier, setEarlier] = useState<SharedRun[]>([]);
+  // The question just sent, shown at once while the run is being started.
+  const [sending, setSending] = useState<string | null>(null);
+  const [doing, setDoing] = useState<Doing | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [live, setLive] = useState<Live | null>(null);
@@ -323,11 +331,16 @@ function Runner({
           if (last.output !== null || DONE.has(last.status)) setLive((l) => (l?.runId === last.run_id ? null : l));
         } else if (event === "delta") {
           const d = data as { turn: number; at: number; text: string };
+          setDoing(null);
           setLive((l) =>
             d.at === 0 ? { runId: run.run_id, turn: d.turn, text: d.text }
               : l && l.runId === run.run_id && l.turn === d.turn && l.text.length === d.at ? { ...l, text: l.text + d.text }
                 : l,
           );
+        } else if (event === "doing") {
+          const what = (data as { what?: string }).what === "tool" ? "tool" : "thinking";
+          setDoing({ runId: run.run_id, what });
+          if (what === "tool") setLive((l) => (l?.runId === run.run_id ? { ...l, paused: true } : l));
         }
       });
     } catch {
@@ -373,6 +386,12 @@ function Runner({
   const submit = async (input = text) => {
     setBusy(true);
     setError(null);
+    // Show the question at once; the one before it moves up into this visit's earlier turns.
+    const before = current;
+    if (before) setEarlier((e) => [...e.filter((r) => r.run_id !== before.run_id), before]);
+    setCurrent(null);
+    setSending(input.trim());
+    setText("");
     try {
       // Streaming: start at once and watch it being written; otherwise wait a little for the whole answer.
       const run = await sharedApi.run(token, slug, {
@@ -381,20 +400,28 @@ function Runner({
       });
       setCurrent(run);
       setLive(null);
-      setText("");
+      setDoing(null);
       setFiles([]);
       refreshHistory();
       if (!DONE.has(run.status)) void (streamOn ? watch(run) : follow(run));
     } catch (err) {
       setError(errorText(err));
+      setText((t) => t || input);
+      if (before) {
+        setEarlier((e) => e.filter((r) => r.run_id !== before.run_id));
+        setCurrent(before);
+      }
     } finally {
+      setSending(null);
       setBusy(false);
     }
   };
 
   const open = (run: SharedRun) => {
+    setEarlier([]);
     setCurrent(run);
     setLive(null);
+    setDoing(null);
     if (!DONE.has(run.status)) void (streamOn ? watch(run) : follow(run));
   };
 
@@ -410,6 +437,17 @@ function Runner({
       setStopping(false);
     }
   };
+
+  // Keep the newest question and the answer being written in view, unless the reader scrolled up.
+  const end = useRef<HTMLDivElement>(null);
+  const nearBottom = useRef(true);
+  useEffect(() => {
+    nearBottom.current = true;
+    end.current?.scrollIntoView({ block: "end" });
+  }, [sending, current?.run_id]);
+  useEffect(() => {
+    if (nearBottom.current) end.current?.scrollIntoView({ block: "end" });
+  }, [live?.text, current?.status, current?.output, current?.steps?.length, doing]);
 
   // The box grows with what's typed.
   useLayoutEffect(() => {
@@ -427,18 +465,44 @@ function Runner({
   return (
     <div className="flex h-full">
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-8">
+        <div
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            nearBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+          }}
+          className="min-h-0 flex-1 overflow-y-auto px-4 py-8"
+        >
           <div className="mx-auto max-w-[720px] space-y-8">
-            {!current && (
+            {!current && sending === null && earlier.length === 0 && (
               <>
                 <Intro shared={shared} />
                 <Accounts own={own} mode={toolMode} needs={needs.data} loading={needs.isLoading} error={needs.isError ? errorText(needs.error) : null} token={token} />
               </>
             )}
+            {earlier.length > 0 && (
+              <p className="text-center text-xs text-zinc-500">Earlier in this visit · each question is answered on its own</p>
+            )}
+            {earlier.map((r) => (
+              <Turn key={r.run_id} run={r} live={null} doing={null} kind={kind} own={own} token={token} onDecided={() => undefined} />
+            ))}
+            {sending !== null && (
+              <Turn
+                run={null}
+                question={sending}
+                live={null}
+                doing={null}
+                kind={kind}
+                own={own}
+                token={token}
+                onDecided={() => undefined}
+              />
+            )}
             {current && (
               <Turn
+                key={current.run_id}
                 run={current}
-                live={live?.runId === current.run_id ? live.text : ""}
+                live={live?.runId === current.run_id ? live : null}
+                doing={doing?.runId === current.run_id ? doing.what : null}
                 kind={kind}
                 own={own}
                 token={token}
@@ -452,6 +516,7 @@ function Runner({
                 }}
               />
             )}
+            <div ref={end} />
           </div>
         </div>
 
@@ -568,7 +633,9 @@ function Runner({
                   type="button"
                   onClick={() => {
                     setCurrent(null);
+                    setEarlier([]);
                     setLive(null);
+                    setDoing(null);
                     setPanel(null);
                     box.current?.focus();
                   }}
@@ -722,20 +789,37 @@ function Steps({ steps, running }: { steps: SharedStep[]; running: boolean }) {
 
 /** One question and its answer, the way a chat shows it. */
 function Turn({
-  run, live, kind, own, token, onRetry, onDecided,
-}: { run: SharedRun; live: string; kind: "agent" | "workflow"; own: boolean; token: string; onRetry?: () => void; onDecided: () => void }) {
+  run, question, live, doing, kind, own, token, onRetry, onDecided,
+}: {
+  /** null: just sent, the run is still being started (``question`` is what was asked). */
+  run: SharedRun | null;
+  question?: string;
+  live: Live | null;
+  doing: Doing["what"] | null;
+  kind: "agent" | "workflow";
+  own: boolean;
+  token: string;
+  onRetry?: () => void;
+  onDecided: () => void;
+}) {
   const [details, setDetails] = useState(false);
-  const running = !DONE.has(run.status);
+  const running = !run || !DONE.has(run.status);
+  const working = doing === "tool" ? "Looking things up…" : "Working on it…";
+  const asked = run ? run.input : (question ?? "");
   return (
     <div className="space-y-6" aria-live="polite">
       <div className="flex justify-end">
         <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-[var(--surface-strong)] px-4 py-2.5 text-sm text-zinc-900">
-          {run.input || "(ran with its inputs)"}
+          {asked || "(ran with its inputs)"}
         </div>
       </div>
       <div className="flex gap-3">
         <TypeIcon kind={kind} size="sm" live={running} />
         <div className="min-w-0 flex-1 pt-0.5">
+          {!run ? (
+            <p className="flex items-center gap-2 text-sm text-zinc-500"><Spinner className="h-4 w-4" /> Starting…</p>
+          ) : (
+          <>
           <Steps steps={run.steps ?? []} running={running} />
           {run.status === "succeeded" ? (
             <AnswerView text={run.output ?? ""} />
@@ -751,10 +835,20 @@ function Turn({
                 {own && run.approvals.length > 0 ? "It needs your OK before going on:" : "Waiting for whoever shared this to approve a step. You can leave — the answer will be under History."}
               </p>
             )
-          ) : live ? (
-            <MarkdownView text={live + " ▍"} />
+          ) : run.output ? (
+            // The finished answer can land a moment before the run says it's done: show it straight away.
+            <AnswerView text={run.output} />
+          ) : live?.text ? (
+            <>
+              <div className={cn("transition-opacity", live.paused && "opacity-50")}>
+                <MarkdownView text={live.paused ? live.text : live.text + " ▍"} />
+              </div>
+              {live.paused && (
+                <p className="mt-2 flex items-center gap-2 text-sm text-zinc-500"><Spinner className="h-4 w-4" /> {working}</p>
+              )}
+            </>
           ) : (
-            <p className="flex items-center gap-2 text-sm text-zinc-500"><Spinner className="h-4 w-4" /> Working on it…</p>
+            <p className="flex items-center gap-2 text-sm text-zinc-500"><Spinner className="h-4 w-4" /> {working}</p>
           )}
           {run.approvals.map((a) => <div key={a.id} className="mt-2"><ApprovalCard approval={a} token={token} onDone={onDecided} /></div>)}
           {run.sources.length > 0 && (
@@ -791,6 +885,8 @@ function Turn({
                 </p>
               )}
             </>
+          )}
+          </>
           )}
         </div>
       </div>

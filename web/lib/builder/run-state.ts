@@ -59,6 +59,8 @@ export interface LiveText {
   node: string;
   turn: number;
   text: string;
+  /** The turn went on to use tools: its text stays in view, dimmed, until the next turn writes. */
+  paused?: boolean;
 }
 
 /**
@@ -167,7 +169,7 @@ export function reduceRunEvent(view: RunView, event: RunEvent | ApprovalsRefresh
         ? {
             ...view,
             timeline: add(view, { tone: "info", text: `decided to use ${event.tool_calls.map(displayTool).join(", ")}`, nodeId: event.node_id, ...viaOf(event) }),
-            live: view.live?.node === event.node_id && !event.via ? null : view.live,
+            live: view.live?.node === event.node_id && !event.via ? { ...view.live, paused: true } : view.live,
           }
         : view;
     case "tool_call": {

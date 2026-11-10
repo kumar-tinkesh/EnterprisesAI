@@ -18,12 +18,13 @@ describe("streamed answer text", () => {
     expect(addLive(null, d(1, 4, "late"))).toBeNull();
   });
 
-  it("gives way to the real answer and to a turn that went on to use tools", () => {
+  it("keeps a tool-using turn's text in view (dimmed) until the next turn writes, then gives way to the answer", () => {
     let view = reduceRunEvent(emptyRunView, { type: "output_delta", ...d(1, 0, "Let me check") });
     expect(view.live?.text).toBe("Let me check");
     view = reduceRunEvent(view, { type: "agent_turn", node_id: "agent", turn: 1, tool_calls: ["search"] });
-    expect(view.live).toBeNull();
+    expect(view.live).toEqual({ node: "agent", turn: 1, text: "Let me check", paused: true });
     view = reduceRunEvent(view, { type: "output_delta", ...d(2, 0, "Done") });
+    expect(view.live).toEqual({ node: "agent", turn: 2, text: "Done" });
     view = reduceRunEvent(view, { type: "output", text: "Done." });
     expect([view.live, view.output]).toEqual([null, "Done."]);
   });

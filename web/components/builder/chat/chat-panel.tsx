@@ -12,6 +12,7 @@ import { ApprovalCard } from "@/components/builder/approval-card";
 import { AnswerMessage, Avatar, AvatarKind, FileChip, GuardrailNotes, UserMessage } from "@/components/builder/chat/chat-message";
 import { ChatHistory } from "@/components/builder/chat/chat-history";
 import { MarkdownView } from "@/components/builder/chat/markdown-view";
+import { AnswerView } from "@/components/builder/run-output";
 import { coerce } from "@/components/builder/playground";
 import { ConnectButton } from "@/components/connections/connect-button";
 import { ApiError } from "@/lib/api";
@@ -67,7 +68,7 @@ function LiveAnswer({
   const doing =
     view.status === "waiting"
       ? "Waiting for your decision"
-      : view.live?.text
+      : view.live?.text && !view.live.paused
         ? "Writing…"
         : last
         ? `${last.nodeId ? `${stepName(last.nodeId)} ` : ""}${last.text}`
@@ -92,10 +93,13 @@ function LiveAnswer({
           </div>
         )}
         {view.output ? (
-          <div className="mt-2"><MarkdownView text={view.output} /></div>
+          <div className="mt-2"><AnswerView text={view.output} /></div>
         ) : view.live?.text ? (
-          // The answer as it's being written; the finished one replaces it.
-          <div className="mt-2"><MarkdownView text={view.live.text + " ▍"} /></div>
+          // The answer as it's being written; the finished one replaces it. A turn that went
+          // on to use tools stays in view, dimmed, until the next one starts writing.
+          <div className={cn("mt-2 transition-opacity", view.live.paused && "opacity-50")}>
+            <MarkdownView text={view.live.paused ? view.live.text : view.live.text + " ▍"} />
+          </div>
         ) : (
           <div className="mt-2.5 space-y-2" aria-hidden>
             <div className="h-2 w-[80%] animate-pulse rounded-full bg-zinc-100" />
@@ -208,6 +212,8 @@ export function ChatPanel({
   // ── The run being answered now ──
   const [liveRunId, setLiveRunId] = useState<string | null>(null);
   const [pendingText, setPendingText] = useState<string | null>(null);
+  // When the message went: the clock under it runs from here, before the run exists.
+  const [sentAt, setSentAt] = useState<string | null>(null);
   const { view } = useRunStream(liveRunId, token);
   const liveRun = thread.find((r) => r.id === liveRunId);
 
@@ -217,14 +223,38 @@ export function ChatPanel({
     if (!liveRunId && last && !isFinished(last.status)) setLiveRunId(last.id);
   }, [thread, liveRunId]);
 
-  // Finished: fetch the full run (tool calls, timings) into the thread, then stop following it.
+  // Finished: put what the live view already has (status, answer) into the thread at once, so
+  // the answer never blinks out while the full run (tool calls, timings) is fetched; then stop following it.
   useEffect(() => {
     if (!liveRunId || !isFinished(view.status) || view.runId !== liveRunId) return;
+    const status = view.status!;
+    queryClient.setQueryData<Run[]>(["builder-chat-runs", chatId], (list) =>
+      list?.map((r) =>
+        r.id !== liveRunId || isFinished(r.status)
+          ? r
+          : {
+              ...r,
+              status,
+              error: view.error ?? r.error,
+              output_text: view.output ?? r.output_text,
+              output: {
+                ...(r.output ?? {}),
+                text: view.output ?? r.output?.text,
+                sources: view.sources.length ? view.sources : r.output?.sources,
+                guardrails: view.guardrails.length ? view.guardrails : r.output?.guardrails,
+              },
+            },
+      ),
+    );
     let stale = false;
     void Promise.all([
       queryClient.invalidateQueries({ queryKey: ["builder-chat-runs", chatId] }),
       queryClient.invalidateQueries({ queryKey: chatsKey }),
-    ]).then(() => !stale && setLiveRunId(null));
+    ]).then(() => {
+      if (stale) return;
+      setLiveRunId(null);
+      setSentAt(null);
+    });
     return () => {
       stale = true;
     };
@@ -274,7 +304,10 @@ export function ChatPanel({
       }
       return builderApi.startWorkflowRun(token, id, text, variables, depth, ref, streamOn, files.map((f) => f.id));
     },
-    onMutate: (text) => setPendingText(text),
+    onMutate: (text) => {
+      setPendingText(text);
+      setSentAt(new Date().toISOString());
+    },
     onSuccess: async (run) => {
       setFiles([]);
       setLiveRunId(run.id);
@@ -310,12 +343,14 @@ export function ChatPanel({
   const newChat = () => {
     setPicked(null);
     setLiveRunId(null);
+    setSentAt(null);
     setProblems([]);
     composer.current?.focus();
   };
   const openChat = (cid: string) => {
     setPicked(cid);
     setLiveRunId(null);
+    setSentAt(null);
     setProblems([]);
   };
   const removeChat = async (cid: string) => {
@@ -467,7 +502,8 @@ export function ChatPanel({
             {thread.map((run, i) => {
               const prev = thread[i - 1];
               const showDay = !prev || new Date(prev.created_at).toDateString() !== new Date(run.created_at).toDateString();
-              const following = run.id === liveRunId && !isFinished(view.runId === run.id ? view.status : run.status);
+              // Followed until the thread itself has the finished run (patched in at once when it ends).
+              const following = run.id === liveRunId && !isFinished(run.status);
               return (
                 <div key={run.id} className="flex flex-col gap-4">
                   {showDay && (
@@ -482,7 +518,7 @@ export function ChatPanel({
                     } : undefined}
                   />
                   {following ? (
-                    <LiveAnswer name={name} view={view} since={run.started_at ?? run.created_at} token={token} stepName={stepName} />
+                    <LiveAnswer name={name} view={view} since={sentAt ?? run.started_at ?? run.created_at} token={token} stepName={stepName} />
                   ) : (
                     <AnswerMessage
                       run={run}
@@ -501,7 +537,7 @@ export function ChatPanel({
             {pendingText !== null && !liveRun && (
               <div className="flex flex-col gap-4">
                 <UserMessage text={pendingText || "(ran with its inputs)"} files={files} />
-                <LiveAnswer name={name} view={{ ...view, timeline: [], approvals: [], output: null, guardrails: [], status: null }} since={null} token={token} stepName={stepName} />
+                <LiveAnswer name={name} view={{ ...view, timeline: [], approvals: [], output: null, guardrails: [], status: null, live: null }} since={sentAt} token={token} stepName={stepName} />
               </div>
             )}
             <div ref={end} />
