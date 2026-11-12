@@ -236,10 +236,16 @@ async def overview(
             p["bad"] += r.status == states.FAILED
             p["daily"][min(days - 1, (created - since).days)] += 1
 
-    schedules = {
-        (s.kind, s.agent_id or s.workflow_id): s
-        for s in (await db.execute(select(BuilderSchedule).where(BuilderSchedule.tenant_id == user.tenant_id, BuilderSchedule.enabled.is_(True)))).scalars()
-    }
+    # The soonest one when there are a few (e.g. 9:00 and 18:00).
+    schedules: dict[tuple[str, str | None], BuilderSchedule] = {}
+    for s in (
+        await db.execute(
+            select(BuilderSchedule)
+            .where(BuilderSchedule.tenant_id == user.tenant_id, BuilderSchedule.enabled.is_(True))
+            .order_by(BuilderSchedule.next_run_at.desc())
+        )
+    ).scalars():
+        schedules[(s.kind, s.agent_id or s.workflow_id)] = s
     keys: dict[str, int] = {}
     for k in (await db.execute(select(BuilderPublicKey).where(BuilderPublicKey.tenant_id == user.tenant_id, BuilderPublicKey.status == "active"))).scalars():
         keys[k.agent_id or k.workflow_id or ""] = keys.get(k.agent_id or k.workflow_id or "", 0) + 1

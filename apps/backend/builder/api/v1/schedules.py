@@ -1,15 +1,17 @@
 """Schedules (mounted at ``/api/v1/builder/schedules``).
 
     GET    ""                 schedules of an agent or workflow (?agent_id= | ?workflow_id=), or mine
-    POST   ""                 schedule an agent (a workflow is scheduled by its Schedule trigger step)
+    POST   ""                 schedule an agent, or a workflow that starts from its inputs
+                              (with the inputs filled in and files attached once, for every run)
     POST   /preview           check a cron + timezone: in words, and the next few times
     PATCH  /{schedule_id}     change an agent schedule (cron, timezone, request, on/off)
     DELETE /{schedule_id}
     POST   /{schedule_id}/run start it now, once (same checks; doesn't move the next time)
 
 A schedule runs as the person who set it, with their own connected tools, so
-only they change or delete it. A workflow's schedule lives on its Schedule
-trigger step: change it there (saving the workflow keeps this in sync).
+only they change or delete it. A workflow can also be scheduled by a Schedule
+trigger step: that one is changed on the step (saving the workflow keeps it in
+sync); the ones made here (``node_id`` NULL) are changed here.
 """
 from __future__ import annotations
 
@@ -25,6 +27,7 @@ from src.api.deps import CurrentUser
 from src.db.session import get_db
 
 from builder.api.v1.agents import get_agent
+from builder.api.v1.attachments import attachments_for_run
 from builder.api.v1.deps import get_end_user
 from builder.models import BuilderSchedule
 from builder.runs.db import as_utc, utcnow
@@ -58,10 +61,16 @@ class ScheduleOut(BaseModel):
 
 
 class ScheduleCreate(BaseModel):
-    agent_id: str
+    # One of the two.
+    agent_id: str | None = None
+    workflow_id: str | None = None
     cron: str = Field(min_length=1, max_length=100)
     timezone: str = Field(default="UTC", max_length=64)
     input: str = Field(default="", max_length=20_000)
+    # A workflow's input fields, filled in once for every run.
+    variables: dict[str, Any] = Field(default_factory=dict)
+    # Files (uploaded to /attachments) sent with every run, e.g. a resume.
+    attachment_ids: list[str] = Field(default_factory=list, max_length=5)
     enabled: bool = True
 
 
@@ -69,6 +78,8 @@ class ScheduleUpdate(BaseModel):
     cron: str | None = Field(default=None, min_length=1, max_length=100)
     timezone: str | None = Field(default=None, max_length=64)
     input: str | None = Field(default=None, max_length=20_000)
+    variables: dict[str, Any] | None = None
+    attachment_ids: list[str] | None = Field(default=None, max_length=5)
     enabled: bool | None = None
 
 
@@ -84,6 +95,11 @@ class PreviewOut(BaseModel):
     next_runs: list[datetime] = Field(default_factory=list)
 
 
+def _direct(s: BuilderSchedule) -> bool:
+    """Made here (an agent's, or a workflow's without a Schedule step) — so changed here too."""
+    return s.kind == "agent" or s.node_id is None
+
+
 def _out(s: BuilderSchedule, user: CurrentUser) -> ScheduleOut:
     mine = s.owner_id == user.id
     return ScheduleOut(
@@ -92,8 +108,19 @@ def _out(s: BuilderSchedule, user: CurrentUser) -> ScheduleOut:
         # as_utc: SQLite hands these back without a zone; the browser must see UTC.
         input=s.input or {}, enabled=s.enabled, next_run_at=as_utc(s.next_run_at), last_run_at=as_utc(s.last_run_at),
         last_run_id=s.last_run_id, last_status=s.last_status, last_error=s.last_error,
-        owner_id=s.owner_id, is_mine=mine, editable=mine and s.kind == "agent", created_at=as_utc(s.created_at),
+        owner_id=s.owner_id, is_mine=mine, editable=mine and _direct(s), created_at=as_utc(s.created_at),
     )
+
+
+def _need_filled(workflow, variables: dict[str, Any]) -> None:
+    """Every scheduled run gets the same inputs, so the required ones must be filled in now."""
+    empty = [
+        v.get("label") or v.get("name")
+        for n in workflow.nodes or [] for v in n.get("variables") or []
+        if v.get("required") and variables.get(v.get("name")) in (None, "")
+    ]
+    if empty:
+        raise HTTPException(status_code=422, detail="Fill in " + ", ".join(f'"{e}"' for e in empty) + " for the scheduled runs.")
 
 
 def _check(cron: str, tz: str) -> None:
@@ -115,7 +142,7 @@ async def _get(db: AsyncSession, schedule_id: str, user: CurrentUser) -> Builder
 def _own(s: BuilderSchedule, user: CurrentUser) -> None:
     if s.owner_id != user.id:
         raise HTTPException(status_code=403, detail="This schedule runs as someone else; only they can change it.")
-    if s.kind != "agent":
+    if not _direct(s):
         raise HTTPException(status_code=409, detail="Change this on the workflow's Schedule step, then save the workflow.")
 
 
@@ -148,14 +175,30 @@ async def preview_schedule(payload: PreviewRequest, user: CurrentUser = Depends(
 
 @router.post("", response_model=ScheduleOut, status_code=201)
 async def create_schedule(payload: ScheduleCreate, user: CurrentUser = Depends(get_end_user), db: AsyncSession = Depends(get_db)):
-    agent = await get_agent(db, payload.agent_id, user)
-    if agent.workflow_id:
-        raise HTTPException(status_code=409, detail="This agent belongs to a workflow; schedule the workflow instead.")
+    if bool(payload.agent_id) == bool(payload.workflow_id):
+        raise HTTPException(status_code=422, detail="Schedule either an agent or a workflow.")
     _check(payload.cron, payload.timezone)
-    s = BuilderSchedule(
-        tenant_id=user.tenant_id, owner_id=user.id, kind="agent", agent_id=agent.id,
-        cron="", timezone="UTC", enabled=False, input={"text": payload.input, "variables": {}},
-    )
+    files = await attachments_for_run(db, user, payload.attachment_ids)
+    if payload.agent_id:
+        agent = await get_agent(db, payload.agent_id, user)
+        if agent.workflow_id:
+            raise HTTPException(status_code=409, detail="This agent belongs to a workflow; schedule the workflow instead.")
+        s = BuilderSchedule(
+            tenant_id=user.tenant_id, owner_id=user.id, kind="agent", agent_id=agent.id,
+            cron="", timezone="UTC", enabled=False, input={"text": payload.input, "variables": {}, "attachments": files},
+        )
+    else:
+        from builder.api.v1.workflows import _get_workflow
+
+        workflow = await _get_workflow(db, payload.workflow_id, user)
+        if any(n.get("type") == "schedule_trigger" for n in workflow.nodes or []):
+            raise HTTPException(status_code=409, detail="This workflow starts on its Schedule step; change the time there.")
+        _need_filled(workflow, payload.variables)
+        s = BuilderSchedule(
+            tenant_id=user.tenant_id, owner_id=user.id, kind="workflow", workflow_id=workflow.id, node_id=None,
+            cron="", timezone="UTC", enabled=False,
+            input={"text": payload.input, "variables": dict(payload.variables), "attachments": files},
+        )
     apply_timing(s, cron=payload.cron, tz=payload.timezone, enabled=payload.enabled)
     db.add(s)
     await db.commit()
@@ -175,6 +218,14 @@ async def update_schedule(
         _check(cron, tz)
     if payload.input is not None:
         s.input = {**(s.input or {}), "text": payload.input}
+    if payload.variables is not None:
+        if s.workflow_id:
+            from builder.api.v1.workflows import _get_workflow
+
+            _need_filled(await _get_workflow(db, s.workflow_id, user), payload.variables)
+        s.input = {**(s.input or {}), "variables": dict(payload.variables)}
+    if payload.attachment_ids is not None:
+        s.input = {**(s.input or {}), "attachments": await attachments_for_run(db, user, payload.attachment_ids)}
     apply_timing(s, cron=cron, tz=tz, enabled=s.enabled if payload.enabled is None else payload.enabled)
     await db.commit()
     await db.refresh(s)

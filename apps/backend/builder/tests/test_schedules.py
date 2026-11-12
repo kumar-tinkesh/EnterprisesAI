@@ -198,3 +198,66 @@ async def test_deleting_a_workflow_removes_its_schedule(db, tenant_client):
     wf = (await tenant_client.post(WF, json={"name": "Daily", **_graph({"cron": "0 9 * * *"})})).json()
     assert (await tenant_client.delete(f"{WF}/{wf['id']}")).status_code == 204
     assert (await db.execute(select(BuilderSchedule))).scalars().first() is None
+
+
+# ── workflow schedules made from the Schedule panel (inputs + files saved) ───
+
+
+def _form_graph() -> dict:
+    return {
+        "nodes": [
+            {"id": "in", "type": "input", "position": {"x": 0, "y": 0},
+             "variables": [{"name": "city", "label": "City", "required": True}, {"name": "note", "label": "Note"}]},
+            {"id": "out", "type": "output", "position": {"x": 300, "y": 0}},
+        ],
+        "edges": [{"id": "e1", "source": "in", "target": "out"}],
+    }
+
+
+async def test_a_workflow_with_inputs_is_scheduled_with_them_and_its_files(db, tenant_client, runtime):
+    wf = (await tenant_client.post(WF, json={"name": "Jobs", **_form_graph()})).json()
+    up = await tenant_client.post("/api/v1/builder/attachments", files={"file": ("resume.txt", b"Asha - Python, 2025 batch", "text/plain")})
+    assert up.status_code == 201, up.text
+    body = {"workflow_id": wf["id"], "cron": "0 9 * * *", "timezone": "Asia/Kolkata", "attachment_ids": [up.json()["id"]]}
+
+    # A required input has to be filled in once, for every run.
+    r = await tenant_client.post(S, json=body)
+    assert r.status_code == 422 and "City" in r.json()["detail"]
+    r = await tenant_client.post(S, json={**body, "variables": {"city": "Pune"}})
+    assert r.status_code == 201, r.text
+    s = r.json()
+    assert (s["kind"], s["node_id"], s["editable"], s["enabled"]) == ("workflow", None, True, True)
+    assert s["input"]["variables"] == {"city": "Pune"} and s["input"]["attachments"][0]["filename"] == "resume.txt"
+
+    # Saving the workflow keeps it (only Schedule-step rows follow the graph).
+    assert (await tenant_client.patch(f"{WF}/{wf['id']}", json={"name": "Jobs daily"})).status_code == 200
+    assert len((await tenant_client.get(S, params={"workflow_id": wf["id"]})).json()) == 1
+
+    # Off, then on at a new time.
+    r = await tenant_client.patch(f"{S}/{s['id']}", json={"enabled": False})
+    assert r.json()["enabled"] is False and r.json()["next_run_at"] is None
+    r = await tenant_client.patch(f"{S}/{s['id']}", json={"enabled": True, "cron": "30 7 * * 1-5", "variables": {"city": "Delhi"}})
+    assert r.json()["description"] == "Weekdays at 7:30 AM" and r.json()["input"]["variables"] == {"city": "Delhi"}
+    assert (await tenant_client.patch(f"{S}/{s['id']}", json={"variables": {}})).status_code == 422
+
+    await make_due(db, s["id"])
+    assert await fire_due() == 1
+    [run] = (await db.execute(select(BuilderRun))).scalars().all()
+    assert run.schedule_id == s["id"] and run.input["variables"] == {"city": "Delhi"}
+    assert [a["filename"] for a in run.input["attachments"]] == ["resume.txt"]
+    await worker(runtime).drain()
+    assert (await get_run(tenant_client, run.id))["status"] == "succeeded"
+
+    # The file removed -> that day is skipped and says why.
+    assert (await tenant_client.delete(f"/api/v1/builder/attachments/{up.json()['id']}")).status_code == 204
+    await make_due(db, s["id"])
+    assert await fire_due() == 0
+    row = await schedule_row(db, s["id"])
+    assert row.last_status == "skipped" and "resume.txt" in row.last_error
+
+
+async def test_a_workflow_on_a_schedule_step_is_not_scheduled_twice(tenant_client):
+    wf = (await tenant_client.post(WF, json={"name": "Daily", **_graph({"cron": "0 9 * * *"})})).json()
+    r = await tenant_client.post(S, json={"workflow_id": wf["id"], "cron": "0 10 * * *"})
+    assert r.status_code == 409
+    assert (await tenant_client.post(S, json={"cron": "0 10 * * *"})).status_code == 422

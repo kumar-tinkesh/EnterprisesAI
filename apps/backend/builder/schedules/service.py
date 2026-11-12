@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.deps import CurrentUser
 from src.models import User
 
-from builder.models import BuilderAgent, BuilderSchedule, BuilderWorkflow
+from builder.models import BuilderAgent, BuilderAttachment, BuilderSchedule, BuilderWorkflow
 from builder.runs.db import as_utc, session_factory, utcnow
 from builder.runs.service import create_agent_run, create_workflow_run
 from builder.runs.start import agent_run_problems, workflow_run_problems
@@ -55,7 +55,10 @@ async def sync_workflow_schedules(db: AsyncSession, workflow: BuilderWorkflow) -
     """Mirror the workflow's Schedule trigger step(s) into builder_schedules.
     Runs inside the caller's transaction (the caller commits)."""
     wanted = {n["id"]: n for n in workflow.nodes or [] if n.get("type") == "schedule_trigger" and n.get("id")}
-    rows = (await db.execute(select(BuilderSchedule).where(BuilderSchedule.workflow_id == workflow.id))).scalars().all()
+    # Only the rows that mirror a step: one made from the Schedule panel (no step) is left alone.
+    rows = (
+        await db.execute(select(BuilderSchedule).where(BuilderSchedule.workflow_id == workflow.id, BuilderSchedule.node_id.is_not(None)))
+    ).scalars().all()
     existing = {r.node_id: r for r in rows}
     for row in rows:
         if row.node_id not in wanted:
@@ -94,6 +97,15 @@ async def start_scheduled_run(db: AsyncSession, schedule: BuilderSchedule) -> tu
         return ERROR, None, "Paused: the person who set this schedule no longer has access."
     text = str((schedule.input or {}).get("text") or "")
     variables = dict((schedule.input or {}).get("variables") or {})
+    files = list((schedule.input or {}).get("attachments") or [])
+    if files:
+        ids = [f.get("id") for f in files]
+        kept = set(
+            (await db.execute(select(BuilderAttachment.id).where(BuilderAttachment.id.in_(ids), BuilderAttachment.owner_id == user.id))).scalars()
+        )
+        if len(kept) < len(set(ids)):
+            gone = ", ".join(f.get("filename") or "a file" for f in files if f.get("id") not in kept)
+            return SKIPPED, None, f"Skipped: {gone} was removed; attach it to the schedule again."
 
     if schedule.kind == "agent":
         agent = await db.get(BuilderAgent, schedule.agent_id) if schedule.agent_id else None
@@ -105,7 +117,7 @@ async def start_scheduled_run(db: AsyncSession, schedule: BuilderSchedule) -> tu
         problems = await agent_run_problems(db, user, agent)
         if problems:
             return SKIPPED, None, "Skipped: " + " ".join(p.message for p in problems)
-        run = await create_agent_run(db, user, agent, text=text, variables=variables, schedule_id=schedule.id)
+        run = await create_agent_run(db, user, agent, text=text, variables=variables, schedule_id=schedule.id, attachments=files or None)
         return STARTED, run.id, None
 
     workflow = await db.get(BuilderWorkflow, schedule.workflow_id) if schedule.workflow_id else None
@@ -115,7 +127,7 @@ async def start_scheduled_run(db: AsyncSession, schedule: BuilderSchedule) -> tu
     problems = await workflow_run_problems(db, user, workflow, variables)
     if problems:
         return SKIPPED, None, "Skipped: " + " ".join(p.message for p in problems)
-    run = await create_workflow_run(db, user, workflow, text=text, variables=variables, schedule_id=schedule.id)
+    run = await create_workflow_run(db, user, workflow, text=text, variables=variables, schedule_id=schedule.id, attachments=files or None)
     return STARTED, run.id, None
 
 

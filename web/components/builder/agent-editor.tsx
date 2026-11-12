@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { Background, BackgroundVariant, Controls, ReactFlow, ReactFlowProvider, useReactFlow, type Edge, type NodeChange } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { AlertTriangle, ArrowLeft, Check, ChevronDown, MessagesSquare, Play, Save, Settings2, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, CalendarClock, Check, ChevronDown, MessagesSquare, Play, Save, Settings2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -62,6 +62,9 @@ function Editor({ id, onBack, onOpen, onChat }: EditorProps) {
   const queryClient = useQueryClient();
 
   const agentQuery = useQuery({ queryKey: ["builder-agent", id], queryFn: () => builderApi.getAgent(token, id), enabled: !!token });
+  const schedules = useQuery({ queryKey: ["builder-schedules", "agent", id], queryFn: () => builderApi.listSchedules(token, { agent_id: id }), enabled: !!token });
+  // A green dot on Schedule while any of its schedules is on.
+  const scheduledOn = (schedules.data ?? []).filter((s) => s.enabled).map((s) => s.description).join(", ");
   const kbs = useQuery({ queryKey: ["knowledge-bases", token], queryFn: () => knowledgeApi.list(token), enabled: !!token });
 
   const [form, setForm] = useState<DraftAgent | null>(null);
@@ -368,6 +371,20 @@ function Editor({ id, onBack, onOpen, onChat }: EditorProps) {
           <Button size="sm" variant="outline" aria-label="Test" aria-pressed={playOpen} className={cn("px-2 lg:px-3", playOpen && "bg-zinc-100")} onClick={() => setPlayOpen((o) => !o)}>
             <Play /> <span className="hidden lg:inline">Test</span>
           </Button>
+          {!agentQuery.data?.workflow_id && (
+            <Button
+              size="sm"
+              variant="outline"
+              aria-label="Schedule"
+              aria-pressed={selected?.kind === "agent" && selected.tab === "schedule"}
+              title={scheduledOn ? `Runs by itself: ${scheduledOn}` : "Run it by itself, every day or at a time you pick"}
+              className={cn("relative px-2 lg:px-3", selected?.kind === "agent" && selected.tab === "schedule" && "bg-zinc-100")}
+              onClick={() => setSelected(selected?.kind === "agent" && selected.tab === "schedule" ? null : { kind: "agent", tab: "schedule" })}
+            >
+              <CalendarClock /> <span className="hidden lg:inline">Schedule</span>
+              {scheduledOn && <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-emerald-500 ring-2 ring-[var(--surface)]" />}
+            </Button>
+          )}
           <Button size="sm" variant="outline" aria-label="Chat" title="Open its chat: your chats, files and history" className="px-2 lg:px-3" onClick={() => void openChat()}>
             <MessagesSquare /> <span className="hidden lg:inline">Chat</span>
           </Button>

@@ -18,7 +18,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import {
-  AlertTriangle, ArrowLeft, Check, ChevronDown, Eye, MessageSquare, MessagesSquare,
+  AlertTriangle, ArrowLeft, CalendarClock, Check, ChevronDown, Eye, MessageSquare, MessagesSquare,
   Play, Plus, Redo2, RotateCcw, Save, Sparkles, Square, Undo2, Wand2, X,
 } from "lucide-react";
 
@@ -40,6 +40,7 @@ import { TestsPanel } from "@/components/builder/tests-panel";
 import { VersionHistory, timeAgo } from "@/components/builder/version-history";
 import { TypeIcon } from "@/components/builder/type-icon";
 import { WorkflowSettings } from "@/components/builder/workflow-settings";
+import { WorkflowSchedulePanel } from "@/components/builder/schedule-panel";
 import { ApiError } from "@/lib/api";
 import { builderApi } from "@/lib/builder/api";
 import { arrange } from "@/lib/builder/arrange";
@@ -69,6 +70,7 @@ type Selection =
   | { kind: "history" }
   | { kind: "tests" }
   | { kind: "publish" }
+  | { kind: "schedule" }
   | null;
 type Notice = { tone: "ok" | "warn" | "error"; text: string; detail?: string[]; reload?: boolean } | null;
 
@@ -121,6 +123,7 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
 
   const wfQuery = useQuery({ queryKey: ["builder-workflow", id], queryFn: () => builderApi.getWorkflow(token, id), enabled: !!token });
   const agentsQuery = useQuery({ queryKey: ["builder-agents"], queryFn: () => builderApi.listAgents(token), enabled: !!token });
+  const schedulesQuery = useQuery({ queryKey: ["builder-schedules", "workflow", id], queryFn: () => builderApi.listSchedules(token, { workflow_id: id }), enabled: !!token });
 
   const [doc, setDoc] = useState<Doc | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -682,9 +685,11 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
   // The popup docked right; the canvas run's card steps aside while it shows.
   const panelOpen = !previewing && !!(selectedNode || selectedEdge || testNode || resultNode || selection?.kind === "settings");
   const standalone = (agentsQuery.data ?? []).filter((a) => !a.workflow_id);
+  // A green dot on Schedule while any of its schedules is on.
+  const scheduledOn = (schedulesQuery.data ?? []).filter((s) => s.enabled).map((s) => s.description).join(", ");
   const overrides = doc.config.approval_overrides ?? {};
   const approvalOn = !(overrides.edit === "never" && overrides.delete === "never");
-  const drawer = selection?.kind === "history" || selection?.kind === "tests" || selection?.kind === "publish";
+  const drawer = selection?.kind === "history" || selection?.kind === "tests" || selection?.kind === "publish" || selection?.kind === "schedule";
 
   const toggleApproval = () => {
     if (approvalOn && !window.confirm("Tools that change or delete data will run without asking anyone. Turn approvals off?")) return;
@@ -749,6 +754,19 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
             )}
             <Button size="sm" variant="outline" className={cn("hidden px-2 sm:inline-flex lg:px-3", playOpen && "bg-zinc-100")} onClick={() => setPlayOpen((o) => !o)} aria-label="Test in a chat" aria-pressed={playOpen}>
               <MessageSquare /> <span className="hidden lg:inline">Test</span>
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className={cn("relative px-2 lg:px-3", selection?.kind === "schedule" && "bg-zinc-100")}
+              disabled={previewing}
+              onClick={() => setSelection(selection?.kind === "schedule" ? null : { kind: "schedule" })}
+              aria-label="Schedule"
+              aria-pressed={selection?.kind === "schedule"}
+              title={scheduledOn ? `Runs by itself: ${scheduledOn}` : "Run it by itself, every day or at a time you pick"}
+            >
+              <CalendarClock /> <span className="hidden lg:inline">Schedule</span>
+              {scheduledOn && <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-emerald-500 ring-2 ring-[var(--surface)]" />}
             </Button>
             <Button size="sm" variant="outline" className="px-2 lg:px-3" onClick={() => void openChat()} aria-label="Chat" title="Open its chat: your chats, files and history">
               <MessagesSquare /> <span className="hidden lg:inline">Chat</span>
@@ -1007,6 +1025,16 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
                     )}
                     {!previewing && selection?.kind === "tests" && (
                       <TestsPanel kind="workflow" targetId={id} token={token} canManage={canManage} beforeRun={ensureSaved} onClose={() => setSelection(null)} />
+                    )}
+                    {!previewing && selection?.kind === "schedule" && (
+                      <WorkflowSchedulePanel
+                        workflowId={id}
+                        nodes={doc.nodes}
+                        token={token}
+                        dirty={dirty}
+                        onOpenStep={(nodeId) => setSelection({ kind: "node", id: nodeId, open: true })}
+                        onClose={() => setSelection(null)}
+                      />
                     )}
                     {!previewing && selection?.kind === "publish" && (
                       <PublishPanel kind="workflow" targetId={id} name={doc.name} token={token} currentVersion={doc.version} dirty={dirty} onClose={() => setSelection(null)} />

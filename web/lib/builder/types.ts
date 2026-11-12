@@ -264,7 +264,7 @@ export interface Schedule {
   cron: string;
   timezone: string;
   description: string;
-  input: { text?: string; variables?: Record<string, unknown> };
+  input: { text?: string; variables?: Record<string, unknown>; attachments?: { id: string; filename: string; kind: "document" | "image" }[] };
   enabled: boolean;
   next_run_at: string | null;
   last_run_at: string | null;
@@ -273,7 +273,7 @@ export interface Schedule {
   last_error: string | null;
   owner_id: string;
   is_mine: boolean;
-  /** Agent schedules are changed directly; a workflow's on its Schedule step. */
+  /** Made from a Schedule panel (an agent's, or a workflow's without a Schedule step): changed there. A Schedule step's is changed on the step. */
   editable: boolean;
   created_at: string;
 }

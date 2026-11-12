@@ -217,9 +217,15 @@ export const builderApi = {
   // Schedules
   listSchedules: (t: string, params: { agent_id?: string; workflow_id?: string }) =>
     call<Schedule[]>(t, `/schedules?${new URLSearchParams(params as Record<string, string>).toString()}`),
-  createSchedule: (t: string, body: { agent_id: string; cron: string; timezone: string; input: string; enabled?: boolean }) =>
-    call<Schedule>(t, "/schedules", "POST", body),
-  updateSchedule: (t: string, id: string, body: { cron?: string; timezone?: string; input?: string; enabled?: boolean }) =>
+  createSchedule: (
+    t: string,
+    body: { agent_id?: string; workflow_id?: string; cron: string; timezone: string; input: string; variables?: Record<string, unknown>; attachment_ids?: string[]; enabled?: boolean },
+  ) => call<Schedule>(t, "/schedules", "POST", body),
+  updateSchedule: (
+    t: string,
+    id: string,
+    body: { cron?: string; timezone?: string; input?: string; variables?: Record<string, unknown>; attachment_ids?: string[]; enabled?: boolean },
+  ) =>
     call<Schedule>(t, `/schedules/${id}`, "PATCH", body),
   deleteSchedule: (t: string, id: string) => call<void>(t, `/schedules/${id}`, "DELETE"),
   runSchedule: (t: string, id: string) => call<{ run_id: string }>(t, `/schedules/${id}/run`, "POST"),
