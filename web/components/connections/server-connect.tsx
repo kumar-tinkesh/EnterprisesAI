@@ -16,6 +16,7 @@ import { vendorApi, ApiError, type MCPServerEntry, type BridgeStatus } from "@/l
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { InstagramConnect } from "@/components/connections/instagram-connect";
 
 export function UserConnectModal({
   server,
@@ -39,6 +40,8 @@ export function UserConnectModal({
   const isOAuth = server.auth_type === "oauth2";
   // LinkedIn (backend vendor/services/mcp_auth/linkedin.py): each user's own li_at cookie.
   const isLinkedInCookie = server.auth_type === "linkedin_cookie";
+  // Instagram (mcp_auth/instagram.py): "Connect with Instagram", or a pasted token with the steps to make one.
+  const isInstagram = server.auth_type === "instagram_meta" || server.sign_in === "instagram";
   const [oauthMessage, setOauthMessage] = useState<string | null>(null);
   const isStdio = server.transport === "stdio";
   // No declared fields ever surfaced for this server (auth_type detection
@@ -103,7 +106,9 @@ export function UserConnectModal({
           </button>
         </div>
 
-        {isOAuth ? (
+        {isInstagram ? (
+          <InstagramConnect server={server} accessToken={accessToken} isPending={isPending} error={error} onClose={onClose} onSubmit={onSubmit} />
+        ) : isOAuth ? (
           <div className="mt-4 space-y-4">
             <p className="text-xs text-zinc-500">
               This connects <span className="font-mono">{server.name}</span> using your own

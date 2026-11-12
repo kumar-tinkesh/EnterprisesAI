@@ -19,7 +19,9 @@ import {
   Check,
   Search,
   Globe as GlobeIcon,
+  Instagram,
 } from "lucide-react";
+import { InstagramSignInModal, isInstagramServer } from "@/components/connections/instagram-sign-in-admin";
 
 import ProtectedDashboard from "@/components/protected-dashboard";
 import { useAuthStore } from "@/stores/auth-store";
@@ -47,6 +49,7 @@ export default function VendorMCPPage() {
   const [showAnalyzeModal, setShowAnalyzeModal] = useState(false);
   const [showGrantModal, setShowGrantModal] = useState(false);
   const [showToolsModal, setShowToolsModal] = useState(false);
+  const [igServer, setIgServer] = useState<{ id: string; name: string } | null>(null);
   const [showConnectModal, setShowConnectModal] = useState(false);
   const [analyzeRepoUrl, setAnalyzeRepoUrl] = useState("");
   const [analyzeResult, setAnalyzeResult] = useState<AnalyzeRepoResponse | null>(null);
@@ -297,6 +300,15 @@ export default function VendorMCPPage() {
                             >
                               <Link className="h-4 w-4" />
                             </button>
+                        {isInstagramServer(s) && (
+                          <button
+                            onClick={() => setIgServer({ id: s.id, name: s.name })}
+                            className="p-1 text-zinc-400 hover:text-pink-600 cursor-pointer"
+                            title="Connect with Instagram: set up the Meta app"
+                          >
+                            <Instagram className="h-4 w-4" />
+                          </button>
+                        )}
                         <button
                           onClick={() => {
                             setToolsServer({
@@ -424,6 +436,10 @@ export default function VendorMCPPage() {
           isPending={connectMutation.isPending}
           onClose={() => setShowToolsModal(false)}
         />
+      )}
+
+      {igServer && (
+        <InstagramSignInModal serverId={igServer.id} serverName={igServer.name} accessToken={accessToken} onClose={() => setIgServer(null)} />
       )}
 
       {showConnectModal && connectServer && (

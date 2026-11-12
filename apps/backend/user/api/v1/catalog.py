@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.deps import CurrentUser, get_current_user
 from src.db.session import get_db
 
+from vendor.services.mcp_auth import instagram
 from user.api.schemas import CatalogEntry, CatalogResponse
 from user.services.catalog_engine import (
     credential_field_names,
@@ -57,6 +58,7 @@ async def get_catalog(
             auth_type=s.auth_type,
             credential_fields=credential_field_names(s),
             connected=s.id in connected_ids,
+            sign_in="instagram" if instagram.is_instagram(s) and instagram.sign_in_ready(s) else None,
         )
         for s in servers
     ]

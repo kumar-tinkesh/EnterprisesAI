@@ -18,7 +18,7 @@ from vendor.models import MCPTool, VendorMCPServer
 from vendor.services import mcp_auth
 from vendor.services.embedding import embed_tool
 from vendor.services import known_servers
-from vendor.services.mcp_auth import linkedin
+from vendor.services.mcp_auth import instagram, linkedin
 from vendor.services.mcp_client import MCPClient
 from vendor.services.whatsapp_bridge import manager as bridge_manager
 
@@ -37,6 +37,8 @@ async def _resolve_and_build_config(
     # A LinkedIn server registered before its profile existed asks for PROXY_* and can't start (see
     # vendor.services.mcp_auth.linkedin); fixed here, so the next connect or run saves the fix.
     linkedin.apply_profile(server)
+    # Instagram: the two fields it reads, IG_HOST from the token (vendor.services.mcp_auth.instagram).
+    instagram.apply_profile(server)
     # Same for a repo that only runs from its published package (vendor.services.known_servers).
     known_servers.apply_profile(server)
     transport = getattr(server, "transport", None)
@@ -127,6 +129,9 @@ async def _resolve_and_build_config(
         # never the detected repo clone (vendor.services.mcp_auth.linkedin).
         if auth_config.get("auth_type") == linkedin.AUTH_TYPE:
             config.update(linkedin.launch_config(auth["credentials"], for_user=user_id is not None))
+        # Instagram: token, account id and the host for that token — never the Meta app's secret.
+        if auth_config.get("auth_type") == instagram.AUTH_TYPE:
+            config["credentials"] = instagram.launch_credentials(auth["credentials"])
         # device_pairing (e.g. WhatsApp): the detected command/args point at
         # a fresh, unauthenticated clone of the upstream repo, which can't
         # work. Always run our vendored MCP server instead, with the backend's
@@ -201,7 +206,7 @@ async def test_mcp_connection(
 
     server.bound_tools = result["bound_tools"]
     server.status = "VERIFIED"
-    if (server.auth_config or {}).get("auth_type") in ("device_pairing", linkedin.AUTH_TYPE, "oauth2"):
+    if (server.auth_config or {}).get("auth_type") in ("device_pairing", linkedin.AUTH_TYPE, instagram.AUTH_TYPE, "oauth2"):
         # Pairing / the li_at cookie is per user, so the test ran with no
         # credentials and reports "none" — keep the column in step with auth_config instead.
         # An OAuth stdio server reports "env"; it stays oauth2 so people sign in.
@@ -226,8 +231,8 @@ async def test_mcp_connection(
 
     if request_credentials:
         to_store = request_credentials
-        if (server.auth_config or {}).get("auth_type") == "oauth2":
-            # Keep what "Connect via OAuth" saved (refresh token, the OAuth app's ID/secret that
+        if (server.auth_config or {}).get("auth_type") in ("oauth2", instagram.AUTH_TYPE):
+            # Keep what "Connect via OAuth" (or Instagram's sign-in setup: the Meta app) saved (refresh token, the OAuth app's ID/secret that
             # people's own sign-ins use) — the form only re-sends the fields it shows.
             stored = await mcp_auth.load_server_credentials(db, server_id=str(server.id), tenant_id=tenant_id)
             # Blank form fields mustn't wipe what the sign-in saved (a registered client_id, the token).
@@ -284,6 +289,9 @@ async def verify_user_credentials(
     request_credentials: dict[str, str],
 ) -> dict:
     """End-user self-service connect: prove *this user's own* credentials work."""
+    if instagram.is_instagram(server):
+        # A pasted token, cleaned (quotes, "Bearer ", line breaks) — or why it can't be one.
+        request_credentials = instagram.check_pasted(request_credentials)
     config = await _resolve_and_build_config(
         db,
         server=server,

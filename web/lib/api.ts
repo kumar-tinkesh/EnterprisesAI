@@ -379,6 +379,19 @@ export interface MCPServerEntry {
   auth_type?: string | null;
   credential_fields?: string[];
   connected?: boolean;
+  /** "instagram" when "Connect with Instagram" works (the admin set up the Meta app). */
+  sign_in?: string | null;
+}
+
+/** The Meta app behind "Connect with Instagram" (never its secret). */
+export interface InstagramSignIn {
+  app_id: string | null;
+  config_id: string | null;
+  has_secret: boolean;
+  ready: boolean;
+  /** Register this as the Redirect URL in the Meta app's login configuration. */
+  redirect_uri: string;
+  redirect_is_https: boolean;
 }
 
 export interface CatalogResponse {
@@ -519,6 +532,13 @@ export const vendorApi = {
       body: JSON.stringify({ is_global: isGlobal }),
     }, token, BACKEND_API_URL),
   // "Connect via OAuth" bootstrap — see apps/backend/vendor/services/oauth_flow.py
+  getInstagramSignIn: (token: string, serverId: string) =>
+    request<InstagramSignIn>(`${VR}/mcp/${serverId}/instagram-sign-in`, {}, token, BACKEND_API_URL),
+  setInstagramSignIn: (token: string, serverId: string, body: { app_id: string; app_secret?: string; config_id: string }) =>
+    request<InstagramSignIn>(`${VR}/mcp/${serverId}/instagram-sign-in`, { method: "PUT", body: JSON.stringify(body) }, token, BACKEND_API_URL),
+  /** "Connect with Instagram": this user's own Meta sign-in, in a popup. */
+  startInstagramSignIn: (token: string, serverId: string) =>
+    request<OAuthAuthorizeResponse>(`${VR}/mcp/${serverId}/instagram/authorize`, { method: "POST" }, token, BACKEND_API_URL),
   setMCPOAuthConfig: (token: string, serverId: string, body: OAuthConfigBody) =>
     request<VendorMCPServer>(`${VR}/mcp/${serverId}/oauth-config`, {
       method: "PATCH",
