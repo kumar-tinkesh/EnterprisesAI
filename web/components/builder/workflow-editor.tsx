@@ -41,6 +41,7 @@ import { VersionHistory, timeAgo } from "@/components/builder/version-history";
 import { TypeIcon } from "@/components/builder/type-icon";
 import { WorkflowSettings } from "@/components/builder/workflow-settings";
 import { WorkflowSchedulePanel } from "@/components/builder/schedule-panel";
+import { UsagePanel } from "@/components/builder/usage-panel";
 import { ApiError } from "@/lib/api";
 import { builderApi } from "@/lib/builder/api";
 import { arrange } from "@/lib/builder/arrange";
@@ -71,6 +72,7 @@ type Selection =
   | { kind: "tests" }
   | { kind: "publish" }
   | { kind: "schedule" }
+  | { kind: "usage" }
   | null;
 type Notice = { tone: "ok" | "warn" | "error"; text: string; detail?: string[]; reload?: boolean } | null;
 
@@ -689,7 +691,7 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
   const scheduledOn = (schedulesQuery.data ?? []).filter((s) => s.enabled).map((s) => s.description).join(", ");
   const overrides = doc.config.approval_overrides ?? {};
   const approvalOn = !(overrides.edit === "never" && overrides.delete === "never");
-  const drawer = selection?.kind === "history" || selection?.kind === "tests" || selection?.kind === "publish" || selection?.kind === "schedule";
+  const drawer = selection?.kind === "history" || selection?.kind === "tests" || selection?.kind === "publish" || selection?.kind === "schedule" || selection?.kind === "usage";
 
   const toggleApproval = () => {
     if (approvalOn && !window.confirm("Tools that change or delete data will run without asking anyone. Turn approvals off?")) return;
@@ -807,6 +809,7 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
                   : []),
                 { label: "Run settings", divided: true, onClick: () => setSelection(selection?.kind === "settings" ? null : { kind: "settings" }) },
                 { label: "Tests", onClick: () => setSelection(selection?.kind === "tests" ? null : { kind: "tests" }) },
+                { label: "Usage and cost", onClick: () => setSelection(selection?.kind === "usage" ? null : { kind: "usage" }) },
                 { label: "Version history", onClick: () => setSelection(selection?.kind === "history" ? null : { kind: "history" }) },
                 ...(canManage ? [{ label: "Publish", onClick: () => setSelection(selection?.kind === "publish" ? null : { kind: "publish" }) }] : []),
                 ...DEPTHS.map((d, i) => ({ label: `Answer: ${d.label}`, checked: depth === d.value, divided: i === 0, onClick: () => setDepth(d.value) })),
@@ -1025,6 +1028,9 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
                     )}
                     {!previewing && selection?.kind === "tests" && (
                       <TestsPanel kind="workflow" targetId={id} token={token} canManage={canManage} beforeRun={ensureSaved} onClose={() => setSelection(null)} />
+                    )}
+                    {!previewing && selection?.kind === "usage" && (
+                      <UsagePanel kind="workflow" targetId={id} token={token} onClose={() => setSelection(null)} />
                     )}
                     {!previewing && selection?.kind === "schedule" && (
                       <WorkflowSchedulePanel

@@ -855,3 +855,20 @@ export type RunEvent =
   | { type: "output"; text: string; sources?: string[] }
   /** The answer as it's written: ``text`` starts at ``at`` in that turn's answer. */
   | { type: "output_delta"; node_id: string; turn: number; at: number; text: string };
+
+/** What your runs cost this month (estimates), and your own monthly limit. */
+export interface Spend {
+  month_start: string;
+  /** The 1st of next month: the limit starts over. */
+  resets_on: string;
+  spent_usd: number;
+  last_month_usd: number;
+  runs: number;
+  /** Runs whose model has no known price (not in spent_usd). */
+  unpriced_runs: number;
+  limit_usd: number | null;
+  /** near = 80%+ of the limit; over = new runs wait. */
+  status: "ok" | "near" | "over";
+  daily: { date: string; cost_usd: number }[];
+  by_item: { kind: "agent" | "workflow"; id: string; name: string; exists: boolean; runs: number; cost_usd: number }[];
+}

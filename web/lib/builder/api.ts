@@ -32,6 +32,7 @@ import type {
   PublicKeyCreated,
   PublishCheck,
   Schedule,
+  Spend,
   ShareCaller,
   SharedInfo,
   SharedNeeds,
@@ -213,6 +214,8 @@ export const builderApi = {
   health: (t: string, kind: "agent" | "workflow", id: string) => call<Health>(t, `/${kind}s/${id}/health`),
   insights: (t: string, days = 7) => call<Insights>(t, `/insights?days=${days}`),
   published: (t: string, days = 14) => call<Published>(t, `/published?days=${days}`),
+  spend: (t: string) => call<Spend>(t, "/spend"),
+  setSpendLimit: (t: string, monthly_usd: number | null) => call<Spend>(t, "/spend/limit", "PUT", { monthly_usd }),
 
   // Schedules
   listSchedules: (t: string, params: { agent_id?: string; workflow_id?: string }) =>

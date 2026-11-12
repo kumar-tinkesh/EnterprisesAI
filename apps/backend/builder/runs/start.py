@@ -16,7 +16,18 @@ from builder.models import BuilderAgent, BuilderWorkflow
 from builder.services.references import agent_config_problems, check_workflow
 
 
+async def spend_problems(db: AsyncSession, user: CurrentUser) -> list[GraphProblem]:
+    """The person's own monthly limit, once it's used up."""
+    from builder.spend import over_limit
+
+    reason = await over_limit(db, user.id)
+    return [GraphProblem("spend_limit", reason)] if reason else []
+
+
 async def agent_run_problems(db: AsyncSession, user: CurrentUser, agent: BuilderAgent) -> list[GraphProblem]:
+    problems = await spend_problems(db, user)
+    if problems:
+        return problems
     return await agent_config_problems(db, user, AgentConfig.model_validate(agent.config or {}), check_connection=True, self_id=agent.id)
 
 
@@ -24,6 +35,9 @@ async def workflow_run_problems(
     db: AsyncSession, user: CurrentUser, workflow: BuilderWorkflow, variables: dict
 ) -> list[GraphProblem]:
     nodes = [WorkflowNode.model_validate(n) for n in workflow.nodes or []]
+    over = await spend_problems(db, user)
+    if over:
+        return over
     if not nodes:
         return [GraphProblem("empty", "This workflow has no steps yet.")]
     problems = await check_workflow(
@@ -38,4 +52,4 @@ async def workflow_run_problems(
     return problems
 
 
-__all__ = ["agent_run_problems", "workflow_run_problems"]
+__all__ = ["agent_run_problems", "spend_problems", "workflow_run_problems"]

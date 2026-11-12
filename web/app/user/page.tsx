@@ -8,6 +8,7 @@ import { ArrowRight, CheckCircle2, ChevronRight, Circle, Clock, Loader2, Message
 import ProtectedDashboard from "@/components/protected-dashboard";
 import { ApprovalCard } from "@/components/builder/approval-card";
 import { DailyBars } from "@/components/charts/daily-bars";
+import { SpendAlert, SpendPanel, useSpend } from "@/components/builder/spend-panel";
 import { Stat, Stats, type Delta } from "@/components/ui/stats";
 import { builderApi } from "@/lib/builder/api";
 import { vendorApi } from "@/lib/api";
@@ -127,6 +128,8 @@ function Dashboard() {
   const runs = useQuery({ queryKey: ["dashboard-runs"], queryFn: () => builderApi.listRuns(token, { limit: 50 }), enabled: !!token, refetchInterval: 15000 });
   const approvals = useQuery({ queryKey: ["builder-approvals"], queryFn: () => builderApi.listApprovals(token), enabled: !!token, refetchInterval: 15000 });
   const catalog = useQuery({ queryKey: ["catalog", token, ""], queryFn: () => vendorApi.getCatalog(token), enabled: !!token });
+  const spend = useSpend(token);
+  const spendAlert = !!spend.data && spend.data.status !== "ok";
 
   const ins = insights.data;
   const agentList = agents.data ?? [];
@@ -204,9 +207,14 @@ function Dashboard() {
       )}
 
       {/* Needs attention: one line per agent/workflow; the long-forgotten ones folded away */}
-      {(fresh.length > 0 || stale.length > 0 || failedRecently.length > 0) && (
+      {(fresh.length > 0 || stale.length > 0 || failedRecently.length > 0 || spendAlert) && (
         <Panel title="Needs your attention" aside={fresh.length > 4 ? `+ ${fresh.length - 4} more waiting` : undefined}>
           <ul className="divide-y divide-zinc-100">
+            {spendAlert && spend.data && (
+              <li>
+                <SpendAlert spend={spend.data} />
+              </li>
+            )}
             {fresh.slice(0, 4).map((g) => {
               // Not one of theirs to chat with (a share-link / API run): decide here.
               if (!g.href) {
@@ -332,6 +340,8 @@ function Dashboard() {
           )}
         </Panel>
       </div>
+
+      <SpendPanel token={token} />
 
       {/* Recent runs */}
       <Panel

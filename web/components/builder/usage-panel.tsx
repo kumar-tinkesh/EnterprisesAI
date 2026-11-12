@@ -29,7 +29,7 @@ export function UsagePanel({ kind, targetId, token, onClose }: { kind: "agent" |
   const u = usage.data;
 
   return (
-    <div className="flex h-full flex-col bg-white">
+    <div className="flex h-full flex-col bg-[var(--surface)]">
       <div className="flex items-center gap-2 border-b border-zinc-200 px-4 py-3">
         <Coins className="h-4 w-4 text-amber-500" />
         <h2 className="flex-1 text-sm font-semibold text-zinc-900">Usage and cost</h2>
