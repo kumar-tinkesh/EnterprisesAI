@@ -17,7 +17,6 @@ import {
 } from "lucide-react";
 
 import ProtectedDashboard from "@/components/protected-dashboard";
-import { AuditLogsPanel } from "@/components/audit-logs-panel";
 import { useAuthStore } from "@/stores/auth-store";
 import { api, ApiError, type TenantMember } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -97,7 +96,7 @@ export default function TenantDashboard() {
     );
 
   return (
-    <ProtectedDashboard path="/tenant" title="Organization admin" description="Your organization's people and workspaces.">
+    <ProtectedDashboard path="/tenant" title="Members" description="Your organization's people and workspaces.">
       <div className="mt-6 grid grid-cols-3 gap-3">
         <Stat icon={<Users className="h-4 w-4" />} label="Members" value={statsLoading ? "…" : stats?.member_count ?? members.length} />
         <Stat icon={<UserCheck className="h-4 w-4" />} label="Can sign in" value={membersLoading ? "…" : activeCount} />
@@ -223,7 +222,6 @@ export default function TenantDashboard() {
         />
       )}
 
-      <AuditLogsPanel limit={25} />
     </ProtectedDashboard>
   );
 }

@@ -192,17 +192,13 @@ export default function VendorMCPPage() {
       path="/vendor"
       title="Apps"
       description="The MCP servers people can connect: add them, test them, and choose who can use them."
-    >
-      <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
-        <a href="/vendor" className="text-sm text-zinc-500 hover:text-zinc-800 cursor-pointer">
-          ← Dashboard
-        </a>
-        <Button onClick={() => setShowAddModal(true)} size="sm">
+      action={
+        <Button onClick={() => setShowAddModal(true)} size="sm" className="h-9">
           <Plus className="h-4 w-4" /> Add app
         </Button>
-      </div>
-
-      <div className="mt-4 space-y-3">
+      }
+    >
+      <div className="mt-6 space-y-3">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           <div className="relative sm:w-72">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />

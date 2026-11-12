@@ -26,6 +26,8 @@ export function DailyBars({
   badLabel = "Error",
   empty,
   summary,
+  single,
+  period = "Day",
 }: {
   title: string;
   subtitle: string;
@@ -35,6 +37,10 @@ export function DailyBars({
   empty: string;
   /** A line under the title, e.g. "10 runs · 4 failed". */
   summary?: React.ReactNode;
+  /** One series only (e.g. sign-ups): no failed part, legend or column. */
+  single?: boolean;
+  /** The table's first column ("Day", "Week of"). */
+  period?: string;
 }) {
   const [hover, setHover] = useState<number | null>(null);
   const [asTable, setAsTable] = useState(false);
@@ -55,7 +61,7 @@ export function DailyBars({
         </div>
         <div className="flex items-center gap-3 text-xs text-zinc-600">
           <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm" style={{ background: GOOD }} /><CheckCircle2 className="h-3 w-3" /> {goodLabel}</span>
-          <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm" style={{ background: CRITICAL }} /><XCircle className="h-3 w-3" /> {badLabel}</span>
+          {!single && <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm" style={{ background: CRITICAL }} /><XCircle className="h-3 w-3" /> {badLabel}</span>}
           <button type="button" onClick={() => setAsTable((t) => !t)} className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1 hover:bg-zinc-50 cursor-pointer" aria-pressed={asTable}>
             <Table2 className="h-3 w-3" /> {asTable ? "Chart" : "Table"}
           </button>
@@ -69,9 +75,9 @@ export function DailyBars({
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs uppercase tracking-wider text-zinc-500">
-                <th className="py-1 font-medium">Day</th>
+                <th className="py-1 font-medium">{period}</th>
                 <th className="py-1 text-right font-medium">{goodLabel}</th>
-                <th className="py-1 text-right font-medium">{badLabel}</th>
+                {!single && <th className="py-1 text-right font-medium">{badLabel}</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-100">
@@ -79,7 +85,7 @@ export function DailyBars({
                 <tr key={d.date}>
                   <td className="py-1.5 text-zinc-700">{dayLabel(d.date)}</td>
                   <td className="py-1.5 text-right tabular-nums text-zinc-900">{d.good}</td>
-                  <td className="py-1.5 text-right tabular-nums text-zinc-900">{d.bad}</td>
+                  {!single && <td className="py-1.5 text-right tabular-nums text-zinc-900">{d.bad}</td>}
                 </tr>
               ))}
             </tbody>
@@ -106,7 +112,7 @@ export function DailyBars({
                     onFocus={() => setHover(i)}
                     onBlur={() => setHover(null)}
                     tabIndex={0}
-                    aria-label={`${dayLabel(d.date)}: ${d.good} ${good}, ${d.bad} ${bad}`}
+                    aria-label={single ? `${dayLabel(d.date)}: ${d.good} ${good}` : `${dayLabel(d.date)}: ${d.good} ${good}, ${d.bad} ${bad}`}
                   >
                     <div
                       className={cn("flex w-full flex-col justify-end gap-[2px] transition-opacity", hover !== null && hover !== i && "opacity-60")}
@@ -122,7 +128,7 @@ export function DailyBars({
                       <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 -translate-x-1/2 whitespace-nowrap rounded-md border border-zinc-200 bg-[var(--surface-raised)] px-2.5 py-1.5 text-xs shadow-lg">
                         <p className="font-medium text-zinc-900">{dayLabel(d.date)}</p>
                         <p className="flex items-center gap-1 text-zinc-600"><CheckCircle2 className="h-3 w-3" style={{ color: GOOD }} /> {d.good} {good}</p>
-                        <p className="flex items-center gap-1 text-zinc-600"><XCircle className="h-3 w-3" style={{ color: CRITICAL }} /> {d.bad} {bad}</p>
+                        {!single && <p className="flex items-center gap-1 text-zinc-600"><XCircle className="h-3 w-3" style={{ color: CRITICAL }} /> {d.bad} {bad}</p>}
                       </div>
                     )}
                   </div>

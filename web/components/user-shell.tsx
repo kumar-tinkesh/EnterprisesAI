@@ -3,13 +3,15 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Bot, Brain, Globe, LayoutDashboard, LogOut, Menu, PanelLeftClose, PanelLeftOpen, Plug, Sparkles, X, Zap } from "lucide-react";
+import { Activity, Bot, Brain, Building2, Globe, LayoutDashboard, LogOut, Menu, PanelLeftClose, PanelLeftOpen, Plug, Sparkles, Users, X, Zap } from "lucide-react";
 
 import { Avatar } from "@/components/builder/chat/chat-message";
 import { useAuthStore } from "@/stores/auth-store";
 import { cn } from "@/lib/utils";
 
-const NAV = [
+type NavItem = { href: string; label: string; Icon: typeof LayoutDashboard };
+
+const NAV: NavItem[] = [
   { href: "/user", label: "Dashboard", Icon: LayoutDashboard },
   { href: "/user/agents", label: "AI Compiler", Icon: Bot },
   { href: "/user/executions", label: "Executions", Icon: Zap },
@@ -18,6 +20,29 @@ const NAV = [
   { href: "/user/knowledge", label: "Knowledge Base", Icon: Brain },
 ];
 
+/** The admins' menus: the same frame, their own pages. */
+export const SHELLS: Record<"user" | "vendor" | "tenant", { home: string; nav: NavItem[]; caption?: string }> = {
+  user: { home: "/user", nav: NAV },
+  vendor: {
+    home: "/vendor",
+    caption: "Platform admin",
+    nav: [
+      { href: "/vendor", label: "Overview", Icon: LayoutDashboard },
+      { href: "/vendor/accounts", label: "Accounts", Icon: Building2 },
+      { href: "/vendor/tools", label: "Apps", Icon: Plug },
+      { href: "/vendor/activity", label: "Activity", Icon: Activity },
+    ],
+  },
+  tenant: {
+    home: "/tenant",
+    caption: "Organization admin",
+    nav: [
+      { href: "/tenant", label: "Members", Icon: Users },
+      { href: "/tenant/activity", label: "Activity", Icon: Activity },
+    ],
+  },
+};
+
 const COLLAPSED_KEY = "user-shell.collapsed";
 
 /**
@@ -25,8 +50,9 @@ const COLLAPSED_KEY = "user-shell.collapsed";
  * screens, a drawer on phones) beside the page. Full-bleed pages (canvas,
  * editors, chat) fill the space next to it.
  */
-export function UserShell({ fullBleed, children }: { fullBleed?: boolean; children: React.ReactNode }) {
+export function UserShell({ fullBleed, shell = "user", children }: { fullBleed?: boolean; shell?: keyof typeof SHELLS; children: React.ReactNode }) {
   const pathname = usePathname();
+  const frame = SHELLS[shell];
   // Read up front (the shell only renders in the browser, after sign-in is checked) so it doesn't jump width on load.
   const [collapsed, setCollapsed] = useState(() => {
     try {
@@ -56,7 +82,7 @@ export function UserShell({ fullBleed, children }: { fullBleed?: boolean; childr
         <button type="button" onClick={() => setDrawer(true)} aria-label="Open menu" className="rounded-md p-1.5 text-zinc-600 hover:bg-zinc-100 cursor-pointer">
           <Menu className="h-5 w-5" />
         </button>
-        <Brand />
+        <Brand home={frame.home} />
       </div>
       {drawer && (
         <div className="fixed inset-0 z-50 md:hidden" role="dialog" aria-modal="true" aria-label="Menu">
@@ -65,13 +91,13 @@ export function UserShell({ fullBleed, children }: { fullBleed?: boolean; childr
             <button type="button" onClick={() => setDrawer(false)} aria-label="Close menu" className="absolute right-2 top-3 rounded-md p-1.5 text-zinc-500 hover:bg-zinc-100 cursor-pointer">
               <X className="h-4 w-4" />
             </button>
-            <SidebarBody pathname={pathname} collapsed={false} />
+            <SidebarBody pathname={pathname} collapsed={false} frame={frame} />
           </div>
         </div>
       )}
 
       <aside className={cn("hidden shrink-0 flex-col border-r border-zinc-200 bg-white transition-[width] duration-200 md:flex", collapsed ? "w-16" : "w-60")}>
-        <SidebarBody pathname={pathname} collapsed={collapsed} onToggle={toggle} />
+        <SidebarBody pathname={pathname} collapsed={collapsed} onToggle={toggle} frame={frame} />
       </aside>
 
       <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">
@@ -82,9 +108,9 @@ export function UserShell({ fullBleed, children }: { fullBleed?: boolean; childr
   );
 }
 
-function Brand({ collapsed }: { collapsed?: boolean }) {
+function Brand({ collapsed, home = "/user" }: { collapsed?: boolean; home?: string }) {
   return (
-    <Link href="/user" className="flex min-w-0 items-center gap-2">
+    <Link href={home} className="flex min-w-0 items-center gap-2">
       <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-[var(--accent)] text-white">
         <Sparkles className="h-4 w-4" />
       </span>
@@ -93,7 +119,17 @@ function Brand({ collapsed }: { collapsed?: boolean }) {
   );
 }
 
-function SidebarBody({ pathname, collapsed, onToggle }: { pathname: string; collapsed: boolean; onToggle?: () => void }) {
+function SidebarBody({
+  pathname,
+  collapsed,
+  onToggle,
+  frame,
+}: {
+  pathname: string;
+  collapsed: boolean;
+  onToggle?: () => void;
+  frame: (typeof SHELLS)[keyof typeof SHELLS];
+}) {
   const router = useRouter();
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
@@ -103,7 +139,7 @@ function SidebarBody({ pathname, collapsed, onToggle }: { pathname: string; coll
     <>
       <div className={cn("flex h-14 shrink-0 items-center gap-2 border-b border-zinc-100", collapsed ? "justify-center px-2" : "pl-4 pr-2")}>
         {/* Collapsed, the header is just the way back open. */}
-        {!(collapsed && onToggle) && <Brand />}
+        {!(collapsed && onToggle) && <Brand home={frame.home} />}
         {onToggle && (
           <button
             type="button"
@@ -118,8 +154,8 @@ function SidebarBody({ pathname, collapsed, onToggle }: { pathname: string; coll
       </div>
 
       <nav className="flex-1 space-y-0.5 overflow-y-auto p-2" aria-label="Main">
-        {NAV.map(({ href, label, Icon }) => {
-          const active = href === "/user" ? pathname === "/user" : pathname.startsWith(href);
+        {frame.nav.map(({ href, label, Icon }) => {
+          const active = href === frame.home ? pathname === frame.home : pathname.startsWith(href);
           return (
             <Link
               key={href}
@@ -146,7 +182,7 @@ function SidebarBody({ pathname, collapsed, onToggle }: { pathname: string; coll
             {!collapsed && (
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium text-zinc-900">{user.full_name || user.email}</p>
-                <p className="truncate text-xs text-zinc-500">{team ? "Team workspace" : "Personal workspace"}</p>
+                <p className="truncate text-xs text-zinc-500">{frame.caption ?? (team ? "Team workspace" : "Personal workspace")}</p>
               </div>
             )}
           </div>

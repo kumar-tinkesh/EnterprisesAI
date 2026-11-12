@@ -143,10 +143,10 @@ export default function ProtectedDashboard({
     );
   }
 
-  // The user's pages share the sidebar frame; it holds sign-out too.
-  if (path === "/user") {
+  // Every signed-in page shares the sidebar frame (its menu by role); it holds sign-out too.
+  if (path === "/user" || path === "/vendor" || path === "/tenant") {
     return (
-      <UserShell fullBleed={fullBleed}>
+      <UserShell fullBleed={fullBleed} shell={path === "/user" ? "user" : path === "/vendor" ? "vendor" : "tenant"}>
         {fullBleed ? children : (
           <div className="mx-auto max-w-6xl px-4 py-6 sm:px-8 sm:py-8">
             <header className="flex flex-wrap items-end justify-between gap-4">

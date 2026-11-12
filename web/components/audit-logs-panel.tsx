@@ -50,34 +50,57 @@ function about(resource: string, names: Record<string, string>): string {
   if (!resource || resource === "auth" || resource === "sso") return "";
   const [kind, id] = resource.split(":");
   if (id && names[id]) return names[id];
-  if (kind === "mcp_server") return "an app that was since removed";
+  // Only say "removed" once the app list is in; before that it's just not loaded yet.
+  if (kind === "mcp_server") return Object.keys(names).length ? "an app that was since removed" : "an app";
   return resource;
 }
 
 /** The latest activity this admin may see (role-scoped server-side), in plain words. */
-export function AuditLogsPanel({ limit = 25, names = {} }: { limit?: number; names?: Record<string, string> }) {
+export function AuditLogsPanel({
+  limit = 25,
+  names = {},
+  moreHref,
+  title = "Activity",
+  compact,
+}: {
+  limit?: number;
+  names?: Record<string, string>;
+  /** A "View all" link (the Overview's short list). */
+  moreHref?: string;
+  title?: string;
+  /** No filters (a short list on an overview). */
+  compact?: boolean;
+}) {
   const accessToken = useAuthStore((s) => s.accessToken) || "";
   const [filter, setFilter] = useState<Filter>("all");
   const [showNoise, setShowNoise] = useState(false);
 
   // More than shown: the session refreshes are dropped before the limit is applied.
-  const { data: logs = [], isLoading, isError } = useQuery({
-    queryKey: ["audit-logs", accessToken, 200],
-    queryFn: () => api.getAuditLogs(accessToken, { limit: 200 }),
+  const [fetchSize, setFetchSize] = useState(Math.max(200, limit * 4));
+  const [shownCount, setShownCount] = useState(limit);
+  const { data: logs = [], isLoading, isError, isFetching } = useQuery({
+    queryKey: ["audit-logs", accessToken, fetchSize],
+    queryFn: () => api.getAuditLogs(accessToken, { limit: fetchSize }),
     enabled: !!accessToken,
   });
 
   const shown = logs
     .filter((l) => showNoise || !NOISE.has(l.action))
     .filter((l) => filter === "all" || ACTIONS[l.action]?.group === filter)
-    .slice(0, limit);
+  ;
+  const page = shown.slice(0, shownCount);
   const hidden = logs.filter((l) => NOISE.has(l.action)).length;
 
   return (
-    <section className="mt-8 overflow-hidden rounded-xl border border-zinc-200">
+    <section className="overflow-hidden rounded-xl border border-zinc-200">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-100 px-4 py-3">
-        <h2 className="text-base font-semibold text-zinc-900">Activity</h2>
-        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter activity">
+        <h2 className="text-base font-semibold text-zinc-900">{title}</h2>
+        {moreHref && (
+          <a href={moreHref} className="text-sm font-medium text-zinc-700 hover:text-zinc-900">
+            View all →
+          </a>
+        )}
+        {!compact && <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter activity">
           {FILTERS.map(([id, text]) => (
             <button
               key={id}
@@ -92,7 +115,7 @@ export function AuditLogsPanel({ limit = 25, names = {} }: { limit?: number; nam
               {text}
             </button>
           ))}
-        </div>
+        </div>}
       </div>
       {isLoading ? (
         <div className="flex items-center gap-2 px-4 py-6 text-sm text-zinc-500">
@@ -100,11 +123,11 @@ export function AuditLogsPanel({ limit = 25, names = {} }: { limit?: number; nam
         </div>
       ) : isError ? (
         <p className="px-4 py-6 text-sm text-red-600">Couldn&apos;t load the activity.</p>
-      ) : shown.length === 0 ? (
+      ) : page.length === 0 ? (
         <p className="px-4 py-6 text-sm text-zinc-500">Nothing here yet.</p>
       ) : (
         <ul className="divide-y divide-zinc-100">
-          {shown.map((log: AuditLog) => {
+          {page.map((log: AuditLog) => {
             const what = ACTIONS[log.action]?.text ?? log.action.replace(/[._]/g, " ");
             const target = about(log.resource, names);
             return (
@@ -122,7 +145,20 @@ export function AuditLogsPanel({ limit = 25, names = {} }: { limit?: number; nam
           })}
         </ul>
       )}
-      {hidden > 0 && (
+      {!compact && (shown.length > shownCount || logs.length >= fetchSize) && (
+        <button
+          type="button"
+          disabled={isFetching}
+          onClick={() => {
+            setShownCount((n) => n + limit);
+            if (shown.length <= shownCount + limit) setFetchSize((n) => n * 2);
+          }}
+          className="w-full border-t border-zinc-100 px-4 py-2 text-center text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 cursor-pointer"
+        >
+          {isFetching ? "Loading…" : "Show more"}
+        </button>
+      )}
+      {!compact && hidden > 0 && (
         <button
           type="button"
           onClick={() => setShowNoise((s) => !s)}

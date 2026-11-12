@@ -383,6 +383,36 @@ export interface MCPServerEntry {
   sign_in?: string | null;
 }
 
+/** The platform admin's Overview (vendor/api/v1/platform.py). */
+export interface PlatformOverview {
+  days: number;
+  people_total: number;
+  active_people: { current: number; previous: number };
+  new_people: { current: number; previous: number };
+  runs: { current: number; previous: number };
+  failed_runs: { current: number; previous: number };
+  cost_month_usd: number;
+  cost_last_month_usd: number;
+  run_days: { date: string; succeeded: number; failed: number }[];
+  signups_by_week: { week_start: string; count: number }[];
+  top_apps: { id: string; name: string; people: number; tool_calls: number }[];
+  top_accounts: { id: string; name: string; is_personal: boolean; runs: number; cost_usd: number }[];
+}
+
+export interface PlatformAccount {
+  id: string;
+  name: string;
+  is_personal: boolean;
+  status: string;
+  created_at: string;
+  members: { id: string; name: string; email: string; role: string; is_active: boolean; joined: string }[];
+  apps: { id: string; name: string; people: number }[];
+  runs_month: number;
+  failed_month: number;
+  cost_month_usd: number;
+  last_active: string | null;
+}
+
 /** Per server on the admin Apps page: people connected, tools, tenants it's granted to. */
 export interface MCPServerCounts {
   id: string;
@@ -549,6 +579,8 @@ export const vendorApi = {
       body: JSON.stringify({ is_global: isGlobal }),
     }, token, BACKEND_API_URL),
   // "Connect via OAuth" bootstrap — see apps/backend/vendor/services/oauth_flow.py
+  platformOverview: (token: string, days = 14) => request<PlatformOverview>(`${VR}/platform/overview?days=${days}`, {}, token, BACKEND_API_URL),
+  platformAccount: (token: string, tenantId: string) => request<PlatformAccount>(`${VR}/platform/accounts/${tenantId}`, {}, token, BACKEND_API_URL),
   // The admin Apps page (vendor/api/v1/server_details.py)
   mcpOverview: (token: string) => request<MCPServerCounts[]>(`${VR}/mcp/overview`, {}, token, BACKEND_API_URL),
   mcpDetails: (token: string, serverId: string) => request<MCPServerDetails>(`${VR}/mcp/${serverId}/details`, {}, token, BACKEND_API_URL),

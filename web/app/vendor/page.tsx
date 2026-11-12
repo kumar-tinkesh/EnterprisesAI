@@ -1,426 +1,229 @@
 "use client";
 
-import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  AlertTriangle,
-  Building2,
-  Users,
-  UserCheck,
-  Plus,
-  Search,
-  Trash2,
-  PauseCircle,
-  PlayCircle,
-  X,
-  Eye,
-  EyeOff,
-  User,
-  Server,
-} from "lucide-react";
+/** The platform admin's Overview: is the platform growing, is it working, and what needs them. */
+
+import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
+import { AlertTriangle, Building2, PauseCircle, User, XCircle } from "lucide-react";
 
 import ProtectedDashboard from "@/components/protected-dashboard";
 import { AuditLogsPanel } from "@/components/audit-logs-panel";
+import { DailyBars } from "@/components/charts/daily-bars";
+import { ConnectorIcon } from "@/components/connections/connector-icon";
+import { Stat, Stats, type Delta } from "@/components/ui/stats";
 import { useAuthStore } from "@/stores/auth-store";
-import { api, ApiError, vendorApi } from "@/lib/api";
+import { api, vendorApi } from "@/lib/api";
 import { appLabel } from "@/lib/connectors";
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Spinner } from "@/components/ui/spinner";
-import { Field } from "@/components/auth-fields";
 
-export default function VendorDashboard() {
+const DAYS = 14;
+
+function delta(cur: number, prev: number, higherIsBetter = true): Delta {
+  if (!prev) return null;
+  const change = (cur - prev) / prev;
+  if (Math.abs(change) < 0.005) return { text: "0%", up: true, good: true };
+  return { text: `${Math.round(Math.abs(change) * 100)}%`, up: change > 0, good: change > 0 === higherIsBetter };
+}
+const money = (usd: number) => (usd === 0 ? "$0" : usd < 0.01 ? `$${usd.toFixed(3)}` : `$${usd.toFixed(2)}`);
+
+export default function VendorOverview() {
   const accessToken = useAuthStore((s) => s.accessToken) || "";
-  const queryClient = useQueryClient();
-
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [activeTab, setActiveTab] = useState<"all" | "team" | "solo" | "suspended">("all");
-  const [search, setSearch] = useState("");
-  const [asking, setAsking] = useState<{ id: string; what: "delete" | "suspend" } | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const { data: stats, isLoading: statsLoading } = useQuery({
-    queryKey: ["vendor-stats", accessToken],
-    queryFn: () => api.getVendorStats(accessToken),
+  const overview = useQuery({
+    queryKey: ["platform-overview", accessToken, DAYS],
+    queryFn: () => vendorApi.platformOverview(accessToken, DAYS),
     enabled: !!accessToken,
+    refetchInterval: 60000,
   });
-  const { data: tenants = [], isLoading: tenantsLoading, isError: tenantsFailed } = useQuery({
-    queryKey: ["vendor-tenants", accessToken],
-    queryFn: () => api.getVendorTenants(accessToken),
-    enabled: !!accessToken,
-  });
-  const { data: servers = [] } = useQuery({
-    queryKey: ["vendor-mcp-servers", accessToken],
-    queryFn: () => vendorApi.listMCPServers(accessToken),
-    enabled: !!accessToken,
-  });
+  const { data: tenants = [] } = useQuery({ queryKey: ["vendor-tenants", accessToken], queryFn: () => api.getVendorTenants(accessToken), enabled: !!accessToken });
+  const { data: servers = [] } = useQuery({ queryKey: ["vendor-mcp-servers", accessToken], queryFn: () => vendorApi.listMCPServers(accessToken), enabled: !!accessToken });
 
-  const refresh = () => {
-    queryClient.invalidateQueries({ queryKey: ["vendor-tenants"] });
-    queryClient.invalidateQueries({ queryKey: ["vendor-stats"] });
-  };
-  const fail = (err: unknown) => setError(err instanceof ApiError ? err.message : "Something went wrong.");
-
-  const addMutation = useMutation({
-    mutationFn: (vals: { name: string; slug?: string; admin_email: string; admin_full_name: string; admin_password: string }) =>
-      api.createVendorTenant(accessToken, vals),
-    onSuccess: () => {
-      setShowAddModal(false);
-      refresh();
-    },
-  });
-  const toggleStatusMutation = useMutation({
-    mutationFn: ({ id, status }: { id: string; status: string }) => api.updateVendorTenant(accessToken, id, { status }),
-    onSuccess: () => {
-      setAsking(null);
-      refresh();
-    },
-    onError: fail,
-  });
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => api.deleteVendorTenant(accessToken, id),
-    onSuccess: () => {
-      setAsking(null);
-      refresh();
-    },
-    onError: fail,
-  });
-
-  // What needs the admin: apps nobody can use yet, accounts that are switched off.
+  const o = overview.data;
   const appsToFix = servers.filter((s) => s.status !== "VERIFIED" || !(s.bound_tools?.length ?? 0));
-  const appsReady = servers.length - appsToFix.length;
   const suspended = tenants.filter((t) => t.status !== "active");
-  const teamCount = tenants.filter((t) => !t.is_personal).length;
-  const soloCount = tenants.filter((t) => t.is_personal).length;
+  const failedRate = o && o.runs.current ? o.failed_runs.current / o.runs.current : 0;
   const names = Object.fromEntries(servers.map((s) => [s.id, appLabel(s.name, s.description).title]));
-
-  const q = search.trim().toLowerCase();
-  const shown = tenants
-    .filter((t) =>
-      activeTab === "team" ? !t.is_personal : activeTab === "solo" ? t.is_personal : activeTab === "suspended" ? t.status !== "active" : true,
-    )
-    .filter((t) => !q || [t.name, t.slug, t.admin_name, t.admin_email].some((x) => (x || "").toLowerCase().includes(q)))
-    .sort((a, b) => Number(a.is_personal) - Number(b.is_personal) || a.name.localeCompare(b.name));
-  const TABS = [
-    ["all", "All", tenants.length],
-    ["team", "Organizations", teamCount],
-    ["solo", "Solo", soloCount],
-    ["suspended", "Suspended", suspended.length],
-  ] as const;
+  const attention = [
+    appsToFix.length > 0 && {
+      key: "apps",
+      href: "/vendor/tools",
+      Icon: AlertTriangle,
+      tone: "text-amber-600",
+      title: `${appsToFix.length} app${appsToFix.length === 1 ? "" : "s"} can't be used yet`,
+      text: `${appsToFix.slice(0, 4).map((s) => appLabel(s.name, s.description).title).join(", ")}: test them so people can connect.`,
+    },
+    o && o.failed_runs.current >= 3 && failedRate >= 0.2 && {
+      key: "failed",
+      href: "/vendor/accounts",
+      Icon: XCircle,
+      tone: "text-red-600",
+      title: `${Math.round(failedRate * 100)}% of runs failed in the last ${DAYS} days`,
+      text: `${o.failed_runs.current} of ${o.runs.current}. The busiest accounts below show where.`,
+    },
+    suspended.length > 0 && {
+      key: "suspended",
+      href: "/vendor/accounts?show=suspended",
+      Icon: PauseCircle,
+      tone: "text-zinc-500",
+      title: `${suspended.length} suspended account${suspended.length === 1 ? "" : "s"}`,
+      text: "Their people can't sign in until you turn them back on.",
+    },
+  ].filter(Boolean) as { key: string; href: string; Icon: typeof AlertTriangle; tone: string; title: string; text: string }[];
 
   return (
-    <ProtectedDashboard path="/vendor" title="Platform admin" description="Organizations, people and the apps they can connect.">
-      <div className="mt-6 flex flex-wrap justify-end gap-2">
-        <a href="/vendor/tools" className="inline-flex h-9 items-center gap-1.5 rounded-md border border-zinc-200 px-3 text-sm font-medium text-zinc-900 hover:bg-zinc-50">
-          <Server className="h-4 w-4" /> Apps
-        </a>
-        <Button size="sm" className="h-9" onClick={() => setShowAddModal(true)}>
-          <Plus className="h-4 w-4" /> New organization
-        </Button>
-      </div>
-
-      {/* What needs the admin now */}
-      {(appsToFix.length > 0 || suspended.length > 0) && (
-        <section className="mt-4 overflow-hidden rounded-xl border border-zinc-200">
-          <h2 className="border-b border-zinc-100 px-4 py-3 text-base font-semibold text-zinc-900">Needs your attention</h2>
-          <ul className="divide-y divide-zinc-100">
-            {appsToFix.length > 0 && (
-              <li>
-                <a href="/vendor/tools" className="flex items-center gap-3 px-4 py-3 hover:bg-zinc-50">
-                  <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-sm font-medium text-zinc-900">
-                      {appsToFix.length} app{appsToFix.length === 1 ? "" : "s"} can&apos;t be used yet
+    <ProtectedDashboard path="/vendor" title="Overview" description="How the platform is doing, across every account.">
+      <div className="mt-6 space-y-6">
+        {attention.length > 0 && (
+          <Panel title="Needs your attention">
+            <ul className="divide-y divide-zinc-100">
+              {attention.map((a) => (
+                <li key={a.key}>
+                  <Link href={a.href} className="flex items-center gap-3 px-4 py-3 hover:bg-zinc-50">
+                    <a.Icon className={cn("h-4 w-4 shrink-0", a.tone)} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm font-medium text-zinc-900">{a.title}</span>
+                      <span className="block truncate text-xs text-zinc-500">{a.text}</span>
                     </span>
-                    <span className="block truncate text-xs text-zinc-500">
-                      {appsToFix.slice(0, 4).map((s) => appLabel(s.name, s.description).title).join(", ")}: test them so people can connect.
-                    </span>
-                  </span>
-                  <span className="shrink-0 text-sm font-medium text-zinc-700">Open</span>
-                </a>
-              </li>
-            )}
-            {suspended.length > 0 && (
-              <li>
-                <button type="button" onClick={() => setActiveTab("suspended")} className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-zinc-50 cursor-pointer">
-                  <PauseCircle className="h-4 w-4 shrink-0 text-zinc-500" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-sm font-medium text-zinc-900">
-                      {suspended.length} suspended account{suspended.length === 1 ? "" : "s"}
-                    </span>
-                    <span className="block truncate text-xs text-zinc-500">Their people can&apos;t sign in until you turn them back on.</span>
-                  </span>
-                  <span className="shrink-0 text-sm font-medium text-zinc-700">Show</span>
-                </button>
-              </li>
-            )}
-          </ul>
-        </section>
-      )}
-
-      {/* The numbers that matter */}
-      <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatCard icon={<Users className="h-4 w-4" />} label="People" value={statsLoading ? "…" : stats?.total_users ?? 0} note="every account, solo and in organizations" />
-        <StatCard icon={<Building2 className="h-4 w-4" />} label="Organizations" value={tenantsLoading ? "…" : teamCount} note={`${stats?.total_workspaces ?? 0} workspaces in all`} />
-        <StatCard icon={<UserCheck className="h-4 w-4" />} label="Solo accounts" value={tenantsLoading ? "…" : soloCount} note="people who signed up on their own" />
-        <StatCard
-          icon={<Server className="h-4 w-4" />}
-          label="Apps ready"
-          value={servers.length ? `${appsReady} / ${servers.length}` : "…"}
-          note={appsToFix.length ? `${appsToFix.length} need a test` : "all can be connected"}
-          href="/vendor/tools"
-        />
-      </div>
-
-      {/* Accounts */}
-      <section className="mt-8 overflow-hidden rounded-xl border border-zinc-200">
-        <div className="flex flex-col gap-3 border-b border-zinc-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-          <h2 className="text-base font-semibold text-zinc-900">Accounts</h2>
-          <div className="relative sm:w-64">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
-            <Input aria-label="Search accounts" className="h-9 pl-8" placeholder="Search name or email" value={search} onChange={(e) => setSearch(e.target.value)} />
-          </div>
-        </div>
-        <div className="flex flex-wrap gap-1.5 border-b border-zinc-100 px-4 py-2.5" role="group" aria-label="Filter accounts">
-          {TABS.map(([id, text, n]) => (
-            <button
-              key={id}
-              type="button"
-              aria-pressed={activeTab === id}
-              onClick={() => setActiveTab(id)}
-              className={cn(
-                "rounded-full border px-3 py-1 text-xs font-medium cursor-pointer",
-                activeTab === id ? "border-[var(--accent)] bg-[var(--accent)] text-white" : "border-zinc-200 text-zinc-600 hover:bg-zinc-50",
-              )}
-            >
-              {text} <span className="tabular-nums opacity-75">{n}</span>
-            </button>
-          ))}
-        </div>
-        {error && <p className="border-b border-zinc-100 bg-red-50 px-4 py-2 text-xs text-red-700">{error}</p>}
-
-        {tenantsLoading ? (
-          <div className="flex justify-center py-8"><Spinner className="h-6 w-6 text-zinc-500" /></div>
-        ) : tenantsFailed ? (
-          <p className="px-4 py-8 text-center text-sm text-zinc-600">Couldn&apos;t load the accounts. Reload the page to try again.</p>
-        ) : shown.length === 0 ? (
-          <p className="px-4 py-8 text-center text-sm text-zinc-500">{q ? "No account matches that." : "No accounts here."}</p>
-        ) : (
-          <ul className="divide-y divide-zinc-100">
-            {shown.map((t) => {
-              const active = t.status === "active";
-              const ask = asking?.id === t.id ? asking.what : null;
-              return (
-                <li key={t.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
-                  <span className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-lg", t.is_personal ? "bg-purple-50 text-purple-700" : "bg-indigo-50 text-indigo-700")}>
-                    {t.is_personal ? <User className="h-4 w-4" /> : <Building2 className="h-4 w-4" />}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="flex items-center gap-2">
-                      <span className="truncate text-sm font-medium text-zinc-900">{t.name}</span>
-                      {!active && <span className="shrink-0 rounded-full bg-rose-50 px-2 py-0.5 text-xs font-medium text-rose-700">Suspended</span>}
-                    </span>
-                    <span className="block truncate text-xs text-zinc-500">
-                      {t.is_personal ? "Solo" : "Organization"} · {t.admin_name || t.admin_email || "no admin"}
-                      {t.admin_name && t.admin_email ? ` (${t.admin_email})` : ""}
-                    </span>
-                  </span>
-                  <span className="hidden shrink-0 text-right text-xs tabular-nums text-zinc-500 sm:block">
-                    {t.user_count} {t.user_count === 1 ? "person" : "people"}
-                    <span className="block">{t.workspace_count} workspace{t.workspace_count === 1 ? "" : "s"}</span>
-                  </span>
-                  {ask ? (
-                    <span className="flex shrink-0 items-center gap-2 text-xs">
-                      <span className="text-zinc-600">
-                        {ask === "delete" ? `Delete ${t.name}, its workspaces and people?` : `Suspend ${t.name}? Its people can't sign in.`}
-                      </span>
-                      <button
-                        type="button"
-                        disabled={deleteMutation.isPending || toggleStatusMutation.isPending}
-                        onClick={() => (ask === "delete" ? deleteMutation.mutate(t.id) : toggleStatusMutation.mutate({ id: t.id, status: "suspended" }))}
-                        className="rounded-md bg-red-600 px-2 py-1 font-medium text-white hover:bg-red-700 disabled:opacity-50 cursor-pointer"
-                      >
-                        {deleteMutation.isPending || toggleStatusMutation.isPending ? "…" : "Yes"}
-                      </button>
-                      <button type="button" onClick={() => setAsking(null)} className="rounded-md px-2 py-1 text-zinc-500 hover:bg-zinc-100 cursor-pointer">No</button>
-                    </span>
-                  ) : (
-                    <span className="flex shrink-0 items-center gap-1">
-                      {active ? (
-                        <Button type="button" size="sm" variant="ghost" className="h-8 text-zinc-600" onClick={() => { setError(null); setAsking({ id: t.id, what: "suspend" }); }}>
-                          <PauseCircle className="h-4 w-4" /> <span className="hidden sm:inline">Suspend</span>
-                        </Button>
-                      ) : (
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          className="h-8"
-                          disabled={toggleStatusMutation.isPending}
-                          onClick={() => toggleStatusMutation.mutate({ id: t.id, status: "active" })}
-                        >
-                          <PlayCircle className="h-4 w-4" /> Turn on
-                        </Button>
-                      )}
-                      <Button type="button" size="sm" variant="ghost" className="h-8 text-zinc-500 hover:text-red-600" aria-label={`Delete ${t.name}`} onClick={() => { setError(null); setAsking({ id: t.id, what: "delete" }); }}>
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </span>
-                  )}
+                    <span className="shrink-0 text-sm font-medium text-zinc-700">Open</span>
+                  </Link>
                 </li>
-              );
-            })}
-          </ul>
+              ))}
+            </ul>
+          </Panel>
         )}
-      </section>
 
-      {showAddModal && (
-        <CreateTenantModal
-          onClose={() => setShowAddModal(false)}
-          onSubmit={(vals) => addMutation.mutate(vals)}
-          isPending={addMutation.isPending}
-          error={addMutation.isError ? (addMutation.error instanceof ApiError ? addMutation.error.message : "Failed to create the organization") : null}
-        />
-      )}
+        <Stats>
+          <Stat
+            label="Active people"
+            loading={!o}
+            value={o ? String(o.active_people.current) : ""}
+            suffix={o ? ` / ${o.people_total}` : ""}
+            delta={o ? delta(o.active_people.current, o.active_people.previous) : null}
+            sub={`signed in during the last ${DAYS} days`}
+          />
+          <Stat
+            label="New people"
+            loading={!o}
+            value={o ? String(o.new_people.current) : ""}
+            delta={o ? delta(o.new_people.current, o.new_people.previous) : null}
+            sub={`joined in ${DAYS} days, vs the ${DAYS} before`}
+            href="/vendor/accounts"
+          />
+          <Stat
+            label="Agent runs"
+            loading={!o}
+            value={o ? String(o.runs.current) : ""}
+            delta={o ? delta(o.runs.current, o.runs.previous) : null}
+            sub={o && o.failed_runs.current ? `${o.failed_runs.current} failed` : "none failed"}
+          />
+          <Stat
+            label="Cost this month"
+            loading={!o}
+            value={o ? money(o.cost_month_usd) : ""}
+            sub={o ? `estimated · last month ${money(o.cost_last_month_usd)}` : ""}
+          />
+        </Stats>
 
-      <AuditLogsPanel limit={25} names={names} />
+        <div className="grid gap-6 lg:grid-cols-3">
+          <div className="lg:col-span-2">
+            <DailyBars
+              title="Agent runs"
+              subtitle={`Every account, last ${DAYS * 2} days`}
+              days={(o?.run_days ?? []).map((d) => ({ date: d.date, good: d.succeeded, bad: d.failed }))}
+              goodLabel="Succeeded"
+              badLabel="Failed"
+              empty="No runs yet."
+            />
+          </div>
+          <DailyBars
+            title="Sign-ups"
+            subtitle="Each week, last 8 weeks"
+            days={(o?.signups_by_week ?? []).map((w) => ({ date: w.week_start, good: w.count, bad: 0 }))}
+            goodLabel="New people"
+            single
+            period="Week of"
+            empty="Nobody has joined yet."
+          />
+        </div>
+
+        <div className="grid gap-6 lg:grid-cols-2">
+          <Panel title="Most used apps" aside={<Link href="/vendor/tools" className="text-sm font-medium text-zinc-700 hover:text-zinc-900">All apps →</Link>}>
+            {!o ? (
+              <Skeleton />
+            ) : o.top_apps.length === 0 ? (
+              <Empty text="Nobody has connected an app yet." />
+            ) : (
+              <ol className="divide-y divide-zinc-100">
+                {o.top_apps.map((a) => (
+                  <li key={a.id} className="flex items-center gap-3 px-4 py-2.5">
+                    <ConnectorIcon name={a.name} size="sm" />
+                    <span className="min-w-0 flex-1 truncate text-sm text-zinc-900">{appLabel(a.name).title}</span>
+                    <span className="shrink-0 text-right text-xs tabular-nums text-zinc-500">
+                      {a.people} connected
+                      <span className="block">{a.tool_calls} tool calls</span>
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </Panel>
+
+          <Panel title="Busiest accounts" aside={<span className="text-xs text-zinc-500">this month</span>}>
+            {!o ? (
+              <Skeleton />
+            ) : o.top_accounts.length === 0 ? (
+              <Empty text="No runs this month yet." />
+            ) : (
+              <ol className="divide-y divide-zinc-100">
+                {o.top_accounts.map((a) => (
+                  <li key={a.id}>
+                    <Link href={`/vendor/accounts?open=${encodeURIComponent(a.id)}`} className="flex items-center gap-3 px-4 py-2.5 hover:bg-zinc-50">
+                      <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", a.is_personal ? "bg-purple-50 text-purple-700" : "bg-indigo-50 text-indigo-700")}>
+                        {a.is_personal ? <User className="h-4 w-4" /> : <Building2 className="h-4 w-4" />}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-sm text-zinc-900">{a.name}</span>
+                      <span className="shrink-0 text-right text-xs tabular-nums text-zinc-500">
+                        {a.runs} runs
+                        <span className="block">{money(a.cost_usd)}</span>
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </Panel>
+        </div>
+
+        <AuditLogsPanel title="Recent activity" limit={6} names={names} moreHref="/vendor/activity" compact />
+      </div>
     </ProtectedDashboard>
   );
 }
 
-function StatCard({ icon, label, value, note, href }: { icon: React.ReactNode; label: string; value: React.ReactNode; note?: string; href?: string }) {
-  const body = (
-    <>
-      <div className="flex items-center gap-1.5 text-xs font-medium text-zinc-500">{icon}{label}</div>
-      <p className="mt-1.5 text-2xl font-semibold tabular-nums text-zinc-900">{value}</p>
-      {note && <p className="mt-0.5 text-xs text-zinc-500">{note}</p>}
-    </>
-  );
-  return href ? (
-    <a href={href} className="rounded-xl border border-zinc-200 p-4 hover:bg-zinc-50">{body}</a>
-  ) : (
-    <div className="rounded-xl border border-zinc-200 p-4">{body}</div>
+function Panel({ title, aside, children }: { title: string; aside?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <section className="overflow-hidden rounded-xl border border-zinc-200">
+      <div className="flex items-center justify-between gap-2 border-b border-zinc-100 px-4 py-3">
+        <h2 className="text-base font-semibold text-zinc-900">{title}</h2>
+        {aside}
+      </div>
+      {children}
+    </section>
   );
 }
 
-function CreateTenantModal({
-  onClose,
-  onSubmit,
-  isPending,
-  error,
-}: {
-  onClose: () => void;
-  onSubmit: (vals: {
-    name: string;
-    admin_email: string;
-    admin_full_name: string;
-    admin_password: string;
-  }) => void;
-  isPending: boolean;
-  error: string | null;
-}) {
-  const [name, setName] = useState("");
-  const [adminName, setAdminName] = useState("");
-  const [adminEmail, setAdminEmail] = useState("");
-  const [adminPassword, setAdminPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!name || !adminName || !adminEmail || !adminPassword) return;
-    onSubmit({
-      name,
-      admin_full_name: adminName,
-      admin_email: adminEmail,
-      admin_password: adminPassword,
-    });
-  };
-
+function Skeleton() {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-      <div className="w-full max-w-md rounded-xl bg-[var(--surface-raised)] p-6 shadow-xl">
-        <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
-          <h3 className="text-lg font-semibold text-zinc-900">New organization</h3>
-          <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600 cursor-pointer">
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-
-        <form onSubmit={handleSubmit} className="mt-4 space-y-4">
-          <Field label="Organization Name">
-            <Input
-              placeholder="Acme Corporation"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              required
-            />
-          </Field>
-
-          <div className="border-t border-zinc-100 pt-3">
-            <h4 className="text-xs font-semibold uppercase text-zinc-400 mb-3">
-              Its first admin
-            </h4>
-
-            <div className="space-y-4">
-              <Field label="Admin Full Name">
-                <Input
-                  placeholder="Jane Smith"
-                  value={adminName}
-                  onChange={(e) => setAdminName(e.target.value)}
-                  required
-                />
-              </Field>
-
-              <Field label="Admin Email">
-                <Input
-                  type="email"
-                  placeholder="admin@acme.com"
-                  value={adminEmail}
-                  onChange={(e) => setAdminEmail(e.target.value)}
-                  required
-                />
-              </Field>
-
-              <Field label="Admin Password">
-                <div className="relative">
-                  <Input
-                    type={showPassword ? "text" : "password"}
-                    placeholder="At least 8 characters"
-                    value={adminPassword}
-                    onChange={(e) => setAdminPassword(e.target.value)}
-                    required
-                    className="pr-10"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 cursor-pointer"
-                    title={showPassword ? "Hide password" : "Show password"}
-                  >
-                    {showPassword ? (
-                      <EyeOff className="h-4 w-4" />
-                    ) : (
-                      <Eye className="h-4 w-4" />
-                    )}
-                  </button>
-                </div>
-              </Field>
-            </div>
-          </div>
-
-          {error && <p className="text-xs text-red-600">{error}</p>}
-
-          <div className="flex justify-end gap-2 pt-2">
-            <Button type="button" variant="outline" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={isPending}>
-              {isPending ? <Spinner /> : <Plus className="h-4 w-4 mr-1" />} Create organization
-            </Button>
-          </div>
-        </form>
-      </div>
-    </div>
+    <ul className="divide-y divide-zinc-100" aria-busy="true">
+      {[0, 1, 2].map((i) => (
+        <li key={i} className="space-y-2 px-4 py-3">
+          <div className="h-3 w-1/3 animate-pulse rounded bg-zinc-100" />
+          <div className="h-3 w-2/3 animate-pulse rounded bg-zinc-100" />
+        </li>
+      ))}
+    </ul>
   );
+}
+
+function Empty({ text }: { text: string }) {
+  return <p className="px-6 py-8 text-center text-sm text-zinc-500">{text}</p>;
 }
