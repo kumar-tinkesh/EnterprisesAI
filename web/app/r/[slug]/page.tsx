@@ -589,30 +589,32 @@ function Runner({
               />
               <div className="mt-1 flex items-center gap-2">
                 {own && (
-                  <>
-                    <input
-                      ref={picker}
-                      type="file"
-                      multiple
-                      accept={ACCEPT}
-                      className="hidden"
-                      onChange={(e) => {
-                        void attach(e.target.files);
-                        e.target.value = "";
-                      }}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => picker.current?.click()}
-                      disabled={busy || running || files.length >= MAX_FILES}
-                      aria-label="Attach files"
-                      title="Attach a document (PDF, Word, Excel, CSV, text) or an image (JPG, PNG)"
-                      className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-40 cursor-pointer"
-                    >
-                      <Paperclip className="h-4 w-4" />
-                    </button>
-                  </>
+                  <input
+                    ref={picker}
+                    type="file"
+                    multiple
+                    accept={ACCEPT}
+                    className="hidden"
+                    onChange={(e) => {
+                      void attach(e.target.files);
+                      e.target.value = "";
+                    }}
+                  />
                 )}
+                {/* On a link that runs with the sharer's apps the run can't read your file: say so instead of hiding the button. */}
+                <button
+                  type="button"
+                  onClick={() => (own ? picker.current?.click() : setFileError("Files can't be added here: this link runs with the sharer's apps, which can't read your files."))}
+                  disabled={own && (busy || running || files.length >= MAX_FILES)}
+                  aria-label="Attach files"
+                  title={own ? "Attach a document (PDF, Word, Excel, CSV, text) or an image (JPG, PNG)" : "Files work only on links that run with your own apps"}
+                  className={cn(
+                    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-40 cursor-pointer",
+                    !own && "opacity-40",
+                  )}
+                >
+                  <Paperclip className="h-4 w-4" />
+                </button>
                 <p className="min-w-0 flex-1 truncate text-xs text-zinc-500">
                   {missing.length ? `Fill in ${missing.map((v) => v.label || v.name).join(", ")} first.` : limit ? `Up to ${limit} runs a day.` : ""}
                 </p>

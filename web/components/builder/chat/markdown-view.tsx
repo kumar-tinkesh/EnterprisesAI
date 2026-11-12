@@ -3,6 +3,7 @@
 import { memo, useMemo } from "react";
 
 import { parseMarkdown, shortUrl, type Block, type Inline } from "@/lib/builder/markdown";
+import { cn } from "@/lib/utils";
 
 function Inlines({ nodes }: { nodes: Inline[] }) {
   return (
@@ -42,6 +43,11 @@ function Inlines({ nodes }: { nodes: Inline[] }) {
       })}
     </>
   );
+}
+
+/** A cell with something in it (an empty one is left off a card). */
+function hasText(nodes: Inline[] | undefined): boolean {
+  return !!nodes?.some((n) => (n.t === "text" || n.t === "code" ? n.v.trim() : true));
 }
 
 const HEADING = ["", "text-lg font-semibold", "text-base font-semibold", "text-sm font-semibold", "text-sm font-semibold text-zinc-700"];
@@ -95,9 +101,11 @@ function Blocks({ blocks }: { blocks: Block[] }) {
                 <Blocks blocks={b.c} />
               </blockquote>
             );
-          case "table":
-            return (
-              <div key={i} className="overflow-x-auto rounded-lg border border-zinc-200">
+          case "table": {
+            // A wide table (5+ columns) reads as one card per row where the answer is narrow (a phone, a side panel).
+            const wide = b.head.length >= 5;
+            const grid = (
+              <div className={cn("overflow-x-auto rounded-lg border border-zinc-200", wide && "hidden @xl:block")}>
                 <table className="w-full border-collapse text-left text-xs">
                   <thead className="bg-zinc-50">
                     <tr>
@@ -122,6 +130,35 @@ function Blocks({ blocks }: { blocks: Block[] }) {
                 </table>
               </div>
             );
+            if (!wide) return <div key={i}>{grid}</div>;
+            return (
+              <div key={i} className="@container">
+                {grid}
+                <ul className="space-y-2 @xl:hidden">
+                  {b.rows.map((r, n) => (
+                    <li key={n} className="rounded-lg border border-zinc-200 p-3 text-xs">
+                      {/* The first two cells (e.g. score and company) head the card; the rest are labelled lines. */}
+                      <p className="text-sm font-medium text-zinc-900">
+                        <Inlines nodes={r[0] ?? []} />
+                        {hasText(r[1]) && <span className="text-zinc-500"> · </span>}
+                        <Inlines nodes={r[1] ?? []} />
+                      </p>
+                      <dl className="mt-1.5 space-y-1">
+                        {r.slice(2).map((c, k) =>
+                          hasText(c) ? (
+                            <div key={k} className="flex gap-2">
+                              <dt className="w-24 shrink-0 text-zinc-500"><Inlines nodes={b.head[k + 2] ?? []} /></dt>
+                              <dd className="min-w-0 break-words text-zinc-700"><Inlines nodes={c} /></dd>
+                            </div>
+                          ) : null,
+                        )}
+                      </dl>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          }
           case "hr":
             return <hr key={i} className="border-zinc-200" />;
         }

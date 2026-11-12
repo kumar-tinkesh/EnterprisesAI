@@ -255,7 +255,7 @@ function Recent({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
  * steps use and where they stand for this person; it can be created before
  * they're connected — its steps pick each system's tools up once it is.
  */
-function Templates({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
+export function Templates({ onOpen, title = "Start from a template" }: { onOpen: (target: BuildTarget) => void; title?: string }) {
   const token = useAuthStore((s) => s.accessToken) || "";
   const queryClient = useQueryClient();
   const [shown, setShown] = useState<string | null>(null);
@@ -278,7 +278,7 @@ function Templates({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
 
   return (
     <section className="space-y-3" aria-labelledby="templates-heading">
-      <h2 id="templates-heading" className="text-base font-semibold text-zinc-900">Start from a template</h2>
+      <h2 id="templates-heading" className="text-base font-semibold text-zinc-900">{title}</h2>
       <ul className="divide-y divide-zinc-100 overflow-hidden rounded-lg border border-zinc-200">
         {templates.data.map((t) => {
           const sum = needsSummary(t.systems);

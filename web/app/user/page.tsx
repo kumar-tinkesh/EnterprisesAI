@@ -152,6 +152,8 @@ function Dashboard() {
     { done: (ins?.all_time.runs ?? 0) > 0, title: "Run it", desc: "Chat with it and watch every tool it uses.", href: "/user/executions", cta: "Open" },
   ];
   const setupLeft = setupLoaded && steps.some((s) => !s.done);
+  // Never run anything: numbers, a chart and lists would all be empty — Get started says it all.
+  const noRuns = !!ins && ins.all_time.runs === 0 && runs.isSuccess && runList.length === 0;
 
   const cur = ins?.current;
   const prev = ins?.previous;
@@ -253,6 +255,8 @@ function Dashboard() {
         </Panel>
       )}
 
+      {!noRuns && (
+      <>
       {/* KPIs: this week vs the one before */}
       <Stats>
         <Stat label="Runs" loading={!ins} value={cur ? String(cur.runs) : ""} delta={cur && prev ? pctDelta(cur.runs, prev.runs, true) : null} sub={`last ${WINDOW} days, vs the ${WINDOW} before`} />
@@ -367,6 +371,8 @@ function Dashboard() {
           </ul>
         )}
       </Panel>
+      </>
+      )}
     </section>
   );
 }

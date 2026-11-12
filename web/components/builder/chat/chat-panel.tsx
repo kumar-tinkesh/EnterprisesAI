@@ -399,15 +399,18 @@ export function ChatPanel({
           {!embedded && <p className="truncate text-sm font-semibold text-zinc-900">{name}</p>}
           <p className={cn("truncate", embedded ? "text-sm font-medium text-zinc-900" : "text-xs text-zinc-500")}>{chat ? chat.title : "New chat"}</p>
         </div>
-        <button
-          type="button"
-          onClick={newChat}
-          aria-label="New chat"
-          title="New chat — this one stays in your history"
-          className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-sm text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer"
-        >
-          <Plus className="h-4 w-4" /> <span className="hidden sm:inline">New chat</span>
-        </button>
+        {/* Already in a new, empty chat: nothing for "New chat" to do. */}
+        {(chatId || pendingText !== null) && (
+          <button
+            type="button"
+            onClick={newChat}
+            aria-label="New chat"
+            title="New chat — this one stays in your history"
+            className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-sm text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer"
+          >
+            <Plus className="h-4 w-4" /> <span className="hidden sm:inline">New chat</span>
+          </button>
+        )}
         <ChatHistory
           chats={chats.data ?? []}
           loading={chats.isLoading}

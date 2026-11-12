@@ -1,8 +1,11 @@
 "use client";
 
-import { Puzzle } from "lucide-react";
+import { Briefcase, CalendarDays, Globe, Puzzle } from "lucide-react";
 
+import { connectorKey } from "@/lib/connectors";
 import { cn } from "@/lib/utils";
+
+export { appLabel, connectorKey } from "@/lib/connectors";
 
 /**
  * Brand marks for the connectors we know, as inline SVG (nothing fetched from
@@ -144,37 +147,22 @@ const ICONS: Record<string, React.ReactNode> = {
   ),
 };
 
-/** Name fragments → icon key, most specific first. */
-const MATCH: [RegExp, string][] = [
-  [/quickbooks/i, "quickbooks_pro"],
-  [/sheets?/i, "google_sheets"],
-  [/gmail|google mail/i, "gmail"],
-  [/slack/i, "slack"],
-  [/notion/i, "notion"],
-  [/github/i, "github"],
-  [/atlassian|confluence/i, "atlassian"],
-  [/jira/i, "jira"],
-  [/linear/i, "linear"],
-  [/whats ?app/i, "whatsapp"],
-  [/file ?system|files?\b/i, "filesystem"],
-  [/wikidata/i, "wikidata"],
-  [/wikipedia/i, "wikipedia"],
-  [/gleif|\blei\b/i, "gleif"],
-  [/job/i, "job_search_mcp"],
-  [/news/i, "news_mcp"],
-  [/tavily/i, "tavily"],
-  [/firecrawl/i, "firecrawl"],
-  [/travel|flight/i, "travelpayouts"],
-  [/custom/i, "custom_mcp_server"],
-];
-
-export function connectorKey(name: string): string | null {
-  return MATCH.find(([re]) => re.test(name))?.[1] ?? null;
-}
+/** Apps without a brand mark here: a plain symbol, still better than a puzzle piece. */
+const SYMBOLS: Record<string, React.ReactNode> = {
+  calendar: <CalendarDays className="h-full w-full text-sky-400" />,
+  web_search: <Globe className="h-full w-full text-indigo-400" />,
+  jobs: <Briefcase className="h-full w-full text-amber-500" />,
+  linkedin: (
+    <svg viewBox="0 0 24 24" className="h-full w-full" aria-hidden>
+      <rect width="24" height="24" rx="4" fill="#0A66C2" />
+      <path fill="#fff" d="M6.5 9.5h2.4V18H6.5zM7.7 5.6a1.4 1.4 0 1 1 0 2.8 1.4 1.4 0 0 1 0-2.8zM10.6 9.5h2.3v1.2c.3-.6 1.1-1.4 2.4-1.4 2.5 0 3 1.6 3 3.8V18h-2.4v-4.3c0-1 0-2.3-1.4-2.3s-1.6 1.1-1.6 2.2V18h-2.3z" />
+    </svg>
+  ),
+};
 
 export function ConnectorIcon({ name, size = "md", className }: { name: string; size?: "xs" | "sm" | "md"; className?: string }) {
   const key = connectorKey(name);
-  const icon = (key && ICONS[key]) || <Puzzle className="h-full w-full text-zinc-400" />;
+  const icon = (key && (ICONS[key] ?? SYMBOLS[key])) || <Puzzle className="h-full w-full text-zinc-400" />;
   return (
     <div
       className={cn(

@@ -10,7 +10,8 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Select } from "@/components/builder/fields";
 import { ConnectServerDialog } from "@/components/connections/server-connect";
-import { ConnectorIcon, connectorKey } from "@/components/connections/connector-icon";
+import { ConnectorIcon } from "@/components/connections/connector-icon";
+import { appLabel as baseLabel, connectorKey, tidyName } from "@/lib/connectors";
 import { vendorApi, type MCPServerEntry } from "@/lib/api";
 import { builderApi } from "@/lib/builder/api";
 import { serverIdOf } from "@/lib/builder/graph";
@@ -23,10 +24,10 @@ type SortKey = keyof typeof SORTS;
 
 /** Categories by icon key (see connector-icon); anything unmatched is only under "All". */
 const CATEGORIES: Record<string, string[]> = {
-  Productivity: ["notion", "google_sheets", "quickbooks_pro", "filesystem"],
+  Productivity: ["notion", "google_sheets", "calendar", "quickbooks_pro", "filesystem"],
   Communication: ["slack", "gmail", "whatsapp"],
   "Developer Tools": ["github", "atlassian", "jira", "linear"],
-  "Data & Web Search": ["wikipedia", "wikidata", "gleif", "news_mcp", "job_search_mcp", "tavily", "firecrawl", "travelpayouts"],
+  "Data & Web Search": ["wikipedia", "wikidata", "gleif", "news_mcp", "job_search_mcp", "jobs", "linkedin", "web_search", "tavily", "firecrawl", "travelpayouts"],
   "Custom MCP": ["custom_mcp_server"],
 };
 
@@ -62,7 +63,19 @@ function Connectors() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["catalog", token] }),
   });
 
-  const servers = catalog.data?.servers ?? [];
+  const servers = useMemo(() => catalog.data?.servers ?? [], [catalog.data]);
+  // Two servers that tidy to the same app ("News" twice): each keeps its own name alongside, to tell them apart.
+  const appLabel = useMemo(() => {
+    const count: Record<string, number> = {};
+    for (const s of servers) {
+      const t = baseLabel(s.name, s.description).title;
+      count[t] = (count[t] ?? 0) + 1;
+    }
+    return (name: string, description?: string | null) => {
+      const l = baseLabel(name, description);
+      return count[l.title] > 1 && tidyName(name) !== l.title ? { ...l, title: `${l.title} (${tidyName(name)})` } : l;
+    };
+  }, [servers]);
   // Agents using each connector: any of its tools in the agent's tool list.
   const usedBy = useMemo(() => {
     const out: Record<string, number> = {};
@@ -76,7 +89,8 @@ function Connectors() {
     .filter((s) => {
       if (category !== "All" && !CATEGORIES[category]?.includes(connectorKey(s.name) ?? "")) return false;
       const q = query.trim().toLowerCase();
-      return !q || s.name.toLowerCase().includes(q) || (s.description ?? "").toLowerCase().includes(q);
+      const app = appLabel(s.name, s.description);
+      return !q || [s.name, s.description ?? "", app.title, app.blurb].some((t) => t.toLowerCase().includes(q));
     })
     .sort((a, b) => {
       const ua = usedBy[a.id] ?? 0;
@@ -84,11 +98,13 @@ function Connectors() {
       if (sort === "most_used") return ub - ua || a.name.localeCompare(b.name);
       if (sort === "least_used") return ua - ub || a.name.localeCompare(b.name);
       if (sort === "tools") return b.bound_tools.length - a.bound_tools.length || a.name.localeCompare(b.name);
-      return a.name.localeCompare(b.name);
+      return appLabel(a.name).title.localeCompare(appLabel(b.name).title);
     });
+  // What your agents already use but can't reach goes first; then what works; then the rest.
   const groups = [
-    { label: "Connected", items: shown.filter((s) => s.connected) },
-    { label: "Not connected", items: shown.filter((s) => !s.connected) },
+    { label: "Your agents need these", hint: "Agents you built use them, but they aren't connected yet.", items: shown.filter((s) => !s.connected && (usedBy[s.id] ?? 0) > 0) },
+    { label: "Connected", hint: "", items: shown.filter((s) => s.connected) },
+    { label: "More apps", hint: "", items: shown.filter((s) => !s.connected && !(usedBy[s.id] ?? 0)) },
   ].filter((g) => g.items.length);
 
   const connected = servers.filter((s) => s.connected);
@@ -148,50 +164,43 @@ function Connectors() {
         <div className="space-y-8">
           {groups.map((g) => (
             <section key={g.label} className="space-y-3">
-              <h2 className="text-base font-semibold text-zinc-900">
-                {g.label} <span className="font-normal text-zinc-500">· {g.items.length}</span>
-              </h2>
-              <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              <div>
+                <h2 className="text-base font-semibold text-zinc-900">
+                  {g.label} <span className="font-normal text-zinc-500">· {g.items.length}</span>
+                </h2>
+                {g.hint && <p className="mt-0.5 text-xs text-zinc-500">{g.hint}</p>}
+              </div>
+              <ul className="divide-y divide-zinc-100 overflow-hidden rounded-lg border border-zinc-200">
                 {g.items.map((s) => {
                   const uses = usedBy[s.id] ?? 0;
+                  const app = appLabel(s.name, s.description);
                   return (
-                    <li key={s.id} className="flex">
-                      <div
-                        className={cn(
-                          "flex w-full flex-col gap-3 rounded-lg border p-4 transition-colors",
-                          open === s.id ? "border-[var(--accent-border)]" : "border-zinc-200 hover:border-zinc-300",
-                        )}
-                      >
-                        <button type="button" onClick={() => setOpen(s.id)} className="flex flex-1 items-start gap-3 text-left cursor-pointer" title={`See ${s.name}'s tools`}>
-                          <ConnectorIcon name={s.name} size="sm" />
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate text-sm font-medium text-zinc-900">{s.name}</span>
-                            {s.description && <span className="mt-0.5 line-clamp-2 block text-xs text-zinc-500">{s.description}</span>}
+                    <li key={s.id} className={cn("flex items-center gap-3 px-3 py-2.5 transition-colors sm:px-4", open === s.id ? "bg-zinc-50" : "hover:bg-zinc-50")}>
+                      <button type="button" onClick={() => setOpen(s.id)} className="flex min-w-0 flex-1 items-center gap-3 text-left cursor-pointer" title={`See what ${app.title} can do`}>
+                        <ConnectorIcon name={s.name} size="sm" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-medium text-zinc-900">{app.title}</span>
+                          <span className="block truncate text-xs text-zinc-500">
+                            {s.connected
+                              ? `${s.bound_tools.length} tool${s.bound_tools.length === 1 ? "" : "s"}${uses ? ` · used by ${uses} agent${uses === 1 ? "" : "s"}` : ""}${app.blurb ? ` · ${app.blurb}` : ""}`
+                              : uses
+                                ? `Used by ${uses} agent${uses === 1 ? "" : "s"}${app.blurb ? ` · ${app.blurb}` : ""}`
+                                : app.blurb || "See what it can do"}
                           </span>
-                        </button>
-                        <div className="flex items-center justify-between gap-2">
-                          {s.connected ? (
-                            <span className="flex min-w-0 items-center gap-1.5 text-xs text-zinc-500">
-                              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--success)]" aria-hidden />
-                              <span className="truncate">
-                                Connected · {s.bound_tools.length} tool{s.bound_tools.length === 1 ? "" : "s"}
-                                {uses ? ` · ${uses} agent${uses === 1 ? "" : "s"}` : ""}
-                              </span>
-                            </span>
-                          ) : (
-                            <span className="text-xs text-zinc-500">Not connected</span>
-                          )}
-                          {s.connected ? (
-                            <button type="button" onClick={() => setOpen(s.id)} className="shrink-0 text-sm font-medium text-zinc-700 hover:text-zinc-900 cursor-pointer">
-                              Manage
-                            </button>
-                          ) : (
-                            <Button size="sm" variant="outline" className="shrink-0" onClick={() => setConnecting(s.id)} aria-label={`Connect ${s.name}`}>
-                              <Plus /> Connect
-                            </Button>
-                          )}
-                        </div>
-                      </div>
+                        </span>
+                      </button>
+                      {s.connected ? (
+                        <span className="flex shrink-0 items-center gap-3">
+                          <span className="hidden items-center gap-1.5 text-xs text-zinc-500 sm:flex">
+                            <span className="h-1.5 w-1.5 rounded-full bg-[var(--success)]" aria-hidden /> Connected
+                          </span>
+                          <button type="button" onClick={() => setOpen(s.id)} className="text-sm font-medium text-zinc-700 hover:text-zinc-900 cursor-pointer">Manage</button>
+                        </span>
+                      ) : (
+                        <Button size="sm" variant={uses ? "default" : "outline"} className="shrink-0" onClick={() => setConnecting(s.id)} aria-label={`Connect ${app.title}`}>
+                          <Plus /> Connect
+                        </Button>
+                      )}
                     </li>
                   );
                 })}
@@ -209,7 +218,7 @@ function Connectors() {
           onConnect={() => setConnecting(openServer.id)}
           disconnecting={disconnect.isPending && disconnect.variables?.id === openServer.id}
           onDisconnect={() =>
-            confirm(`Disconnect "${openServer.name}"? Agents that use it stop working until you connect again.`) &&
+            confirm(`Disconnect ${appLabel(openServer.name).title}? Agents that use it stop working until you connect again.`) &&
             disconnect.mutate(openServer, { onSuccess: () => setOpen(null) })
           }
           onClose={() => setOpen(null)}
@@ -267,9 +276,9 @@ function ToolsPanel({
           <ConnectorIcon name={server.name} size="sm" />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <h2 className="truncate text-base font-semibold text-zinc-900">{server.name}</h2>
+              <h2 className="truncate text-base font-semibold text-zinc-900">{baseLabel(server.name, server.description).title}</h2>
             </div>
-            {server.description && <p className="mt-0.5 line-clamp-2 text-sm text-zinc-500">{server.description}</p>}
+            {baseLabel(server.name, server.description).blurb && <p className="mt-0.5 line-clamp-2 text-sm text-zinc-500">{baseLabel(server.name, server.description).blurb}</p>}
             <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500">
               <span className="inline-flex items-center gap-1.5">
                 <span className={cn("h-1.5 w-1.5 rounded-full", server.connected ? "bg-[var(--success)]" : "bg-zinc-400")} aria-hidden />

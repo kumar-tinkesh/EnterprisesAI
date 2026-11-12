@@ -23,6 +23,7 @@ import { builderApi } from "@/lib/builder/api";
 import { serverIdOf } from "@/lib/builder/graph";
 import type { OverviewItem } from "@/lib/builder/types";
 import { useBuilderActions, type BuildMode, type BuildTarget } from "@/lib/builder/use-builder-actions";
+import { Templates } from "@/app/user/agents/agent-canvas";
 import { useAuthStore } from "@/stores/auth-store";
 import { cn } from "@/lib/utils";
 
@@ -310,7 +311,13 @@ export default function ExecutionsPage() {
       {loading ? (
         <div className="flex justify-center py-8"><Spinner className="h-5 w-5 text-zinc-400" /></div>
       ) : all.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-zinc-300 px-4 py-10 text-center text-sm text-zinc-500">No {tab}s yet. Create one with New {tab}.</p>
+        // Nothing yet: ready-made workflows right here, one click from a working one.
+        <div className="space-y-6">
+          <p className="rounded-lg border border-dashed border-zinc-300 px-4 py-8 text-center text-sm text-zinc-500">
+            No {tab}s yet. Describe one with New {tab}{tab === "workflow" ? ", or start from one below" : ", or start from a ready-made workflow below"}.
+          </p>
+          <Templates onOpen={openEditor} title="Ready-made workflows" />
+        </div>
       ) : items.length === 0 ? (
         <p className="rounded-lg border border-dashed border-zinc-300 px-4 py-10 text-center text-sm text-zinc-500">
           None match. <button type="button" className="font-medium text-zinc-900 underline-offset-2 hover:underline cursor-pointer" onClick={() => { setFilter("all"); setQuery(""); }}>Show all</button>
