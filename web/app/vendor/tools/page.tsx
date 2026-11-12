@@ -5,23 +5,22 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Server,
   Plus,
-  Trash2,
   Share2,
   X,
   Globe,
   Lock,
   Radio,
   Link,
-  Unlink,
-  Wrench,
   CheckCircle2,
-  XCircle,
   Check,
   Search,
   Globe as GlobeIcon,
-  Instagram,
+  ChevronRight,
 } from "lucide-react";
-import { InstagramSignInModal, isInstagramServer } from "@/components/connections/instagram-sign-in-admin";
+import { InstagramSignInModal } from "@/components/connections/instagram-sign-in-admin";
+import { ConnectorIcon } from "@/components/connections/connector-icon";
+import { appLabel } from "@/lib/connectors";
+import { AppPanel, STATE_LOOK, appState, type AppState } from "./app-panel";
 
 import ProtectedDashboard from "@/components/protected-dashboard";
 import { useAuthStore } from "@/stores/auth-store";
@@ -46,12 +45,10 @@ export default function VendorMCPPage() {
   const queryClient = useQueryClient();
 
   const [showAddModal, setShowAddModal] = useState(false);
-  const [showAnalyzeModal, setShowAnalyzeModal] = useState(false);
   const [showGrantModal, setShowGrantModal] = useState(false);
   const [showToolsModal, setShowToolsModal] = useState(false);
   const [igServer, setIgServer] = useState<{ id: string; name: string } | null>(null);
   const [showConnectModal, setShowConnectModal] = useState(false);
-  const [analyzeRepoUrl, setAnalyzeRepoUrl] = useState("");
   const [analyzeResult, setAnalyzeResult] = useState<AnalyzeRepoResponse | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [grantServer, setGrantServer] = useState<VendorMCPServer | null>(null);
@@ -64,13 +61,22 @@ export default function VendorMCPPage() {
   const [connectServer, setConnectServer] = useState<VendorMCPServer | null>(null);
   const [credKey, setCredKey] = useState("");
   const [credValue, setCredValue] = useState("");
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState<"all" | "attention" | "ready" | "restricted">("all");
 
   // Queries
-  const { data: servers = [], isLoading } = useQuery({
+  const { data: servers = [], isLoading, isError: listFailed, refetch: retryList } = useQuery({
     queryKey: ["vendor-mcp-servers", accessToken],
     queryFn: () => vendorApi.listMCPServers(accessToken),
     enabled: !!accessToken,
   });
+  const overview = useQuery({
+    queryKey: ["vendor-mcp-overview", accessToken],
+    queryFn: () => vendorApi.mcpOverview(accessToken),
+    enabled: !!accessToken,
+  });
+  const counts = new Map((overview.data ?? []).map((c) => [c.id, c]));
 
   const { data: tenants = [] }: { data: VendorTenant[] | undefined } = useQuery({
     queryKey: ["vendor-tenants", accessToken],
@@ -78,14 +84,13 @@ export default function VendorMCPPage() {
     enabled: !!accessToken,
   });
 
-  // Analyze repo mutation
   const analyzeRepoMutation = useMutation({
     mutationFn: (repoUrl: string) => vendorApi.analyzeRepo(accessToken, repoUrl),
     onSuccess: (data) => {
       setAnalyzeResult(data);
       setIsAnalyzing(false);
     },
-    onError: (err) => {
+    onError: () => {
       setAnalyzeResult(null);
       setIsAnalyzing(false);
     },
@@ -93,63 +98,45 @@ export default function VendorMCPPage() {
 
   const handleAnalyzeRepo = (url: string) => {
     if (!url || !url.trim()) return;
-    setAnalyzeRepoUrl(url.trim());
     setIsAnalyzing(true);
     setAnalyzeResult(null);
     analyzeRepoMutation.mutate(url.trim());
   };
 
-  // Resource & Server Management Mutations
+  const refreshAll = () => {
+    queryClient.invalidateQueries({ queryKey: ["vendor-mcp-servers"] });
+    queryClient.invalidateQueries({ queryKey: ["vendor-mcp-overview"] });
+  };
+
   const createMutation = useMutation({
     mutationFn: (vals: ConnectMCPServerBody) => vendorApi.createMCPServer(accessToken, vals),
-    onSuccess: () => {
+    onSuccess: (created) => {
       setShowAddModal(false);
-      queryClient.invalidateQueries({ queryKey: ["vendor-mcp-servers"] });
+      setAnalyzeResult(null);
+      refreshAll();
+      // Straight to the new app, whose next step is its first test.
+      if (created?.id) setOpenId(created.id);
     },
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => vendorApi.deleteMCPServer(accessToken, id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["vendor-mcp-servers"] }),
-  });
-
-  const embedMutation = useMutation({
-    mutationFn: (id: string) => vendorApi.embedMCPServer(accessToken, id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["vendor-mcp-servers"] }),
   });
 
   const connectMutation = useMutation({
     mutationFn: ({ id, credentials }: { id: string; credentials?: Record<string, string> | null }) =>
       vendorApi.connectMCPServer(accessToken, id, credentials),
     onSuccess: (data, vars) => {
-      const id = (vars as any).id as string;
-      setToolsServer({ id, name: servers.find((s) => s.id === id)?.name ?? id, response: data, error: null });
+      setToolsServer({ id: vars.id, name: servers.find((s) => s.id === vars.id)?.name ?? vars.id, response: data, error: null });
       setShowToolsModal(true);
-      // Without this, the server list keeps its pre-connect bound_tools (empty),
-      // so reopening "List Discovered Tools" later shows nothing even though
-      // the backend now has them — this is what the wrench button reads from.
-      queryClient.invalidateQueries({ queryKey: ["vendor-mcp-servers"] });
+      refreshAll();
+      queryClient.invalidateQueries({ queryKey: ["vendor-mcp-details", vars.id] });
     },
     onError: (err, vars) => {
-      const id = (vars as any).id as string;
       setToolsServer({
-        id,
-        name: servers.find((s) => s.id === id)?.name ?? id,
+        id: vars.id,
+        name: servers.find((s) => s.id === vars.id)?.name ?? vars.id,
         response: null,
         error: err instanceof ApiError ? err.message : "Connection failed",
       });
       setShowToolsModal(true);
     },
-  });
-
-  const disconnectMutation = useMutation({
-    mutationFn: (id: string) => vendorApi.disconnectMCPServer(accessToken, id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["vendor-mcp-servers"] }),
-  });
-
-  const globalMutation = useMutation({
-    mutationFn: ({ id, isGlobal }: { id: string; isGlobal: boolean }) => vendorApi.setMCPServerGlobal(accessToken, id, isGlobal),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["vendor-mcp-servers"] }),
   });
 
   const grantMutation = useMutation({
@@ -159,233 +146,163 @@ export default function VendorMCPPage() {
         resource_type: "mcp",
         resource_id: vals.resource_id,
       }),
-    onSuccess: () => setShowGrantModal(false),
+    onSuccess: (_d, vals) => {
+      setShowGrantModal(false);
+      refreshAll();
+      queryClient.invalidateQueries({ queryKey: ["vendor-mcp-details", vals.resource_id] });
+    },
   });
+
+  const testingId = connectMutation.isPending ? connectMutation.variables?.id : undefined;
+  const openTest = (s: VendorMCPServer) => {
+    setConnectServer(s);
+    setCredKey("");
+    setCredValue("");
+    setShowConnectModal(true);
+  };
+
+  const q = search.trim().toLowerCase();
+  // Two apps with one title ("News" twice) get their own name added.
+  const titles = new Map<string, number>();
+  for (const s of servers) titles.set(appLabel(s.name, s.description).title, (titles.get(appLabel(s.name, s.description).title) ?? 0) + 1);
+  const labelOf = (s: VendorMCPServer) => {
+    const l = appLabel(s.name, s.description);
+    return (titles.get(l.title) ?? 0) > 1 ? { ...l, title: `${l.title} (${s.name})` } : l;
+  };
+  const rows = servers
+    .map((s) => ({ s, state: appState(s, testingId === s.id), label: labelOf(s) }))
+    .filter(({ s, label }) => !q || [s.name, label.title, label.blurb, s.description, s.server_url, s.source_repo_url].some((x) => (x || "").toLowerCase().includes(q)));
+  const needsYou = (state: AppState) => state === "not_tested" || state === "no_tools";
+  const FILTERS = [
+    ["all", "All", rows.length],
+    ["attention", "Needs attention", rows.filter((r) => needsYou(r.state)).length],
+    ["ready", "Ready", rows.filter((r) => r.state === "ready").length],
+    ["restricted", "Restricted", rows.filter((r) => !r.s.is_global).length],
+  ] as const;
+  const shown = rows
+    .filter(({ s, state }) =>
+      filter === "attention" ? needsYou(state) : filter === "ready" ? state === "ready" : filter === "restricted" ? !s.is_global : true,
+    )
+    // What needs the admin first, then by name.
+    .sort((a, b) => Number(needsYou(b.state)) - Number(needsYou(a.state)) || a.label.title.localeCompare(b.label.title));
+  const open = servers.find((s) => s.id === openId) ?? null;
 
   return (
     <ProtectedDashboard
       path="/vendor"
-      title="MCP Servers"
-      description="Register MCP servers, embed them for semantic matching, and grant access to tenants."
+      title="Apps"
+      description="The MCP servers people can connect: add them, test them, and choose who can use them."
     >
-      <div className="mt-6 flex items-center justify-between">
+      <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
         <a href="/vendor" className="text-sm text-zinc-500 hover:text-zinc-800 cursor-pointer">
-          ← Back to dashboard
+          ← Dashboard
         </a>
         <Button onClick={() => setShowAddModal(true)} size="sm">
-          <Plus className="h-4 w-4 mr-1" /> Register MCP Server
+          <Plus className="h-4 w-4" /> Add app
         </Button>
       </div>
 
-      <div className="mt-4 rounded-xl border border-zinc-200 bg-white p-6 shadow-xs">
-        <div className="flex items-center gap-2 border-b border-zinc-100 pb-4">
-          <Server className="h-5 w-5 text-indigo-600" />
-          <div>
-            <h2 className="text-lg font-semibold text-zinc-900">Registered MCP Servers</h2>
-            <p className="text-sm text-zinc-500">
-              Servers are embedded on create (best-effort) for the AI Compiler&apos;s semantic matcher.
-            </p>
+      <div className="mt-4 space-y-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <div className="relative sm:w-72">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+            <Input aria-label="Search apps" className="h-9 pl-8" placeholder="Search apps" value={search} onChange={(e) => setSearch(e.target.value)} />
+          </div>
+          <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter">
+            {FILTERS.map(([id, text, n]) => (
+              <button
+                key={id}
+                type="button"
+                aria-pressed={filter === id}
+                onClick={() => setFilter(id)}
+                className={
+                  "rounded-full border px-3 py-1 text-xs font-medium cursor-pointer " +
+                  (filter === id ? "border-[var(--accent)] bg-[var(--accent)] text-white" : "border-zinc-200 text-zinc-600 hover:bg-zinc-50")
+                }
+              >
+                {text} <span className="tabular-nums opacity-75">{n}</span>
+              </button>
+            ))}
           </div>
         </div>
 
-        {isLoading ? (
-          <div className="flex justify-center py-8">
-            <Spinner className="h-6 w-6 text-zinc-500" />
-          </div>
-        ) : servers.length === 0 ? (
-          <p className="py-8 text-center text-sm text-zinc-400">
-            No MCP servers registered yet — click &ldquo;Register MCP Server&rdquo;.
-          </p>
-        ) : (
-          <div className="mt-4 overflow-x-auto">
-            <table className="w-full text-left text-sm text-zinc-600">
-              <thead className="bg-zinc-50 text-xs font-semibold uppercase text-zinc-500">
-                <tr>
-                  <th className="px-4 py-3">Server</th>
-                  <th className="px-4 py-3">Transport</th>
-                  <th className="px-4 py-3">Status</th>
-                  <th className="px-4 py-3">Scope</th>
-                  <th className="px-4 py-3">URL</th>
-                  <th className="px-4 py-3 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-zinc-100">
-                {servers.map((s) => (
-                  <tr key={s.id} className="hover:bg-zinc-50/50">
-                    <td className="px-4 py-3">
-                      <div className="font-medium text-zinc-900">{s.name}</div>
-                      <div className="text-xs text-zinc-400">{s.description || "—"}</div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className="inline-flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700">
-                        {s.transport}
+        <div className="overflow-hidden rounded-xl border border-zinc-200">
+          {isLoading ? (
+            <div className="flex justify-center py-10">
+              <Spinner className="h-6 w-6 text-zinc-500" />
+            </div>
+          ) : listFailed ? (
+            <div className="px-6 py-10 text-center">
+              <p className="text-sm text-zinc-700">Couldn&apos;t load the apps. The server may be restarting.</p>
+              <Button className="mt-3" size="sm" variant="outline" onClick={() => void retryList()}>Try again</Button>
+            </div>
+          ) : servers.length === 0 ? (
+            <div className="px-6 py-12 text-center">
+              <Server className="mx-auto h-8 w-8 text-zinc-400" />
+              <p className="mt-2 text-sm font-medium text-zinc-900">No apps yet</p>
+              <p className="mt-1 text-sm text-zinc-500">Add one from a GitHub repo or a server URL.</p>
+              <Button className="mt-4" size="sm" onClick={() => setShowAddModal(true)}>
+                <Plus className="h-4 w-4" /> Add app
+              </Button>
+            </div>
+          ) : shown.length === 0 ? (
+            <p className="px-6 py-10 text-center text-sm text-zinc-500">Nothing matches. Try another search or filter.</p>
+          ) : (
+            <ul className="divide-y divide-zinc-100">
+              {shown.map(({ s, state, label }) => {
+                const c = counts.get(s.id);
+                const look = STATE_LOOK[state];
+                return (
+                  <li key={s.id}>
+                    <button
+                      type="button"
+                      onClick={() => setOpenId(s.id)}
+                      className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-zinc-50 cursor-pointer"
+                    >
+                      <ConnectorIcon name={s.name} size="sm" />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center gap-2">
+                          <span className="truncate text-sm font-medium text-zinc-900">{label.title}</span>
+                          {!s.is_global && <Lock className="h-3.5 w-3.5 shrink-0 text-zinc-400" aria-label="Restricted" />}
+                        </span>
+                        <span className="block truncate text-xs text-zinc-500">
+                          {label.blurb || s.description || s.server_url}
+                        </span>
                       </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      {connectMutation.isPending && (connectMutation.variables as any)?.id === s.id ? (
-                        <div className="space-y-1.5 min-w-[130px]">
-                          <span className="inline-flex items-center gap-1.5 rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-semibold text-indigo-700">
-                            <Spinner className="h-3 w-3 text-indigo-600" /> Connecting...
-                          </span>
-                          <div className="h-1.5 w-full overflow-hidden rounded-full bg-indigo-100">
-                            <div className="h-full bg-gradient-to-r from-indigo-500 via-sky-500 to-emerald-500 animate-pulse rounded-full w-full" />
-                          </div>
-                        </div>
-                      ) : disconnectMutation.isPending && (disconnectMutation.variables as any) === s.id ? (
-                        <div className="space-y-1.5 min-w-[130px]">
-                          <span className="inline-flex items-center gap-1.5 rounded-full bg-red-50 px-2 py-0.5 text-xs font-semibold text-red-700">
-                            <Spinner className="h-3 w-3 text-red-600" /> Disconnecting...
-                          </span>
-                          <div className="h-1.5 w-full overflow-hidden rounded-full bg-red-100">
-                            <div className="h-full bg-gradient-to-r from-red-400 via-red-500 to-amber-500 animate-pulse rounded-full w-full" />
-                          </div>
-                        </div>
-                      ) : s.status === "VERIFIED" ? (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
-                          <CheckCircle2 className="h-3 w-3 text-emerald-600" /> Connected
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-500">
-                          <XCircle className="h-3 w-3 text-zinc-400" /> Unconnected
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      <button
-                        type="button"
-                        disabled={globalMutation.isPending && globalMutation.variables?.id === s.id}
-                        onClick={() => globalMutation.mutate({ id: s.id, isGlobal: !s.is_global })}
-                        title={
-                          s.is_global
-                            ? "Every user can see and use this server. Click to restrict it to tenants you grant it to."
-                            : "Hidden from users until you grant it to their tenant. Click to make it available to every user."
-                        }
-                        className={
-                          s.is_global
-                            ? "inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-50 cursor-pointer"
-                            : "inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 hover:bg-amber-100 disabled:opacity-50 cursor-pointer"
-                        }
-                      >
-                        {globalMutation.isPending && globalMutation.variables?.id === s.id ? (
-                          <Spinner className="h-3 w-3" />
-                        ) : s.is_global ? (
-                          <Globe className="h-3 w-3" />
-                        ) : (
-                          <Lock className="h-3 w-3" />
-                        )}
-                        {s.is_global ? "All users" : "Restricted"}
-                      </button>
-                    </td>
-                    <td className="px-4 py-3 text-xs text-zinc-500">
-                      {s.server_url || <span className="text-zinc-400">—</span>}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center justify-end gap-2">
-                        {connectMutation.isPending && (connectMutation.variables as any)?.id === s.id ? (
-                          <span className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600">
-                            <Spinner className="h-4 w-4 text-indigo-600" /> Testing connection...
-                          </span>
-                        ) : (
-                          <>
-                            <button
-                              onClick={() => {
-                                setConnectServer(s);
-                                setCredKey("");
-                                setCredValue("");
-                                setShowConnectModal(true);
-                              }}
-                              className="p-1 text-zinc-400 hover:text-emerald-600 cursor-pointer disabled:opacity-30"
-                              title="Test Connection & Discover Tools"
-                              disabled={connectMutation.isPending}
-                            >
-                              <Link className="h-4 w-4" />
-                            </button>
-                        {isInstagramServer(s) && (
-                          <button
-                            onClick={() => setIgServer({ id: s.id, name: s.name })}
-                            className="p-1 text-zinc-400 hover:text-pink-600 cursor-pointer"
-                            title="Connect with Instagram: set up the Meta app"
-                          >
-                            <Instagram className="h-4 w-4" />
-                          </button>
-                        )}
-                        <button
-                          onClick={() => {
-                            setToolsServer({
-                              id: s.id,
-                              name: s.name,
-                              response: s.bound_tools
-                                ? {
-                                    transport: s.transport,
-                                    bound_tools: s.bound_tools,
-                                    tools: (s.bound_tools || []).map((t) => ({ name: t, description: "" })),
-                                    server_info: {},
-                                    protocol_version: "2024-11-05",
-                                    auth_type: s.auth_type || "none",
-                                  }
-                                : null,
-                              error: s.bound_tools && s.bound_tools.length > 0 ? null : "No tools discovered yet. Click Connect to discover tools.",
-                            });
-                            setShowToolsModal(true);
-                          }}
-                          className="p-1 text-zinc-400 hover:text-amber-600 cursor-pointer"
-                          title="List Discovered Tools"
-                        >
-                          <Wrench className="h-4 w-4" />
-                        </button>
-                        <button
-                          onClick={() => {
-                            if (confirm(`Disconnect server "${s.name}"? This clears stored credentials.`)) {
-                              disconnectMutation.mutate(s.id);
-                            }
-                          }}
-                          className="p-1 text-zinc-400 hover:text-orange-600 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-                          title="Disconnect Server"
-                          disabled={disconnectMutation.isPending || s.status === "UNCONNECTED"}
-                        >
-                          <Unlink className="h-4 w-4" />
-                        </button>
-                        <button
-                          onClick={() => embedMutation.mutate(s.id)}
-                          className="p-1 text-zinc-400 hover:text-indigo-600 cursor-pointer"
-                          title="(Re)compute semantic embedding"
-                          disabled={embedMutation.isPending}
-                        >
-                          <Radio className="h-4 w-4" />
-                        </button>
-                        <button
-                          onClick={() => {
-                            setGrantServer(s);
-                            setShowGrantModal(true);
-                          }}
-                          className="p-1 text-zinc-400 hover:text-sky-600 cursor-pointer"
-                          title="Grant to tenant"
-                        >
-                          <Share2 className="h-4 w-4" />
-                        </button>
-                        <button
-                          onClick={() => {
-                            if (confirm(`Delete server "${s.name}"? This revokes any tenant grants.`)) {
-                              deleteMutation.mutate(s.id);
-                            }
-                          }}
-                          className="p-1 text-zinc-400 hover:text-red-600 cursor-pointer"
-                          title="Delete server"
-                          disabled={deleteMutation.isPending}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                          </>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+                      <span className="hidden shrink-0 text-right text-xs text-zinc-500 md:block">
+                        <span className="block tabular-nums">{s.bound_tools?.length ?? 0} tools</span>
+                        <span className="block tabular-nums">{c ? `${c.users_connected} connected` : ""}</span>
+                      </span>
+                      <span className={"inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium " + look.className}>
+                        {state === "testing" ? <Spinner className="h-3 w-3" /> : state === "ready" ? <CheckCircle2 className="h-3 w-3" /> : null}
+                        <span className="hidden sm:inline">{look.label}</span>
+                      </span>
+                      <ChevronRight className="h-4 w-4 shrink-0 text-zinc-400" />
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
       </div>
+
+      {open && (
+        <AppPanel
+          server={open}
+          title={labelOf(open).title}
+          counts={counts.get(open.id)}
+          accessToken={accessToken}
+          testing={testingId === open.id}
+          onTest={() => openTest(open)}
+          onInstagram={() => setIgServer({ id: open.id, name: open.name })}
+          onGrant={() => {
+            setGrantServer(open);
+            setShowGrantModal(true);
+          }}
+          onClose={() => setOpenId(null)}
+        />
+      )}
 
       {showAddModal && (
         <AnalyzeRepoModal
@@ -466,96 +383,6 @@ export default function VendorMCPPage() {
   );
 }
 
-function CreateMCPModal({
-  onClose,
-  onSubmit,
-  isPending,
-  error,
-}: {
-  onClose: () => void;
-  onSubmit: (vals: ConnectMCPServerBody) => void;
-  isPending: boolean;
-  error: string | null;
-}) {
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [serverUrl, setServerUrl] = useState("");
-  const [isGlobal, setIsGlobal] = useState(true);
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!name) return;
-    if (!serverUrl.trim()) return;
-    onSubmit({
-      name,
-      description,
-      server_url: serverUrl,
-      is_global: isGlobal,
-    });
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-      <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl">
-        <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
-          <h3 className="text-lg font-semibold text-zinc-900">Register MCP Server</h3>
-          <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600 cursor-pointer">
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-
-        <p className="mt-1 text-xs text-zinc-500">
-          Transport and tools are auto-discovered on connect.
-        </p>
-
-        <form onSubmit={handleSubmit} className="mt-4 space-y-4">
-          <Field label="Server name">
-            <Input
-              placeholder="finance.invoice-server"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              required
-            />
-          </Field>
-          <Field label="Description">
-            <Input
-              placeholder="Connect to the invoice MCP server."
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-            />
-          </Field>
-          <Field label="Server URL">
-            <Input
-              placeholder="https://mcp.example.com/invoice"
-              value={serverUrl}
-              onChange={(e) => setServerUrl(e.target.value)}
-              required
-            />
-          </Field>
-          <label className="flex items-center gap-2 text-sm text-zinc-700">
-            <input
-              type="checkbox"
-              checked={isGlobal}
-              onChange={(e) => setIsGlobal(e.target.checked)}
-              className="h-4 w-4 rounded border-zinc-300"
-            />
-            Available to all users (untick to show it only to tenants you grant it to)
-          </label>
-
-          {error && <p className="text-xs text-red-600">{error}</p>}
-
-          <div className="flex justify-end gap-2 pt-2">
-            <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={isPending}>
-              {isPending ? <Spinner /> : <Plus className="h-4 w-4 mr-1" />} Register
-            </Button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
-
 function ToolsModal({
   serverName,
   response,
@@ -571,7 +398,7 @@ function ToolsModal({
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-      <div className="flex max-h-[85vh] w-full max-w-md flex-col rounded-xl bg-white shadow-xl">
+      <div className="flex max-h-[85vh] w-full max-w-md flex-col rounded-xl bg-[var(--surface-raised)] shadow-xl">
         <div className="flex items-center justify-between border-b border-zinc-100 px-6 py-4">
           <h3 className="text-lg font-semibold text-zinc-900">
             Tools for &ldquo;{serverName}&rdquo;
@@ -590,7 +417,7 @@ function ToolsModal({
             <p className="text-sm text-red-600">{error}</p>
           ) : response ? (
             <div className="space-y-3">
-              <div className="sticky -top-4 flex items-center gap-2 bg-white pb-2 pt-1 text-sm text-zinc-600">
+              <div className="sticky -top-4 flex items-center gap-2 bg-[var(--surface-raised)] pb-2 pt-1 text-sm text-zinc-600">
                 <span className="inline-flex items-center rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium">
                   {response.transport}
                 </span>
@@ -647,7 +474,7 @@ function GrantServerModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+      <div className="w-full max-w-md rounded-xl bg-[var(--surface-raised)] p-6 shadow-xl">
         <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
           <h3 className="text-lg font-semibold text-zinc-900">
             Grant &ldquo;{server.name}&rdquo; to tenant
@@ -663,7 +490,7 @@ function GrantServerModal({
               value={tenantId}
               onChange={(e) => setTenantId(e.target.value)}
               required
-              className="flex h-10 w-full rounded-md border border-zinc-300 bg-white px-3 text-sm focus-visible:ring-2 focus-visible:ring-zinc-900"
+              className="flex h-10 w-full rounded-md border border-zinc-300 bg-[var(--surface-raised)] px-3 text-sm focus-visible:ring-2 focus-visible:ring-zinc-900"
             >
               <option value="" disabled>Select a tenant…</option>
               {tenants
@@ -845,7 +672,7 @@ function ConnectCredentialModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+      <div className="w-full max-w-md rounded-xl bg-[var(--surface-raised)] p-6 shadow-xl">
         <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
           <h3 className="text-lg font-semibold text-zinc-900">Test Connection: "{server.name}"</h3>
           <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600 cursor-pointer">
@@ -1106,9 +933,9 @@ function AnalyzeRepoModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-      <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl">
+      <div className="w-full max-w-lg rounded-xl bg-[var(--surface-raised)] p-6 shadow-xl">
         <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
-          <h3 className="text-lg font-semibold text-zinc-900">Register MCP Server</h3>
+          <h3 className="text-lg font-semibold text-zinc-900">Add app</h3>
           <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600 cursor-pointer">
             <X className="h-5 w-5" />
           </button>
@@ -1152,12 +979,12 @@ function AnalyzeRepoModal({
                 </span>
               </div>
               {analyzeResult.suggested_command && (
-                <p className="text-xs font-mono bg-white p-2 rounded border border-indigo-100 text-zinc-800">
+                <p className="text-xs font-mono bg-[var(--surface-raised)] p-2 rounded border border-indigo-100 text-zinc-800">
                   {analyzeResult.suggested_command}
                 </p>
               )}
               {analyzeResult.remote_endpoint && (
-                <p className="text-xs font-mono bg-white p-2 rounded border border-indigo-100 text-zinc-800">
+                <p className="text-xs font-mono bg-[var(--surface-raised)] p-2 rounded border border-indigo-100 text-zinc-800">
                   {analyzeResult.remote_endpoint}
                 </p>
               )}

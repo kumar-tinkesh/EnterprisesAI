@@ -13,6 +13,7 @@ import {
   X,
   Eye,
   EyeOff,
+  Search,
 } from "lucide-react";
 
 import ProtectedDashboard from "@/components/protected-dashboard";
@@ -23,6 +24,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Field } from "@/components/auth-fields";
+import { cn } from "@/lib/utils";
 
 export default function TenantDashboard() {
   const accessToken = useAuthStore((s) => s.accessToken) || "";
@@ -81,167 +83,157 @@ export default function TenantDashboard() {
     },
   });
 
+  const [search, setSearch] = useState("");
+  const [asking, setAsking] = useState<{ id: string; what: "remove" | "deactivate" } | null>(null);
+  const q = search.trim().toLowerCase();
+  const activeCount = members.filter((m) => m.is_active).length;
+  const shown = members
+    .filter((m) => !q || [m.full_name, m.email].some((x) => (x || "").toLowerCase().includes(q)))
+    // You first, then admins, then by name.
+    .sort((a, b) =>
+      Number(b.id === currentUser?.id) - Number(a.id === currentUser?.id) ||
+      Number(b.role === "tenant_admin") - Number(a.role === "tenant_admin") ||
+      (a.full_name || a.email).localeCompare(b.full_name || b.email),
+    );
+
   return (
-    <ProtectedDashboard
-      path="/tenant"
-      title="Tenant Admin Dashboard"
-      description="Manage your organization, members, and workspaces."
-    >
-      {/* Stat Cards */}
-      <div className="mt-6 grid gap-4 sm:grid-cols-2">
-        <div className="rounded-xl border border-zinc-200 bg-white p-5 shadow-xs">
-          <div className="flex items-center gap-2 text-zinc-500">
-            <Building2 className="h-5 w-5 text-indigo-600" /> Workspaces
-          </div>
-          <p className="mt-2 text-3xl font-semibold text-zinc-900">
-            {statsLoading ? "…" : stats?.workspace_count ?? 0}
-          </p>
-        </div>
-        <div className="rounded-xl border border-zinc-200 bg-white p-5 shadow-xs">
-          <div className="flex items-center gap-2 text-zinc-500">
-            <Users className="h-5 w-5 text-violet-600" /> Members
-          </div>
-          <p className="mt-2 text-3xl font-semibold text-zinc-900">
-            {statsLoading ? "…" : stats?.member_count ?? 0}
-          </p>
-        </div>
+    <ProtectedDashboard path="/tenant" title="Organization admin" description="Your organization's people and workspaces.">
+      <div className="mt-6 grid grid-cols-3 gap-3">
+        <Stat icon={<Users className="h-4 w-4" />} label="Members" value={statsLoading ? "…" : stats?.member_count ?? members.length} />
+        <Stat icon={<UserCheck className="h-4 w-4" />} label="Can sign in" value={membersLoading ? "…" : activeCount} />
+        <Stat icon={<Building2 className="h-4 w-4" />} label="Workspaces" value={statsLoading ? "…" : stats?.workspace_count ?? 0} />
       </div>
 
-      {/* Members Section */}
-      <div className="mt-8 rounded-xl border border-zinc-200 bg-white p-6 shadow-xs">
-        <div className="flex items-center justify-between border-b border-zinc-100 pb-4">
-          <div>
-            <h2 className="text-lg font-semibold text-zinc-900">Organization Members</h2>
-            <p className="text-sm text-zinc-500">
-              List of users belonging to your tenant organization.
-            </p>
+      <section className="mt-8 overflow-hidden rounded-xl border border-zinc-200">
+        <div className="flex flex-col gap-3 border-b border-zinc-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <h2 className="text-base font-semibold text-zinc-900">Members</h2>
+          <div className="flex gap-2">
+            <div className="relative min-w-0 flex-1 sm:w-56">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+              <Input aria-label="Search members" className="h-9 pl-8" placeholder="Search name or email" value={search} onChange={(e) => setSearch(e.target.value)} />
+            </div>
+            <Button onClick={() => setShowAddModal(true)} size="sm" className="h-9 shrink-0">
+              <UserPlus className="h-4 w-4" /> Add member
+            </Button>
           </div>
-          <Button onClick={() => setShowAddModal(true)} size="sm">
-            <UserPlus className="h-4 w-4 mr-1" /> Add Member
-          </Button>
         </div>
+        <p className="border-b border-zinc-100 px-4 py-2 text-xs text-zinc-500">
+          <b className="font-medium text-zinc-700">Admin</b>: adds and removes members and sees everyone&apos;s activity.{" "}
+          <b className="font-medium text-zinc-700">Member</b>: builds and runs their own agents with their own apps.
+        </p>
+        {deleteMutation.isError && (
+          <p className="border-b border-zinc-100 bg-red-50 px-4 py-2 text-xs text-red-700">
+            {deleteMutation.error instanceof ApiError ? deleteMutation.error.message : "Couldn't remove that member."}
+          </p>
+        )}
 
         {membersLoading ? (
-          <div className="flex justify-center py-8">
-            <Spinner className="h-6 w-6 text-zinc-500" />
-          </div>
+          <div className="flex justify-center py-8"><Spinner className="h-6 w-6 text-zinc-500" /></div>
         ) : members.length === 0 ? (
-          <p className="py-8 text-center text-sm text-zinc-400">
-            No members found. Click "Add Member" to invite users.
-          </p>
-        ) : (
-          <div className="mt-4 overflow-x-auto">
-            <table className="w-full text-left text-sm text-zinc-600">
-              <thead className="bg-zinc-50 text-xs font-semibold uppercase text-zinc-500">
-                <tr>
-                  <th className="px-4 py-3">Member</th>
-                  <th className="px-4 py-3">Status</th>
-                  <th className="px-4 py-3 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-zinc-100">
-                {members.map((m) => {
-                  const isSelf = m.id === currentUser?.id;
-                  return (
-                    <tr key={m.id} className="hover:bg-zinc-50/50">
-                      <td className="px-4 py-3">
-                        <div className="font-medium text-zinc-900">{m.full_name || "—"}</div>
-                        <div className="text-xs text-zinc-400">{m.email}</div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span
-                          className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                            m.is_active
-                              ? "bg-emerald-100 text-emerald-700"
-                              : "bg-rose-100 text-rose-700"
-                          }`}
-                        >
-                          {m.is_active ? (
-                            <>
-                              <UserCheck className="h-3 w-3" /> Active
-                            </>
-                          ) : (
-                            <>
-                              <UserX className="h-3 w-3" /> Inactive
-                            </>
-                          )}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <div className="flex items-center justify-end gap-2">
-                          <button
-                            onClick={() => setEditingMember(m)}
-                            className="p-1 text-zinc-400 hover:text-zinc-700 cursor-pointer"
-                            title="Edit member"
-                          >
-                            <Edit2 className="h-4 w-4" />
-                          </button>
-                          {!isSelf && (
-                            <button
-                              onClick={() => {
-                                if (
-                                  confirm(
-                                    `Are you sure you want to remove ${m.email} from the organization?`
-                                  )
-                                ) {
-                                  deleteMutation.mutate(m.id);
-                                }
-                              }}
-                              className="p-1 text-zinc-400 hover:text-red-600 cursor-pointer"
-                              title="Delete member"
-                              disabled={deleteMutation.isPending}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+          <div className="px-6 py-10 text-center">
+            <p className="text-sm text-zinc-700">No members yet.</p>
+            <Button className="mt-3" size="sm" onClick={() => setShowAddModal(true)}><UserPlus className="h-4 w-4" /> Add the first one</Button>
           </div>
+        ) : shown.length === 0 ? (
+          <p className="px-4 py-8 text-center text-sm text-zinc-500">No member matches that.</p>
+        ) : (
+          <ul className="divide-y divide-zinc-100">
+            {shown.map((m) => {
+              const isSelf = m.id === currentUser?.id;
+              const ask = asking?.id === m.id ? asking.what : null;
+              const busy = deleteMutation.isPending || editMutation.isPending;
+              return (
+                <li key={m.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-zinc-100 text-sm font-medium text-zinc-700">
+                    {(m.full_name || m.email).charAt(0).toUpperCase()}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex flex-wrap items-center gap-1.5">
+                      <span className="truncate text-sm font-medium text-zinc-900">{m.full_name || m.email}</span>
+                      {isSelf && <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600">You</span>}
+                      <span className={cn("rounded-full px-2 py-0.5 text-xs", m.role === "tenant_admin" ? "bg-indigo-50 text-indigo-700" : "bg-zinc-100 text-zinc-600")}>
+                        {m.role === "tenant_admin" ? "Admin" : "Member"}
+                      </span>
+                      {!m.is_active && <span className="rounded-full bg-rose-50 px-2 py-0.5 text-xs text-rose-700">Can&apos;t sign in</span>}
+                    </span>
+                    <span className="block truncate text-xs text-zinc-500">
+                      {m.email} · joined {new Date(m.created_at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}
+                    </span>
+                  </span>
+                  {ask ? (
+                    <span className="flex shrink-0 items-center gap-2 text-xs">
+                      <span className="text-zinc-600">{ask === "remove" ? `Remove ${m.full_name || m.email}?` : "Stop them signing in?"}</span>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => {
+                          if (ask === "remove") deleteMutation.mutate(m.id, { onSuccess: () => setAsking(null) });
+                          else editMutation.mutate({ id: m.id, body: { is_active: false } }, { onSuccess: () => setAsking(null) });
+                        }}
+                        className="rounded-md bg-red-600 px-2 py-1 font-medium text-white hover:bg-red-700 disabled:opacity-50 cursor-pointer"
+                      >
+                        {busy ? "…" : "Yes"}
+                      </button>
+                      <button type="button" onClick={() => setAsking(null)} className="rounded-md px-2 py-1 text-zinc-500 hover:bg-zinc-100 cursor-pointer">No</button>
+                    </span>
+                  ) : (
+                    <span className="flex shrink-0 items-center gap-1">
+                      <Button type="button" size="sm" variant="ghost" className="h-8 text-zinc-600" onClick={() => setEditingMember(m)}>
+                        <Edit2 className="h-4 w-4" /> <span className="hidden sm:inline">Edit</span>
+                      </Button>
+                      {!isSelf && (m.is_active ? (
+                        <Button type="button" size="sm" variant="ghost" className="h-8 text-zinc-600" onClick={() => setAsking({ id: m.id, what: "deactivate" })}>
+                          <UserX className="h-4 w-4" /> <span className="hidden sm:inline">Block</span>
+                        </Button>
+                      ) : (
+                        <Button type="button" size="sm" variant="outline" className="h-8" disabled={busy} onClick={() => editMutation.mutate({ id: m.id, body: { is_active: true } })}>
+                          <UserCheck className="h-4 w-4" /> Let in
+                        </Button>
+                      ))}
+                      {!isSelf && (
+                        <Button type="button" size="sm" variant="ghost" className="h-8 text-zinc-500 hover:text-red-600" aria-label={`Remove ${m.email}`} onClick={() => setAsking({ id: m.id, what: "remove" })}>
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
         )}
-      </div>
+      </section>
 
-      {/* Add Member Modal */}
       {showAddModal && (
         <AddMemberModal
           onClose={() => setShowAddModal(false)}
           onSubmit={(vals) => addMutation.mutate(vals)}
           isPending={addMutation.isPending}
-          error={
-            addMutation.isError
-              ? addMutation.error instanceof ApiError
-                ? addMutation.error.message
-                : "Failed to add member"
-              : null
-          }
+          error={addMutation.isError ? (addMutation.error instanceof ApiError ? addMutation.error.message : "Failed to add member") : null}
         />
       )}
 
-      {/* Edit Member Modal */}
       {editingMember && (
         <EditMemberModal
           member={editingMember}
           onClose={() => setEditingMember(null)}
-          onSubmit={(vals) =>
-            editMutation.mutate({ id: editingMember.id, body: vals })
-          }
+          onSubmit={(vals) => editMutation.mutate({ id: editingMember.id, body: vals })}
           isPending={editMutation.isPending}
-          error={
-            editMutation.isError
-              ? editMutation.error instanceof ApiError
-                ? editMutation.error.message
-                : "Failed to update member"
-              : null
-          }
+          error={editMutation.isError ? (editMutation.error instanceof ApiError ? editMutation.error.message : "Failed to update member") : null}
         />
       )}
 
       <AuditLogsPanel limit={25} />
     </ProtectedDashboard>
+  );
+}
+
+function Stat({ icon, label, value }: { icon: React.ReactNode; label: string; value: React.ReactNode }) {
+  return (
+    <div className="rounded-xl border border-zinc-200 p-4">
+      <div className="flex items-center gap-1.5 text-xs font-medium text-zinc-500">{icon}{label}</div>
+      <p className="mt-1.5 text-2xl font-semibold tabular-nums text-zinc-900">{value}</p>
+    </div>
   );
 }
 
@@ -269,7 +261,7 @@ function AddMemberModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+      <div className="w-full max-w-md rounded-xl bg-[var(--surface-raised)] p-6 shadow-xl">
         <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
           <h3 className="text-lg font-semibold text-zinc-900">Add Tenant Member</h3>
           <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600 cursor-pointer">
@@ -364,7 +356,7 @@ function EditMemberModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+      <div className="w-full max-w-md rounded-xl bg-[var(--surface-raised)] p-6 shadow-xl">
         <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
           <h3 className="text-lg font-semibold text-zinc-900">Edit Member</h3>
           <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600 cursor-pointer">

@@ -106,6 +106,10 @@ async def resolve_tool(
     ).scalars().first()
     if tool is None:
         raise ToolNotFound(f"{server.name} has no tool named {tool_name!r}.")
+    from vendor.services.tool_access import tool_is_on
+
+    if not tool_is_on(server, tool_name):
+        raise ToolNotFound(f"{tool_name} on {server.name} was turned off by your admin.")
     return server, tool
 
 

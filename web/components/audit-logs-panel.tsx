@@ -1,63 +1,136 @@
 "use client";
 
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { api, type AuditLog } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
 import { Spinner } from "@/components/ui/spinner";
+import { cn } from "@/lib/utils";
 
-function formatTime(ts: string | null): string {
+/** What each audit action means, in words; the group a filter picks it by. */
+const ACTIONS: Record<string, { text: string; group: "apps" | "people" | "access" }> = {
+  login: { text: "Signed in", group: "people" },
+  sso_login: { text: "Signed in with SSO", group: "people" },
+  logout: { text: "Signed out", group: "people" },
+  signup: { text: "New account created", group: "people" },
+  bootstrap_admin: { text: "Admin account set up", group: "people" },
+  "mcp_server.add": { text: "App added", group: "apps" },
+  "mcp_server.create": { text: "App added", group: "apps" },
+  "mcp_server.delete": { text: "App deleted", group: "apps" },
+  "mcp_server.set_global": { text: "App's access changed", group: "access" },
+  "mcp_server.test_connection": { text: "App tested", group: "apps" },
+  "mcp_server.user_connect": { text: "Someone connected an app", group: "apps" },
+  "tenant_resource.grant": { text: "App given to a tenant", group: "access" },
+  "builder.tool_invoke": { text: "Tool run from the builder", group: "apps" },
+};
+// A session renewing itself every few minutes: real, but it buries everything else.
+const NOISE = new Set(["refresh_token"]);
+
+const FILTERS = [
+  ["all", "All"],
+  ["apps", "Apps"],
+  ["people", "Sign-ins"],
+  ["access", "Access"],
+] as const;
+type Filter = (typeof FILTERS)[number][0];
+
+function when(ts: string | null): string {
   if (!ts) return "—";
-  try {
-    return new Date(ts).toLocaleString();
-  } catch {
-    return ts;
-  }
+  const m = Math.round((Date.now() - new Date(ts).getTime()) / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h} h ago`;
+  return new Date(ts).toLocaleDateString(undefined, { day: "numeric", month: "short" });
 }
 
-/** Reads the current user's latest audit-log entries (role-scoped server-side). */
-export function AuditLogsPanel({ limit = 25 }: { limit?: number }) {
-  const accessToken = useAuthStore((s) => s.accessToken) || "";
+/** "mcp_server:<id>" -> the app's name when known; "sso"/"auth" (the sign-in path) say nothing more. */
+function about(resource: string, names: Record<string, string>): string {
+  if (!resource || resource === "auth" || resource === "sso") return "";
+  const [kind, id] = resource.split(":");
+  if (id && names[id]) return names[id];
+  if (kind === "mcp_server") return "an app that was since removed";
+  return resource;
+}
 
+/** The latest activity this admin may see (role-scoped server-side), in plain words. */
+export function AuditLogsPanel({ limit = 25, names = {} }: { limit?: number; names?: Record<string, string> }) {
+  const accessToken = useAuthStore((s) => s.accessToken) || "";
+  const [filter, setFilter] = useState<Filter>("all");
+  const [showNoise, setShowNoise] = useState(false);
+
+  // More than shown: the session refreshes are dropped before the limit is applied.
   const { data: logs = [], isLoading, isError } = useQuery({
-    queryKey: ["audit-logs", accessToken, limit],
-    queryFn: () => api.getAuditLogs(accessToken, { limit }),
+    queryKey: ["audit-logs", accessToken, 200],
+    queryFn: () => api.getAuditLogs(accessToken, { limit: 200 }),
     enabled: !!accessToken,
   });
 
+  const shown = logs
+    .filter((l) => showNoise || !NOISE.has(l.action))
+    .filter((l) => filter === "all" || ACTIONS[l.action]?.group === filter)
+    .slice(0, limit);
+  const hidden = logs.filter((l) => NOISE.has(l.action)).length;
+
   return (
-    <div className="mt-6 rounded-xl border border-zinc-200 bg-white p-6">
-      <h2 className="text-lg font-semibold text-zinc-900">Audit Log</h2>
+    <section className="mt-8 overflow-hidden rounded-xl border border-zinc-200">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-100 px-4 py-3">
+        <h2 className="text-base font-semibold text-zinc-900">Activity</h2>
+        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter activity">
+          {FILTERS.map(([id, text]) => (
+            <button
+              key={id}
+              type="button"
+              aria-pressed={filter === id}
+              onClick={() => setFilter(id)}
+              className={cn(
+                "rounded-full border px-2.5 py-0.5 text-xs font-medium cursor-pointer",
+                filter === id ? "border-[var(--accent)] bg-[var(--accent)] text-white" : "border-zinc-200 text-zinc-600 hover:bg-zinc-50",
+              )}
+            >
+              {text}
+            </button>
+          ))}
+        </div>
+      </div>
       {isLoading ? (
-        <div className="mt-4 flex items-center gap-2 text-sm text-zinc-500">
-          <Spinner className="h-4 w-4" /> Loading audit events...
+        <div className="flex items-center gap-2 px-4 py-6 text-sm text-zinc-500">
+          <Spinner className="h-4 w-4" /> Loading…
         </div>
       ) : isError ? (
-        <p className="mt-4 text-sm text-red-600">
-          Failed to load audit logs. Only admins with a tenant can view them.
-        </p>
-      ) : logs.length === 0 ? (
-        <p className="mt-4 text-sm text-zinc-400">No audit events yet.</p>
+        <p className="px-4 py-6 text-sm text-red-600">Couldn&apos;t load the activity.</p>
+      ) : shown.length === 0 ? (
+        <p className="px-4 py-6 text-sm text-zinc-500">Nothing here yet.</p>
       ) : (
-        <ul className="mt-4 divide-y divide-zinc-100">
-          {logs.slice(0, limit).map((log: AuditLog) => (
-            <li key={log.id} className="flex items-start justify-between gap-4 py-2 text-sm">
-              <div>
-                <span className="font-medium text-zinc-800">{log.action}</span>
-                {log.resource && (
-                  <span className="ml-2 text-xs text-zinc-400">on {log.resource}</span>
-                )}
-              </div>
-              <div className="shrink-0 text-right text-xs text-zinc-400">
-                <span>{formatTime(log.created_at)}</span>
-                {log.ip_address && (
-                  <span className="block">{log.ip_address}</span>
-                )}
-              </div>
-            </li>
-          ))}
+        <ul className="divide-y divide-zinc-100">
+          {shown.map((log: AuditLog) => {
+            const what = ACTIONS[log.action]?.text ?? log.action.replace(/[._]/g, " ");
+            const target = about(log.resource, names);
+            return (
+              <li key={log.id} className="flex items-start justify-between gap-4 px-4 py-2.5 text-sm">
+                <span className="min-w-0">
+                  <span className="text-zinc-900">{what}</span>
+                  {target && <span className="text-zinc-500"> · {target}</span>}
+                </span>
+                <span className="shrink-0 text-right text-xs text-zinc-500" title={log.created_at ? new Date(log.created_at).toLocaleString() : undefined}>
+                  {when(log.created_at)}
+                  {log.ip_address && <span className="block text-zinc-400">{log.ip_address}</span>}
+                </span>
+              </li>
+            );
+          })}
         </ul>
       )}
-    </div>
+      {hidden > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowNoise((s) => !s)}
+          className="w-full border-t border-zinc-100 px-4 py-2 text-left text-xs text-zinc-500 hover:text-zinc-900 cursor-pointer"
+        >
+          {showNoise ? "Hide session refreshes" : `${hidden} session refreshes hidden · show them`}
+        </button>
+      )}
+    </section>
   );
 }

@@ -118,9 +118,13 @@ async def resolve_needs(
             if not visible[server.id]:
                 continue
             if server.id not in tools_of:
-                tools_of[server.id] = list(
-                    (await db.execute(select(MCPTool.name).where(MCPTool.mcp_server_id == server.id).order_by(MCPTool.name))).scalars()
-                )
+                from vendor.services.tool_access import disabled_tools
+
+                off = disabled_tools(server)
+                tools_of[server.id] = [
+                    n for n in (await db.execute(select(MCPTool.name).where(MCPTool.mcp_server_id == server.id).order_by(MCPTool.name))).scalars()
+                    if n not in off
+                ]
             if server.status != "VERIFIED" or not tools_of[server.id]:
                 state = NeedState(need, "not_verified", server.id, server.name)
             else:

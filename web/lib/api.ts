@@ -383,6 +383,23 @@ export interface MCPServerEntry {
   sign_in?: string | null;
 }
 
+/** Per server on the admin Apps page: people connected, tools, tenants it's granted to. */
+export interface MCPServerCounts {
+  id: string;
+  users_connected: number;
+  tools: number;
+  tenants_granted: number;
+}
+
+export interface MCPServerDetails {
+  id: string;
+  users_connected: number;
+  /** risk: what the builder treats it as — read, edit (changes data) or delete. */
+  tools: { name: string; description: string; risk: "read" | "edit" | "delete" | string; on: boolean }[];
+  grants: { tenant_id: string; name: string }[];
+  last_tested_at: string | null;
+}
+
 /** The Meta app behind "Connect with Instagram" (never its secret). */
 export interface InstagramSignIn {
   app_id: string | null;
@@ -532,6 +549,13 @@ export const vendorApi = {
       body: JSON.stringify({ is_global: isGlobal }),
     }, token, BACKEND_API_URL),
   // "Connect via OAuth" bootstrap — see apps/backend/vendor/services/oauth_flow.py
+  // The admin Apps page (vendor/api/v1/server_details.py)
+  mcpOverview: (token: string) => request<MCPServerCounts[]>(`${VR}/mcp/overview`, {}, token, BACKEND_API_URL),
+  mcpDetails: (token: string, serverId: string) => request<MCPServerDetails>(`${VR}/mcp/${serverId}/details`, {}, token, BACKEND_API_URL),
+  setDisabledTools: (token: string, serverId: string, names: string[]) =>
+    request<{ names: string[] }>(`${VR}/mcp/${serverId}/disabled-tools`, { method: "PUT", body: JSON.stringify({ names }) }, token, BACKEND_API_URL),
+  revokeGrant: (token: string, serverId: string, tenantId: string) =>
+    request<void>(`${VR}/mcp/${serverId}/grants/${tenantId}`, { method: "DELETE" }, token, BACKEND_API_URL),
   getInstagramSignIn: (token: string, serverId: string) =>
     request<InstagramSignIn>(`${VR}/mcp/${serverId}/instagram-sign-in`, {}, token, BACKEND_API_URL),
   setInstagramSignIn: (token: string, serverId: string, body: { app_id: string; app_secret?: string; config_id: string }) =>

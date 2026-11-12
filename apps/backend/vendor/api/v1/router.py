@@ -34,6 +34,7 @@ from vendor.api.v1.oauth import (
     set_mcp_oauth_config,
     start_mcp_oauth_authorize,
 )
+from vendor.api.v1.server_details import router as server_details_router
 from vendor.api.v1.servers import (
     delete_mcp_server_endpoint,
     get_list_mcp_servers,
@@ -51,6 +52,8 @@ from vendor.api.v1.user_connection import (
 router = APIRouter()
 
 # Mount all category sub-routers into the primary vendor router
+# Before servers_router: /mcp/overview is not a server id.
+router.include_router(server_details_router)
 router.include_router(servers_router)
 router.include_router(connection_router)
 router.include_router(user_connection_router)

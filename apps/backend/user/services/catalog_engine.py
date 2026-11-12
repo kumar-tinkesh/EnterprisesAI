@@ -162,6 +162,9 @@ async def get_relevant_tools_semantic(
     tools = (
         await db.execute(select(MCPTool).where(MCPTool.mcp_server_id.in_(server_ids)))
     ).scalars().all()
+    from vendor.services.tool_access import tool_is_on
+
+    tools = [t for t in tools if tool_is_on(server_map[t.mcp_server_id], t.name)]
     if not tools:
         return []
 

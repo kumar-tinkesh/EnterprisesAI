@@ -100,6 +100,10 @@ async def list_server_tools(
     tools = (
         await db.execute(select(MCPTool).where(MCPTool.mcp_server_id == server.id).order_by(MCPTool.name))
     ).scalars().all()
+    from vendor.services.tool_access import disabled_tools
+
+    off = disabled_tools(server)
+    tools = [t for t in tools if t.name not in off]
     return ServerToolsResponse(
         server_id=server.id,
         server_name=server.name,

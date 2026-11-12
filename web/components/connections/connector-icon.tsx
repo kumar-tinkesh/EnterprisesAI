@@ -152,6 +152,21 @@ const SYMBOLS: Record<string, React.ReactNode> = {
   calendar: <CalendarDays className="h-full w-full text-sky-400" />,
   web_search: <Globe className="h-full w-full text-indigo-400" />,
   jobs: <Briefcase className="h-full w-full text-amber-500" />,
+  instagram: (
+    <svg viewBox="0 0 24 24" className="h-full w-full" aria-hidden>
+      <defs>
+        <linearGradient id="ig-grad" x1="0" y1="1" x2="1" y2="0">
+          <stop offset="0" stopColor="#f58529" />
+          <stop offset="0.5" stopColor="#dd2a7b" />
+          <stop offset="1" stopColor="#8134af" />
+        </linearGradient>
+      </defs>
+      <rect width="24" height="24" rx="6" fill="url(#ig-grad)" />
+      <rect x="5.5" y="5.5" width="13" height="13" rx="4" fill="none" stroke="#fff" strokeWidth="1.8" />
+      <circle cx="12" cy="12" r="3.1" fill="none" stroke="#fff" strokeWidth="1.8" />
+      <circle cx="16.1" cy="7.9" r="1" fill="#fff" />
+    </svg>
+  ),
   linkedin: (
     <svg viewBox="0 0 24 24" className="h-full w-full" aria-hidden>
       <rect width="24" height="24" rx="4" fill="#0A66C2" />
