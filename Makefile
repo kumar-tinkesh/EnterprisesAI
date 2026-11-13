@@ -111,13 +111,10 @@ NGROK_COMPOSE := docker compose -f docker-compose.yml -f docker-compose.ngrok.ym
 
 ngrok-up: ## Full stack, public at https://$NGROK_DOMAIN via ngrok
 	@uv run python scripts/db.py check
-	$(NGROK_COMPOSE) up --build
 	@echo ""
-	@echo "=========================================================================="
-	@echo "  🌍  Public URL:      https://$$(grep -E '^NGROK_DOMAIN=' .env | cut -d= -f2)"
-	@echo "  🔎  ngrok inspector: http://localhost:4040"
-	@echo "  📜  Logs:            $(NGROK_COMPOSE) logs -f ngrok proxy"
-	@echo "=========================================================================="
+	@echo "  🌍  Public URL: https://$$(grep -E '^NGROK_DOMAIN=' .env | cut -d= -f2)   (the URL box below confirms it once the tunnel is up)"
+	@echo ""
+	$(NGROK_COMPOSE) up --build
 
 ngrok-down: ## Stop the ngrok stack (data volumes are kept)
 	$(NGROK_COMPOSE) down
