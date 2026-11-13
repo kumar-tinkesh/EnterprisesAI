@@ -62,7 +62,9 @@ def _prompt(name: str, description: str, steps: list[str], text: str, history: l
         "",
         "Decide where it goes:",
         '- "task": it asks for something these steps do, or could reasonably be a request for it — including anything '
-        "about the topics, data or apps the steps handle. When in doubt, choose \"task\".",
+        "about the topics, data or apps the steps handle. When in doubt, choose \"task\". When the last assistant turn "
+        "asked the person something (a text, a link, an id, a yes or no), a short message is their answer to it and "
+        "continues that job: \"task\", even when on its own it would read as small talk (\"nice\", \"ok\", \"yes\").",
         '- "general": a greeting, small talk, thanks, a question about what you can do, or a general question none of the '
         "steps is for.",
         "",

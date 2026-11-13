@@ -178,6 +178,8 @@ async def execute_workflow(run: BuilderRun, user: CurrentUser, worker_id: str, *
         memory=run.purpose in ("run", "test") and not run.webhook_id,
         knowledge_tenant_id=run.definition.get("home_tenant_id"),
         tool_owners=tool_owners or {},
+        # A chat's earlier turns: "publish this" after a message with the link is about that link.
+        history=list((run.input or {}).get("history") or []),
     )
     stream = (run.input or {}).get("stream", True) and not dry_run
     # Files sent with the run go to the steps its input feeds (a resume to the step that reads it), not to every step.

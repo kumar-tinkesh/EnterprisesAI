@@ -140,9 +140,11 @@ async def start_workflow_run(
     if problems:
         return problems_response("This workflow can't run yet.", problems)
     conv = await _open_chat(db, user, "workflow", wf.id, payload)
+    # As for an agent: the chat's earlier turns, so a follow-up ("publish this") means what it refers to.
+    history = await conversation_history(db, conv.id) if conv else None
     run = await create_workflow_run(
         db, user, wf, text=payload.input, variables=payload.variables, depth=payload.depth,
-        conversation_id=conv.id if conv else None, attachments=attachments, stream=payload.stream,
+        conversation_id=conv.id if conv else None, history=history, attachments=attachments, stream=payload.stream,
     )
     return await run_view(db, run, detail=False)
 

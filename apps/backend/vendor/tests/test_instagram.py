@@ -166,3 +166,89 @@ async def test_a_sign_in_without_an_instagram_account_says_what_to_do(admin_clie
     monkeypatch.setattr(mcp_auth, "_new_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
     done = await anon_client.get(f"{BASE}/mcp/oauth/callback", params={"code": "C", "state": start.json()["state"]})
     assert done.status_code == 400 and "professional" in done.text
+
+
+# ── comment_on_post: the tool the platform adds and runs itself ─────────────
+
+
+def _meta(monkeypatch, *, media_pages: list[list[dict]], comment_status: int = 200, comment_body: dict | None = None):
+    """Meta's Graph API, faked: the account's posts (paged) and the comment endpoint. Returns the requests seen."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.method == "GET" and request.url.path.endswith("/media"):
+            page = int(parse_qs(request.url.query.decode()).get("page", ["0"])[0])
+            body: dict = {"data": media_pages[page]}
+            if page + 1 < len(media_pages):
+                body["paging"] = {"next": f"https://graph.facebook.com/v27.0/1784/media?page={page + 1}&access_token=t"}
+            return httpx.Response(200, json=body)
+        if request.method == "POST" and request.url.path.endswith("/comments"):
+            return httpx.Response(comment_status, json=comment_body or {"id": "c_1"})
+        return httpx.Response(404, json={"error": {"message": "unexpected", "code": 100}})
+
+    monkeypatch.setattr(mcp_auth, "_new_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    return seen
+
+
+CREDS = {"IG_ACCESS_TOKEN": FB_TOKEN, "IG_USER_ID": "1784", "IG_HOST": "graph.facebook.com"}
+
+
+async def test_a_comment_on_a_post_by_its_link_finds_the_post_and_posts_once(monkeypatch):
+    seen = _meta(monkeypatch, media_pages=[
+        [{"id": "111", "permalink": "https://www.instagram.com/p/OTHER/"}],
+        [{"id": "18098040527660828", "permalink": "https://www.instagram.com/p/DfrDYVFHCHQ/"}],
+    ])
+    is_error, text = await instagram.call_local(
+        instagram.COMMENT_TOOL, {"media_id": "instagram.com/p/DfrDYVFHCHQ", "message": "nice picture"}, CREDS
+    )
+    assert not is_error and '"media_id": "18098040527660828"' in text and '"id": "c_1"' in text
+    posts = [r for r in seen if r.method == "POST"]
+    assert len(posts) == 1 and posts[0].url.path == "/v27.0/18098040527660828/comments"
+    assert parse_qs(posts[0].content.decode()) == {"message": ["nice picture"], "access_token": [FB_TOKEN]}
+
+
+async def test_a_numeric_id_is_used_as_is_and_metas_error_keeps_its_code(monkeypatch):
+    seen = _meta(monkeypatch, media_pages=[[]], comment_status=400,
+                 comment_body={"error": {"message": "(#10) Application does not have permission", "code": 10}})
+    is_error, text = await instagram.call_local(instagram.COMMENT_TOOL, {"media_id": "999", "message": "hi"}, CREDS)
+    assert is_error and "(code 10)" in text
+    assert [r.method for r in seen] == ["POST"]  # no lookup for an id
+
+
+async def test_a_link_to_someone_elses_post_says_so(monkeypatch):
+    _meta(monkeypatch, media_pages=[[{"id": "111", "permalink": "https://www.instagram.com/p/MINE/"}]])
+    is_error, text = await instagram.call_local(instagram.COMMENT_TOOL, {"media_id": "https://www.instagram.com/p/THEIRS/", "message": "hi"}, CREDS)
+    assert is_error and "No post of yours" in text
+
+
+async def test_testing_the_server_lists_the_comment_tool_and_it_runs_as_the_person(
+    admin_client, tenant_client, tenant_user, db, captured, monkeypatch
+):
+    from sqlalchemy import select
+
+    from builder.services.tool_runtime.classification import classify_tool
+    from builder.services.tool_runtime.invoke import invoke_tool
+    from vendor.models import MCPTool
+
+    row = await _server(admin_client, db)
+    res = await admin_client.post(f"{BASE}/mcp/{row.id}/test", json={"credentials": {"IG_ACCESS_TOKEN": FB_TOKEN, "IG_USER_ID": "1"}})
+    assert res.status_code == 200, res.text
+    tools = {t.name: t for t in (await db.execute(select(MCPTool).where(MCPTool.mcp_server_id == row.id))).scalars()}
+    assert set(tools) == {"whoami", instagram.COMMENT_TOOL}
+    # It changes the account: agents and workflows ask first.
+    assert classify_tool(instagram.COMMENT_TOOL, tools[instagram.COMMENT_TOOL].annotations).risk == "edit"
+
+    res = await tenant_client.post(
+        f"{BASE}/mcp/{row.id}/connect-as-user", json={"credentials": {"IG_ACCESS_TOKEN": FB_TOKEN, "IG_USER_ID": "1784"}}
+    )
+    assert res.status_code == 200, res.text
+    seen = _meta(monkeypatch, media_pages=[[]])
+    result = await invoke_tool(
+        db, user=tenant_user, server_id=row.id, tool_name=instagram.COMMENT_TOOL,
+        arguments={"media_id": "555", "message": "hello"}, confirm=True,
+    )
+    assert not result.output.is_error and result.output.text.startswith("{")
+    # The person's own token went to Meta; nothing went to the MCP server.
+    (post,) = seen
+    assert parse_qs(post.content.decode())["access_token"] == [FB_TOKEN] and post.url.path == "/v27.0/555/comments"

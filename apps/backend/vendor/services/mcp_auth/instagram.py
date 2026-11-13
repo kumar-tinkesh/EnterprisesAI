@@ -237,8 +237,110 @@ async def complete(*, app_id: str, app_secret: str, code: str, redirect_uri: str
     return {TOKEN: access_token, USER_ID: str(account["id"]), USERNAME: username, EXPIRES_AT: expires_at, SIGNED_IN: "meta"}
 
 
+# ── Tools this platform adds to the server ───────────────────────────────────
+#
+# The server can reply to a comment but not leave a new one on a post, though Graph API can
+# (POST /{media-id}/comments, instagram_manage_comments). So the platform adds that one tool itself: it is
+# listed with the server's own tools when the server is tested (``LOCAL_TOOLS``), and invoke_tool runs it here
+# (``call_local``) with the person's own token instead of sending it to the server. Everything else about it —
+# who may use it, asking first (it changes the account: risk "edit"), the admin turning it off — is the same as
+# for the server's tools.
+
+COMMENT_TOOL = "comment_on_post"
+LOCAL_TOOLS: list[dict[str, Any]] = [
+    {
+        "name": COMMENT_TOOL,
+        "description": (
+            "Leave a new comment on one of your own posts (a top-level comment; reply_to_comment answers an existing "
+            "one). media_id: the post's numeric id, its link (instagram.com/p/<code>/) or that code. The comment is "
+            "public at once."
+        ),
+        "input_schema": {
+            "type": "object",
+            "title": "comment_on_postArguments",
+            "properties": {
+                "media_id": {"type": "string", "title": "Media Id"},
+                "message": {"type": "string", "title": "Message"},
+            },
+            "required": ["media_id", "message"],
+        },
+        "annotations": {"readOnlyHint": False, "destructiveHint": False},
+    },
+]
+LOCAL_TOOL_NAMES = frozenset(t["name"] for t in LOCAL_TOOLS)
+# A post's link: instagram.com/p/<code>/, /reel/<code>/, /tv/<code>/ (optionally under a username).
+_POST_LINK = re.compile(r"instagram\.com/(?:[^/?#]+/)?(?:p|reel|reels|tv)/([A-Za-z0-9_-]+)")
+_MEDIA_PAGES = 4  # x 50 posts: how far back a link is looked up
+
+
+def is_local_tool(server, tool_name: str) -> bool:
+    return tool_name in LOCAL_TOOL_NAMES and is_instagram(server)
+
+
+def _graph_error(response: httpx.Response) -> str:
+    """Meta's message with its code, so a permission problem (10, 200) can be told from a wrong id (100)."""
+    try:
+        err = response.json().get("error") or {}
+    except Exception:  # noqa: BLE001
+        return response.text[:200]
+    code = err.get("code")
+    return f"{err.get('message') or response.text[:200]}" + (f" (code {code})" if code is not None else "")
+
+
+async def _media_id(client: httpx.AsyncClient, base: str, token: str, user_id: str, ref: str) -> str:
+    """A numeric id as is; a link or its code -> the id of the account's post with that permalink."""
+    ref = (ref or "").strip()
+    if ref.isdigit():
+        return ref
+    match = _POST_LINK.search(ref)
+    code = match.group(1) if match else ref.strip("/ ")
+    if not code or not re.fullmatch(r"[A-Za-z0-9_-]+", code):
+        raise McpAuthError("media_id must be the post's id, its link or the code in its link.")
+    if not user_id:
+        raise McpAuthError("Your Instagram account id is missing from the connection, so the link can't be looked up. Use the post's numeric id.")
+    url: str | None = f"{base}/{user_id}/media"
+    params: dict[str, str] | None = {"fields": "id,permalink", "limit": "50", "access_token": token}
+    for _ in range(_MEDIA_PAGES):
+        if not url:
+            break
+        response = await client.get(url, params=params)
+        if response.status_code != 200:
+            raise McpAuthError(f"Couldn't look the post up: {_graph_error(response)}")
+        body = response.json()
+        for item in body.get("data") or []:
+            if f"/{code}/" in (item.get("permalink") or "").rstrip("/") + "/":
+                return str(item["id"])
+        url, params = (body.get("paging") or {}).get("next"), None  # the next link carries its own query
+    raise McpAuthError(f"No post of yours has the link code {code}. Only your own posts can be commented on here.")
+
+
+async def call_local(tool_name: str, arguments: dict[str, Any], credentials: dict[str, str]) -> tuple[bool, str]:
+    """Run one of LOCAL_TOOLS as the person whose launch credentials these are -> (is_error, text)."""
+    import json
+
+    if tool_name != COMMENT_TOOL:
+        return True, f"Unknown tool {tool_name}."
+    token = clean_token(credentials.get(TOKEN))
+    if not token:
+        return True, "Connect your Instagram account first."
+    base = f"https://{credentials.get(HOST) or host_for(token)}/{GRAPH_VERSION}"
+    message = str(arguments.get("message") or "").strip()
+    if not message:
+        return True, "message is empty: say what the comment should say."
+    async with _client() as client:
+        try:
+            media_id = await _media_id(client, base, token, clean_user_id(credentials.get(USER_ID)), str(arguments.get("media_id") or ""))
+        except McpAuthError as exc:
+            return True, str(exc)
+        response = await client.post(f"{base}/{media_id}/comments", data={"message": message, "access_token": token})
+    if response.status_code != 200:
+        return True, f"Instagram didn't post the comment: {_graph_error(response)}"
+    return False, json.dumps({"id": response.json().get("id"), "media_id": media_id, "message": message})
+
+
 __all__ = [
     "APP_ID", "APP_SECRET", "AUTH_TYPE", "FIELDS", "TOKEN", "USER_ID", "USERNAME", "apply_profile", "apply_to_analysis",
     "authorize_url", "check_pasted", "clean_token", "complete", "host_for", "is_instagram", "launch_credentials",
-    "sign_in_ready", "sign_in_setup", "token_problem",
+    "COMMENT_TOOL", "LOCAL_TOOLS", "LOCAL_TOOL_NAMES", "call_local", "is_local_tool", "sign_in_ready", "sign_in_setup",
+    "token_problem",
 ]

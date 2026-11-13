@@ -49,6 +49,7 @@ from src.api.deps import CurrentUser
 
 from vendor.models import MCPTool, VendorMCPServer
 from vendor.services import mcp_auth
+from vendor.services.mcp_auth import instagram
 from vendor.services.mcp_client import open_mcp_session
 from vendor.services.mcp_service.connection import build_runtime_config
 from vendor.services.mcp_service.crud import get_mcp_server, is_server_visible_to_user
@@ -176,6 +177,21 @@ async def invoke_tool(
     await db.commit()
 
     call_timeout = min(float(timeout or settings.TOOL_CALL_TIMEOUT_SECONDS), settings.TOOL_CALL_MAX_TIMEOUT_SECONDS)
+    if instagram.is_local_tool(server, tool.name):
+        # A tool the platform adds to the server and runs itself (instagram.LOCAL_TOOLS), with this person's token.
+        started = time.monotonic()
+        try:
+            is_error, text = await asyncio.wait_for(
+                instagram.call_local(tool.name, arguments, config.get("credentials") or {}), timeout=call_timeout
+            )
+        except TimeoutError:
+            raise ToolTimeout(f"{tool.name} didn't finish within {call_timeout:.0f}s. It may still have run.") from None
+        except Exception as exc:  # network: Meta unreachable mid-call
+            raise ToolUnavailable(f"Couldn't reach Instagram while {tool.name} was running.", may_have_run=True) from exc
+        return ToolCallResult(
+            server_id=server.id, server_name=server.name, tool_name=tool.name, risk=risk,
+            output=ToolOutput(is_error=is_error, text=text), duration_ms=int((time.monotonic() - started) * 1000), attempts=1,
+        )
     home = user_home(user.id)
     key = (user.id, server.id, _fingerprint(config))
     pool = get_pool()

@@ -445,6 +445,41 @@ async def test_a_waiting_branch_does_not_hold_up_the_others(tenant_client, llm, 
     assert len(llm.calls("You are Helper")) == 1  # not run again on resume
 
 
+async def test_a_chat_follow_up_is_routed_and_done_with_the_earlier_turns(tenant_client, llm, runtime):
+    """"publish this" after a message with the link: the condition and the step working on the request see the
+    chat's earlier turns; a step further down, working on an earlier step's result, doesn't."""
+    publisher, reporter, checker = [await agent(tenant_client, n) for n in ("Publisher", "Reporter", "Checker")]
+    llm.when("A workflow branches here", label("Publish"))
+    llm.when("You are Publisher", "Want a caption?", "Published.")
+    llm.when("You are Checker", "Checked: Want a caption?", "Checked: Published.")
+    wf = await workflow(
+        tenant_client,
+        [INPUT, {"id": "c", "type": "condition", "condition_config": {"mode": "ai"}},
+         {"id": "p", "type": "agent", "agent_id": publisher}, {"id": "r", "type": "agent", "agent_id": reporter},
+         {"id": "k", "type": "agent", "agent_id": checker}, OUTPUT],
+        [("in", "c"), ("c", "p", "Publish"), ("c", "r", "Report"), ("p", "k"), ("r", "out"), ("k", "out")],
+        answer_general_questions=False,
+    )
+    r = await tenant_client.post(f"{WF}/{wf['id']}/runs", json={"input": "post https://x.test/a.png", "new_conversation": True})
+    assert r.status_code == 202, r.text
+    chat_id = r.json()["conversation_id"]
+    await worker(runtime).drain()
+    r = await tenant_client.post(f"{WF}/{wf['id']}/runs", json={"input": "publish this", "conversation_id": chat_id})
+    assert r.status_code == 202, r.text
+    await worker(runtime).drain()
+    run = await get_run(tenant_client, r.json()["id"])
+    assert run["status"] == "succeeded" and run["output_text"] == "Checked: Published.", run
+
+    first_pick, second_pick = llm.calls("A workflow branches here")
+    assert "Earlier in this chat" not in first_pick.messages[-1].content
+    assert "https://x.test/a.png" in second_pick.messages[-1].content and "publish this" in second_pick.messages[-1].content
+    _, second_publish = llm.calls("You are Publisher")
+    said = [(m.role.value, m.content) for m in second_publish.messages[1:3]]
+    assert said == [("user", "post https://x.test/a.png"), ("assistant", "Checked: Want a caption?")]
+    _, second_check = llm.calls("You are Checker")
+    assert not any("x.test" in (m.content or "") for m in second_check.messages)
+
+
 async def test_a_file_sent_with_a_run_reaches_only_the_steps_after_the_input(tenant_client, llm, runtime):
     reader, writer = await agent(tenant_client, "Reader"), await agent(tenant_client, "Writer")
     llm.when("You are Reader", "Skills: Python, SQL").when("You are Writer", "Matched.")

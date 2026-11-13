@@ -94,6 +94,15 @@ class StepContext:
     knowledge_tenant_id: str | None = None
     # Servers used with another person's account (builder.runs.tool_calls.CallSite.tool_owners).
     tool_owners: dict[str, CurrentUser] = field(default_factory=dict)
+    # The chat's earlier turns ({"role", "content"}, oldest first) when the run came from a chat; see
+    # works_on_request for which steps get them.
+    history: list[dict] = field(default_factory=list)
+
+    def works_on_request(self) -> bool:
+        """This step reads the person's message itself (straight from the input, or through a condition), not an
+        earlier step's result: the chat's earlier turns are what that message means. A step further down works on
+        what the steps before it found, and the old turns would only blur that."""
+        return bool(self.history) and (not self.input_text.strip() or self.input_text.strip() == self.original_input.strip())
     # Stream this agent step's answer as it's written (it feeds the run's output).
     stream: bool = False
     # Files sent with the run (builder_attachments ids): only the steps right after its input get them.
@@ -175,7 +184,7 @@ async def run_agent_step(ctx: StepContext) -> NodeOutcome:
         user=ctx.user, agent=agent, config=config, input_text=task, approvals=approvals, emit=ctx.emit,
         dry_run=ctx.dry_run, depth=ctx.depth, sub_agents=ctx.sub_agents, memory=ctx.memory,
         knowledge_tenant_id=ctx.knowledge_tenant_id, tool_owners=ctx.tool_owners, stream=ctx.stream,
-        attachment_ids=ctx.attachment_ids,
+        attachment_ids=ctx.attachment_ids, history=ctx.history if ctx.works_on_request() else [],
     )
     try:
         result = await run_agent(agent_ctx)
@@ -357,7 +366,8 @@ async def run_condition(ctx: StepContext) -> NodeOutcome:
             options = "\n".join(f'- "{e["condition"]}"' for e in labelled)
             try:
                 raw, pt, ct = await quick_llm(
-                    T.condition_branch_prompt(options, ctx.input_text, criteria=cfg["instructions"], allow_none=has_other_way),
+                    T.condition_branch_prompt(options, ctx.input_text, criteria=cfg["instructions"], allow_none=has_other_way,
+                                              history=ctx.history if ctx.works_on_request() else None),
                     json_mode=True, max_tokens=100,
                 )
                 picked = str(json.loads(T.strip_json_fence(raw)).get("label") or "").strip().lower()

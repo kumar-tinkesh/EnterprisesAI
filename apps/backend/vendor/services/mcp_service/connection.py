@@ -217,7 +217,12 @@ async def test_mcp_connection(
 
     await db.execute(delete(MCPTool).where(MCPTool.mcp_server_id == server.id))
     embed_tool_fn = getattr(mcp_service, "embed_tool", embed_tool)
-    for tool_data in result["tools"]:
+    tools = list(result["tools"])
+    if instagram.is_instagram(server):
+        # The tools the platform runs itself for this server (instagram.LOCAL_TOOLS), next to its own.
+        have = {t["name"] for t in tools}
+        tools += [t for t in instagram.LOCAL_TOOLS if t["name"] not in have]
+    for tool_data in tools:
         tool = MCPTool(
             mcp_server_id=server.id,
             name=tool_data["name"],

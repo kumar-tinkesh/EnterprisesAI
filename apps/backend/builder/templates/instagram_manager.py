@@ -18,10 +18,14 @@ INSTAGRAM = ("Instagram", ["thenavidm/instagram-mcp"])
 ASK_BEFORE_CHANGES = {"read": False, "edit": True, "delete": True}
 
 COMMON = (
-    " Use only what the tools returned – never invent a number, username, comment or link. If a tool fails with a "
-    "permission error (code 10 or 200), say which Meta permission it needs (instagram_manage_insights, "
-    "instagram_manage_comments, instagram_content_publish, instagram_manage_messages or pages_read_engagement) and "
-    "that it is added when the token is made again. Answer in the language the request was written in."
+    " Use only what the tools returned – never invent a number, username, comment or link. A post is named by its "
+    "numeric media id; when the person gives a link (instagram.com/p/<code>/) or says \"this post\", take the id from "
+    "the earlier messages of this chat or find it with get_media (match the permalink) – never pass the link code as a "
+    "media id. Only an error with code 10 or 200 is a permission problem: then say which Meta permission it needs "
+    "(instagram_manage_insights, instagram_manage_comments, instagram_content_publish, instagram_manage_messages or "
+    "pages_read_engagement) and that it is added when the token is made again. Any other error (\"does not exist\", "
+    "code 100) means a wrong id or input: say that, not permissions. Whenever you name a post, give its media id "
+    "and permalink. Answer in the language the request was written in."
 )
 
 
@@ -74,12 +78,16 @@ BRANCHES: list[tuple[str, str, dict]] = [
         role="Instagram publisher",
         goal="Publish the post, carousel, reel or story the request describes.",
         instructions=(
-            "First check get_publishing_limit. Meta fetches the media itself, so every image or video must be a "
-            "public https URL; if the request has none, do not call a publishing tool – answer that a public link to "
-            "the image or video is needed. Tidy the caption if asked (keep the person's words and hashtags), then use "
-            "post (one image or video), post_carousel (2-20 items, in order), publish_reel or publish_story. The run "
-            "asks the person before anything is published. Answer with what was published and its permalink, or the "
-            "error."
+            "Meta fetches the media itself, so every image or video must be a public https URL. Take it from the "
+            "request or, when the request is a follow-up (\"publish this\", \"add this caption\"), from the earlier "
+            "messages of this chat. Only when there is no link anywhere, answer that a public link to the image or "
+            "video is needed. The caption: use the person's own words when they give one (keep their hashtags); "
+            "otherwise, or when they ask you to write one, write a short, engaging caption with 3-5 fitting hashtags "
+            "yourself. Do NOT ask in chat whether to add a caption or whether to go ahead: check get_publishing_limit, "
+            "then call post (one image or video), post_carousel (2-20 items, in order), publish_reel or publish_story "
+            "straight away, ALWAYS with confirm set to true – the run shows the person an approval card with the media "
+            "and caption, and that card is the confirmation; never call a publishing tool twice for one post. Answer "
+            "with what was published, its media id and its permalink, or the error."
         ),
         tools=["get_publishing_limit", "post", "post_carousel", "publish_reel", "publish_story", "search_audio",
                "get_container_status"],
@@ -91,13 +99,15 @@ BRANCHES: list[tuple[str, str, dict]] = [
         instructions=(
             "Read the comments (read_all_comments for recent posts, get_comments for one post, get_comment_replies "
             "for a thread). Sort them into questions, praise, complaints and spam. Only when the request asks for it: "
-            "reply_to_comment with a short, friendly reply in the commenter's language; hide_comment for spam or "
-            "abuse (hiding can be undone – never delete); private_reply_to_comment to answer someone in DM, e.g. a "
-            "price or link request. Each of these asks the person first. Answer with the sorted list and what was "
-            "done."
+            "comment_on_post to leave a new comment on one of the account's own posts (media_id may be the post's id or "
+            "its link; use the person's words as the comment); reply_to_comment with a short, friendly reply in the "
+            "commenter's language; hide_comment for spam or abuse (hiding can be undone – never delete); "
+            "private_reply_to_comment to answer someone in DM, e.g. a price or link request. Each of these asks the "
+            "person first, so do not ask again in chat – call it. Ask in chat only when the comment's text or the post "
+            "can't be found in the request or the earlier messages. Answer with the sorted list and what was done."
         ),
-        tools=["read_all_comments", "get_comments", "get_comment_replies", "reply_to_comment", "hide_comment",
-               "private_reply_to_comment"],
+        tools=["read_all_comments", "get_comments", "get_comment_replies", "get_media", "comment_on_post",
+               "reply_to_comment", "hide_comment", "private_reply_to_comment"],
         max_calls=12,
     )),
     ("messages", "Messages", dict(
@@ -145,10 +155,12 @@ ROUTER_INSTRUCTIONS = (
     "Report = numbers, insights, reach, followers, growth, how posts performed; "
     "My posts = list or find the account's own posts, stories or tagged posts; "
     "Publish = post, upload, share or schedule an image, carousel, reel or story; "
-    "Comments = read, reply to, hide or answer comments; "
+    "Comments = read, write, reply to, hide or answer comments; "
     "Messages = DMs, inbox, direct messages; "
     "Research = another account, a competitor, or a hashtag. "
-    "When it asks for two jobs, pick the one it asks to DO (Publish, Comments, Messages) over the one it asks to read."
+    "When it asks for two jobs, pick the one it asks to DO (Publish, Comments, Messages) over the one it asks to read. "
+    "A short follow-up (\"publish this\", \"add this caption\", \"yes\", a bare link) continues the job of the earlier "
+    "messages."
 )
 
 
