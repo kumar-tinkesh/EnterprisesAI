@@ -180,6 +180,41 @@ async def test_job_finder_template(db, tenant_client, tenant_user, runtime):
     assert all(f"\n{line}:" in saved["Profile Builder"].instructions for line in ("Nearby", "Region", "Seniority", "Skip titles", "Query", "Target"))
 
 
+async def test_instagram_manager_template(db, tenant_client, tenant_user, runtime):
+    r = await tenant_client.get("/api/v1/builder/templates")
+    (ig,) = [t for t in r.json() if t["key"] == "instagram_manager"]
+    assert [(s["system"], s["required"], s["status"]) for s in ig["systems"]] == [("Instagram", True, "missing")]
+    # Never offered: the irreversible delete and the private-API tools.
+    tools = ig["systems"][0]["tools"]
+    assert "delete_comment" not in tools and not [t for t in tools if t.startswith("unofficial_")]
+
+    r = await tenant_client.post("/api/v1/builder/templates/instagram_manager")
+    assert r.status_code == 201, r.text
+    wf = r.json()
+    (pick,) = [n for n in wf["nodes"] if n["type"] == "condition"]
+    lines = {e["target"]: e.get("condition") or "" for e in wf["edges"] if e["source"] == pick["id"]}
+    assert lines == {"report": "Report", "posts": "My posts", "publish": "Publish", "comments": "Comments",
+                     "messages": "Messages", "research": "Research", "help": ""}
+    assert pick["condition_config"]["mode"] == "ai" and pick["condition_config"]["default_branch"] == "help"
+    # Every branch ends at the one answer.
+    assert {e["source"] for e in wf["edges"] if e["target"] == "out"} == set(lines)
+
+    saved = {a.name: a for a in (await db.execute(select(BuilderAgent).where(BuilderAgent.workflow_id == wf["id"]))).scalars()}
+    given = {name: (a.config["tool_needs"] or [{}])[0].get("tools", []) for name, a in saved.items()}
+    # Each step gets only its own group: a report can't post, research can't reply.
+    assert "post" in given["Publish"] and "post" not in given["Report"]
+    assert "reply_to_comment" in given["Comments"] and "reply_to_comment" not in given["Research"]
+    assert given["Help"] == []
+    # Anything that changes the account asks first.
+    assert all(a.config["approvals"]["edit"] and a.config["approvals"]["delete"] for a in saved.values())
+
+    r = await tenant_client.post(f"/api/v1/builder/workflows/{wf['id']}/preflight")
+    problems = r.json()["problems"]
+    assert {p["code"] for p in problems} == {"need_missing"}
+    # Said once for the system (on its first step), never for Help, which needs none.
+    assert len(problems) == 1 and "Instagram" in problems[0]["message"] and problems[0]["node_id"] != "help"
+
+
 async def test_a_step_that_runs_without_its_systems(db, tenant_client, demo):
     gleif = {"system": "GLEIF", "match": ["pipeworx-io/mcp-gleif"]}
 

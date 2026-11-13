@@ -142,7 +142,8 @@ class ToolNeed(_Strict):
 
     system: str = Field(min_length=1, max_length=80)
     match: list[str] = Field(min_length=1, max_length=5)
-    tools: list[str] = Field(default_factory=list, max_length=20)
+    # A whole template lists every tool its steps use together (Instagram: 31 of 47).
+    tools: list[str] = Field(default_factory=list, max_length=50)
     required: bool = False
 
     @field_validator("match")
