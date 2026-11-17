@@ -5,7 +5,7 @@
  */
 
 import { serverIdOf, toolName } from "@/lib/builder/graph";
-import type { AgentConfig, AgentProfile, ApprovalPolicy, DraftAgent, GuardrailSettings, Risk } from "@/lib/builder/types";
+import type { AgentConfig, AgentProfile, ApprovalPolicy, DraftAgent, GuardrailSettings, Risk, ServerTools, ToolCandidate } from "@/lib/builder/types";
 
 export const WIZARD_STEPS = [
   { id: "describe", label: "Describe", title: "What should your agent do?", hint: "Describe it in your own words. The AI drafts everything else, and you can change any of it." },
@@ -93,6 +93,20 @@ export function replaceServerTools(toolIds: string[], serverId: string, ids: str
   const others = toolIds.filter((id) => serverIdOf(id) !== serverId);
   const unique = Array.from(new Set(ids));
   return at < 0 ? [...others, ...unique] : [...others.slice(0, at), ...unique, ...others.slice(at)];
+}
+
+/** A server's whole tool list as picker candidates (``serverTools`` → what ``onPick`` gets). */
+export function serverCandidates(st: ServerTools): ToolCandidate[] {
+  return st.tools.map((t) => ({
+    tool_id: `mcp:${st.server_id}:${t.name}`, server_id: st.server_id, server_name: st.server_name,
+    tool_name: t.name, description: t.description ?? "", risk: t.risk.risk, connected: st.connected,
+  }));
+}
+
+/** ``toolIds`` plus every one of ``ids`` it doesn't have yet, kept beside that server's other tools. */
+export function addServerTools(toolIds: string[], serverId: string, ids: string[]): string[] {
+  const mine = toolIds.filter((id) => serverIdOf(id) === serverId);
+  return replaceServerTools(toolIds, serverId, [...mine, ...ids.filter((id) => serverIdOf(id) === serverId)]);
 }
 
 // ── The summary and what still needs attention ─────────────────────────────

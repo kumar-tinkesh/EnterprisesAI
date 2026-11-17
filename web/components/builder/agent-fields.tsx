@@ -12,6 +12,7 @@ import { GuardrailFields } from "@/components/builder/guardrail-fields";
 import { ToolPicker } from "@/components/builder/tool-picker";
 import { NeedsSection } from "@/components/builder/tool-needs";
 import { knowledgeApi } from "@/lib/api";
+import { addServerTools } from "@/lib/builder/agent-wizard";
 import { builderApi } from "@/lib/builder/api";
 import { toolName } from "@/lib/builder/graph";
 import type { AgentConfig, ApprovalPolicy, DraftAgent } from "@/lib/builder/types";
@@ -307,7 +308,12 @@ export function AgentFields({
           )
         ))}
         {adding && (
-          <ToolPicker token={token} exclude={toolIds} onPick={(t) => setConfig({ tool_ids: [...toolIds, t.tool_id] })} />
+          <ToolPicker
+            token={token}
+            exclude={toolIds}
+            onPick={(t) => setConfig({ tool_ids: [...toolIds, t.tool_id] })}
+            onPickMany={(tools) => setConfig({ tool_ids: addServerTools(toolIds, tools[0].server_id, tools.map((t) => t.tool_id)) })}
+          />
         )}
         </Param>
         {(config.tool_needs ?? []).length > 0 && <NeedsSection token={token} needs={config.tool_needs ?? []} />}

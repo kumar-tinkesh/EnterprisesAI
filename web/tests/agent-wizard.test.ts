@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   WIZARD_STEPS,
   accessOf,
+  addServerTools,
   applyProfile,
   askFirstFor,
   blankAgent,
@@ -13,6 +14,7 @@ import {
   presetToolIds,
   replaceServerTools,
   reviewIssues,
+  serverCandidates,
   stepIndex,
   toolList,
 } from "@/lib/builder/agent-wizard";
@@ -86,6 +88,24 @@ describe("agent wizard: tools per server", () => {
     expect(replaceServerTools(ids, "a", [])).toEqual(["mcp:b:1", "mcp:c:1"]);
     expect(replaceServerTools(ids, "d", ["mcp:d:1"])).toEqual([...ids, "mcp:d:1"]);
     expect(replaceServerTools(ids, "c", ["mcp:c:1", "mcp:c:1"])).toEqual(ids);
+  });
+
+  it("adds a server's whole tool list without duplicates, beside its other tools", () => {
+    const ids = ["mcp:a:1", "mcp:b:1", "mcp:c:1"];
+    expect(addServerTools(ids, "b", ["mcp:b:1", "mcp:b:2", "mcp:b:3"])).toEqual(["mcp:a:1", "mcp:b:1", "mcp:b:2", "mcp:b:3", "mcp:c:1"]);
+    expect(addServerTools(ids, "d", ["mcp:d:1", "mcp:d:2"])).toEqual([...ids, "mcp:d:1", "mcp:d:2"]);
+    expect(addServerTools(ids, "a", ["mcp:a:1"])).toEqual(ids);
+  });
+
+  it("turns a server's tool list into picker candidates, delete tools included", () => {
+    const st = {
+      server_id: "s", server_name: "Slack", connected: true,
+      tools: [
+        { name: "post", description: "Post", input_schema: null, risk: { risk: "edit" as Risk } },
+        { name: "delete_message", description: "", input_schema: null, risk: { risk: "delete" as Risk } },
+      ],
+    };
+    expect(serverCandidates(st).map((t) => [t.tool_id, t.risk])).toEqual([["mcp:s:post", "edit"], ["mcp:s:delete_message", "delete"]]);
   });
 });
 
