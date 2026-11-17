@@ -153,8 +153,21 @@ def tool_arguments_prompt(tool_name: str, tool_description: str, field_lines: st
 NONE_OF_THESE = "none of these"
 
 
-def condition_branch_prompt(options: str, text: str, *, criteria: str | None = None, allow_none: bool = False) -> str:
+# Earlier chat turns shown to a condition: enough to resolve "publish this", short enough to stay a quick call.
+CONDITION_HISTORY_TURNS = 6
+CONDITION_HISTORY_CHARS = 400
+
+
+def condition_branch_prompt(options: str, text: str, *, criteria: str | None = None, allow_none: bool = False,
+                            history: list[dict] | None = None) -> str:
     criteria_block = f"Instructions from the workflow author:\n{criteria}\n\n" if (criteria and criteria.strip()) else ""
+    turns = [m for m in history or [] if m.get("role") in ("user", "assistant") and m.get("content")][-CONDITION_HISTORY_TURNS:]
+    if turns:
+        earlier = "\n".join(f"{m['role']}: {str(m['content'])[:CONDITION_HISTORY_CHARS]}" for m in turns)
+        text = (
+            f"Earlier in this chat (for context only – a short follow-up such as \"publish this\" or \"yes, do it\" "
+            f"continues the job it refers to):\n{earlier}\n\nThe latest message, which is what to route:\n{text}"
+        )
     none_option = f'\n- "{NONE_OF_THESE}"' if allow_none else ""
     none_rule = f'Pick "{NONE_OF_THESE}" only when the text clearly fits none of the other labels.\n\n' if allow_none else ""
     return (

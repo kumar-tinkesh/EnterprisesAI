@@ -59,3 +59,34 @@ services:
       - "127.0.0.1:4040:4040"
     depends_on:
       - proxy
+
+  # --- The URL box: the public address once the tunnel is really up ---------
+  # Asks the ngrok agent's local API (ngrok:4040) instead of trusting .env, so
+  # what's printed is what ngrok is actually serving; gives up after ~60 s.
+  urls:
+    depends_on:
+      - ngrok
+      - proxy
+    command:
+      - /bin/sh
+      - -c
+      - |
+        url=""
+        for i in $$(seq 1 30); do
+          url=$$(wget -qO- http://ngrok:4040/api/tunnels 2>/dev/null | grep -o '"public_url":"https://[^"]*"' | head -1 | cut -d'"' -f4)
+          [ -n "$$url" ] && break
+          sleep 2
+        done
+        echo ""
+        echo "=========================================================================="
+        if [ -n "$$url" ]; then
+          echo "  🌍  Public URL (ngrok):      $$url"
+          echo "  🔐  Login:                   $$url/auth"
+        else
+          echo "  ⚠️   ngrok tunnel not up yet — see: docker compose logs ngrok"
+          echo "  🌍  Expected URL:            https://${NGROK_DOMAIN}"
+        fi
+        echo "  🔎  ngrok inspector:         http://localhost:4040"
+        echo "  ℹ️   Open the public URL, not localhost: this web build talks to ngrok."
+        echo "=========================================================================="
+        echo ""

@@ -92,6 +92,8 @@ class CallOutcome:
     error: str | None = None
     structured: dict | None = None
     declined: bool = False
+    # The arguments it ran with – a person may have changed them when they said yes (a send's recipient).
+    arguments: dict | None = None
 
 
 async def _ask(db, site: CallSite, ledger: BuilderToolCall, tool: AgentTool, kind: str, arguments: dict) -> BuilderApproval:
@@ -152,7 +154,7 @@ async def ledgered_call(site: CallSite, tool: AgentTool, call_key: str, argument
         if ledger is not None and ledger.status in states.CALL_DONE:
             return CallOutcome(
                 text=ledger.result_text or "", is_error=bool(ledger.is_error), error=ledger.error,
-                structured=ledger.result, declined=ledger.status == states.CALL_DECLINED,
+                structured=ledger.result, declined=ledger.status == states.CALL_DECLINED, arguments=ledger.arguments,
             )
 
         if ledger is None:
@@ -254,7 +256,7 @@ async def ledgered_call(site: CallSite, tool: AgentTool, call_key: str, argument
         ledger.duration_ms, ledger.finished_at = int((time.monotonic() - started) * 1000), utcnow()
         await db.commit()
     await site.emit("tool_call", phase="finished", tool=tool.tool_name, is_error=is_error, node_id=site.node_id, preview=text[:300])
-    return CallOutcome(text=text, is_error=is_error, error=error, structured=structured)
+    return CallOutcome(text=text, is_error=is_error, error=error, structured=structured, arguments=arguments)
 
 
 __all__ = ["CallSite", "CallOutcome", "DECLINED", "OUTBOUND_DECLINED", "Paused", "ledgered_call"]

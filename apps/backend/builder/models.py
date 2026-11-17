@@ -537,7 +537,23 @@ class BuilderWebhook(Base, TimestampMixin):
     last_run_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
 
 
+class BuilderSpendLimit(Base, TimestampMixin):
+    """A person's own monthly limit on what their runs cost (estimated, USD).
+
+    Checked when a run starts (Run, chat, schedule, webhook, tests): once this
+    calendar month's runs add up to it, new runs wait for next month or a
+    higher limit. A run already going is never stopped half-way.
+    """
+
+    __tablename__ = "builder_spend_limits"
+
+    owner_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(36), index=True)
+    monthly_usd: Mapped[float] = mapped_column(Float)
+
+
 __all__ = [
+    "BuilderSpendLimit",
     "BuilderAgentMemory",
     "BuilderAttachment",
     "BuilderWebhook",

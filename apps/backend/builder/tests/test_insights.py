@@ -32,18 +32,23 @@ async def test_insights_compare_windows_and_rank_agents(db, tenant_client, demo,
     assert out["busiest"] == [{"kind": "agent", "id": agent["id"], "name": "Helper", "exists": True, "runs": 3, "succeeded": 3}]
     assert out["all_time"] == {"runs": 3, "success_rate": 1.0}
 
-    # A deleted agent keeps the name it ran under.
+    # Older than the chart's days: not in the busiest.
+    await db.execute(update(BuilderRun).where(BuilderRun.id == ids[0]).values(created_at=utcnow() - timedelta(days=20)))
+    await db.commit()
+    [top] = (await tenant_client.get(f"{B}/insights", params={"days": 7})).json()["busiest"]
+    assert top["runs"] == 2
+
+    # A deleted agent drops out of the busiest (its runs still count in the totals).
     await tenant_client.delete(f"{B}/agents/{agent['id']}")
-    [top] = (await tenant_client.get(f"{B}/insights")).json()["busiest"]
-    assert (top["name"], top["exists"]) == ("Helper", False)
+    out = (await tenant_client.get(f"{B}/insights")).json()
+    assert out["busiest"] == [] and out["all_time"]["runs"] == 3
 
 
-async def test_overview_has_a_line_per_agent(tenant_client, demo, gateway, runtime):
+async def test_overview_has_a_line_per_agent(db, tenant_client, demo, gateway, runtime):
     agent = await make_agent(tenant_client, demo, ["echo"])
     idle = await make_agent(tenant_client, demo, ["echo"])
     gateway([reply("One."), reply("Two.")])
-    for i in range(2):
-        await start(tenant_client, agent, f"q{i}")
+    ids = [await start(tenant_client, agent, f"q{i}") for i in range(2)]
     await worker(runtime).drain()
 
     out = (await tenant_client.get(f"{B}/overview")).json()
@@ -52,4 +57,26 @@ async def test_overview_has_a_line_per_agent(tenant_client, demo, gateway, runti
     assert (busy["runs"], busy["succeeded"], busy["daily"][-1], busy["last_status"]) == (2, 2, 2, "succeeded")
     assert busy["health_status"] == "testing" and busy["running"] == 0 and busy["schedule"] is None and busy["published"] == 0
     assert (quiet["runs"], quiet["last_run_at"], quiet["health_status"]) == (0, None, "not_tested")
-    assert out["totals"] == {"runs": 2, "succeeded": 2, "failed": 0, "running": 0, "waiting": 0}
+    assert out["totals"] == {"runs": 2, "succeeded": 2, "failed": 0, "running": 0, "waiting": 0, "stale_waiting": 0}
+
+    # Waiting for a decision: a fresh one needs you; one left for over a week is counted apart, as forgotten.
+    await db.execute(update(BuilderRun).where(BuilderRun.id == ids[0]).values(status="waiting", created_at=utcnow() - timedelta(days=10)))
+    await db.execute(update(BuilderRun).where(BuilderRun.id == ids[1]).values(status="waiting"))
+    await db.commit()
+    busy = {i["id"]: i for i in (await tenant_client.get(f"{B}/overview")).json()["items"]}[agent["id"]]
+    assert (busy["waiting"], busy["stale_waiting"]) == (1, 1)
+
+
+def test_typical_time_is_the_median_so_one_long_run_does_not_skew_it():
+    from types import SimpleNamespace
+
+    from builder.api.v1.insights import _window
+
+    start = utcnow()
+    rows = [
+        SimpleNamespace(kind="workflow", workflow_id="w", agent_id=None, status="succeeded",
+                        started_at=start, finished_at=start + timedelta(minutes=m))
+        for m in (2, 2, 3, 87)
+    ]
+    w = _window(rows)
+    assert w.median_latency_ms == 150_000 and w.avg_latency_ms > 20 * 60_000

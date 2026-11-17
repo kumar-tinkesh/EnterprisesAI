@@ -8,14 +8,14 @@
   --surface: #111113;
   --surface-raised: #18181b;
   --surface-strong: #232327;
-  --hover: #1f1f23;
+  --hover: rgb(255 255 255 / 0.05);
   --border: rgb(255 255 255 / 0.08);
   --border-strong: rgb(255 255 255 / 0.14);
 
-  --text: #ededef;
-  --text-secondary: #d4d4d8;
-  --text-muted: #a1a1aa;
-  --text-subtle: #71717a;
+  --text: #f4f4f5;
+  --text-secondary: #e4e4e7;
+  --text-muted: #b4b4bb;
+  --text-subtle: #8a8a93;
   --text-disabled: #52525b;
 
   --accent: #4f46e5;
@@ -28,7 +28,7 @@
   --success: #34d399;
   --success-wash: rgb(16 185 129 / 0.14);
   --success-border: rgb(16 185 129 / 0.35);
-  --warning: #fbbf24;
+  --warning: #f59e0b;
   --warning-wash: rgb(245 158 11 / 0.14);
   --warning-border: rgb(245 158 11 / 0.35);
   --danger: #f87171;
@@ -94,10 +94,10 @@ h1, h2, h3 { letter-spacing: -0.01em; line-height: 1.25; }
 /* surfaces */
 .builder-dark .bg-white { background-color: var(--surface); }
 .builder-dark .bg-white\/90 { background-color: rgb(17 17 19 / 0.9); }
-.builder-dark .bg-zinc-50, .builder-dark .bg-zinc-50\/60 { background-color: var(--surface-raised); }
+.builder-dark .bg-zinc-50, .builder-dark .bg-zinc-50\/60, .builder-dark .bg-zinc-50\/75, .builder-dark .bg-zinc-50\/80 { background-color: var(--surface-raised); }
 .builder-dark .bg-zinc-100, .builder-dark .bg-zinc-200 { background-color: var(--surface-strong); }
-.builder-dark .hover\:bg-zinc-50:hover, .builder-dark .hover\:bg-zinc-50\/50:hover { background-color: var(--hover); }
-.builder-dark .hover\:bg-zinc-100:hover, .builder-dark .hover\:bg-zinc-200:hover { background-color: var(--surface-strong); }
+.builder-dark .hover\:bg-zinc-50:hover, .builder-dark .hover\:bg-zinc-50\/50:hover, .builder-dark .hover\:bg-zinc-50\/80:hover { background-color: var(--hover) !important; }
+.builder-dark .hover\:bg-zinc-100:hover, .builder-dark .hover\:bg-zinc-200:hover { background-color: var(--hover) !important; }
 .builder-dark select option { background-color: var(--surface-raised); color: var(--text); }
 
 /* text */
@@ -149,7 +149,7 @@ h1, h2, h3 { letter-spacing: -0.01em; line-height: 1.25; }
 /* status: warning */
 .builder-dark .bg-amber-50, .builder-dark .bg-amber-50\/50, .builder-dark .bg-amber-50\/60 { background-color: var(--warning-wash); }
 .builder-dark .bg-amber-100, .builder-dark .hover\:bg-amber-100:hover { background-color: rgb(245 158 11 / 0.2); }
-.builder-dark .text-amber-950, .builder-dark .text-amber-900, .builder-dark .text-amber-800, .builder-dark .text-amber-700 { color: var(--warning); }
+.builder-dark .text-amber-950, .builder-dark .text-amber-900, .builder-dark .text-amber-800, .builder-dark .text-amber-700 { color: #f59e0b; }
 .builder-dark .border-amber-100, .builder-dark .border-amber-200, .builder-dark .border-amber-300,
 .builder-dark .hover\:border-amber-300:hover { border-color: var(--warning-border); }
 

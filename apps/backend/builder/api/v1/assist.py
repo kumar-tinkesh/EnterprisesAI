@@ -27,7 +27,7 @@ from src.db.session import get_db
 from builder.api.v1.deps import get_end_user
 from builder.assist import prompts
 from builder.assist.drafts import X_GAP, draft_agent, draft_workflow
-from builder.assist.edit import Editor, EditError, resolve
+from builder.assist.edit import Editor, EditError, normalize_ops, resolve
 from builder.assist.llm import AssistUnavailable, Usage, ask, ask_json
 from builder.assist.tools import search_tools
 from builder.graph.schema import WorkflowConfig, WorkflowEdge, WorkflowNode
@@ -111,6 +111,8 @@ def _describe(nodes: list[dict], edges: list[dict], agents: dict[str, dict]) -> 
             detail = f" does: {n.get('need') or n.get('tool_id') or '(no tool yet)'}"
         elif n.get("type") == "human_approval":
             detail = f" asks: {n.get('approval_message') or ''}"
+        elif n.get("type") == "code":
+            detail = f" runs: {n.get('code')}"
         elif n.get("type") in ("output", "condition", "join"):
             cfg = n.get("output_config") or n.get("condition_config") or n.get("join_policy")
             detail = f" {json.dumps(cfg)}" if cfg else ""
@@ -153,7 +155,7 @@ async def assist_workflow_edit(payload: EditRequest, user: CurrentUser = Depends
         editor = None
         error: str | None = None
         for attempt in range(2):
-            ops = answer.get("ops") if isinstance(answer.get("ops"), list) else []
+            ops = normalize_ops(answer.get("ops") if isinstance(answer.get("ops"), list) else [])
             resolved = await resolve(db, user, ops, payload.nodes, agents, usage, payload.name)
             editor = Editor(payload.name, payload.nodes, payload.edges, payload.config, resolved, timezone=payload.timezone)
             try:
@@ -193,6 +195,8 @@ async def assist_workflow_edit(payload: EditRequest, user: CurrentUser = Depends
         "warnings": editor.warnings,
         "problems": [p.as_dict() for p in problems],
         "tools": editor.new_tools,
+        # Only steps still in the graph (a later op may have removed one).
+        "agent_tools": {k: v for k, v in editor.agent_tools.items() if any(n["id"] == k for n in editor.nodes)},
         "usage": {"prompt_tokens": usage.prompt_tokens, "completion_tokens": usage.completion_tokens},
     }
 

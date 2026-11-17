@@ -17,6 +17,7 @@ itself is shared in the tenant.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import Any, Literal
 
 import jwt as pyjwt
@@ -64,7 +65,7 @@ class RunStart(BaseModel):
     # A playground chat: continue this one, or start a new one with this message.
     conversation_id: str | None = None
     new_conversation: bool = False
-    # Files uploaded to /attachments, sent with this message (agents only).
+    # Files uploaded to /attachments, sent with this message (a workflow's first steps get them).
     attachment_ids: list[str] = Field(default_factory=list, max_length=5)
     # Send the answer as it's written ("output_delta" events on /runs/{id}/events).
     stream: bool = True
@@ -134,13 +135,16 @@ async def start_workflow_run(
     wf = await _get_workflow(db, workflow_id, user)
     if not wf.nodes:
         raise HTTPException(status_code=422, detail="This workflow has no steps yet.")
+    attachments = await attachments_for_run(db, user, payload.attachment_ids)
     problems = await workflow_run_problems(db, user, wf, payload.variables)
     if problems:
         return problems_response("This workflow can't run yet.", problems)
     conv = await _open_chat(db, user, "workflow", wf.id, payload)
+    # As for an agent: the chat's earlier turns, so a follow-up ("publish this") means what it refers to.
+    history = await conversation_history(db, conv.id) if conv else None
     run = await create_workflow_run(
         db, user, wf, text=payload.input, variables=payload.variables, depth=payload.depth,
-        conversation_id=conv.id if conv else None, stream=payload.stream,
+        conversation_id=conv.id if conv else None, history=history, attachments=attachments, stream=payload.stream,
     )
     return await run_view(db, run, detail=False)
 
@@ -261,12 +265,28 @@ async def list_approvals(
     if status_:
         query = query.where(BuilderApproval.status == status_)
     approvals = (await db.execute(query.order_by(BuilderApproval.created_at.desc()).limit(200))).scalars().all()
+    runs = {
+        r.id: r
+        for r in (await db.execute(
+            select(BuilderRun.id, BuilderRun.kind, BuilderRun.agent_id, BuilderRun.workflow_id, BuilderRun.caller_user_id, BuilderRun.definition)
+            .where(BuilderRun.id.in_({a.run_id for a in approvals}))
+        )).all()
+    } if approvals else {}
     # Runs started through a share link: whose request each one is.
-    run_callers = dict((await db.execute(
-        select(BuilderRun.id, BuilderRun.caller_user_id).where(BuilderRun.id.in_({a.run_id for a in approvals}), BuilderRun.caller_user_id.is_not(None))
-    )).tuples().all()) if approvals else {}
-    people = await callers_of(db, run_callers.values())
-    return [approval_view(a, people.get(run_callers.get(a.run_id, ""))) for a in approvals]
+    people = await callers_of(db, [r.caller_user_id for r in runs.values() if r.caller_user_id])
+
+    def view(a: BuilderApproval) -> dict:
+        r = runs.get(a.run_id)
+        out = approval_view(a, people.get(r.caller_user_id) if r is not None and r.caller_user_id else None)
+        # Which agent/workflow it's for, so a list can name it even when the run is old.
+        if r is not None:
+            out["run"] = {
+                "kind": r.kind, "agent_id": r.agent_id, "workflow_id": r.workflow_id,
+                "name": ((r.definition or {}).get(r.kind) or {}).get("name"),
+            }
+        return out
+
+    return [view(a) for a in approvals]
 
 
 @router.post("/approvals/{approval_id}")
@@ -354,4 +374,6 @@ async def run_events(websocket: WebSocket, run_id: str, token: str = Query(...))
         await stream_run_events(websocket, run_id)
     except (WebSocketDisconnect, RuntimeError, asyncio.CancelledError):
         return
-    await websocket.close(code=status.WS_1000_NORMAL_CLOSURE)
+    # The client may leave between the last event and the close.
+    with contextlib.suppress(WebSocketDisconnect, RuntimeError):
+        await websocket.close(code=status.WS_1000_NORMAL_CLOSURE)

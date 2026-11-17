@@ -214,6 +214,7 @@ async def test_tool_step_waits_for_approval_and_passes_its_input_on(tenant_clien
     assert (await get_run(tenant_client, run_id))["status"] == "waiting"
     [ask] = (await tenant_client.get("/api/v1/builder/approvals")).json()
     assert ask["kind"] == "tool_call" and ask["payload"]["arguments"] == {"text": "hello world"}
+    assert ask["run"]["kind"] == "workflow" and ask["run"]["workflow_id"] == wf["id"]  # a list can name what's waiting
     assert "Workflow step" in ask["payload"]["message"]
     await tenant_client.post(f"/api/v1/builder/approvals/{ask['id']}", json={"decision": "approve"})
     await w.drain()
@@ -442,3 +443,145 @@ async def test_a_waiting_branch_does_not_hold_up_the_others(tenant_client, llm, 
     run = await get_run(tenant_client, run_id)
     assert run["status"] == "succeeded" and "helper result" in run["output_text"]
     assert len(llm.calls("You are Helper")) == 1  # not run again on resume
+
+
+async def test_a_chat_follow_up_is_routed_and_done_with_the_earlier_turns(tenant_client, llm, runtime):
+    """"publish this" after a message with the link: the condition and the step working on the request see the
+    chat's earlier turns; a step further down, working on an earlier step's result, doesn't."""
+    publisher, reporter, checker = [await agent(tenant_client, n) for n in ("Publisher", "Reporter", "Checker")]
+    llm.when("A workflow branches here", label("Publish"))
+    llm.when("You are Publisher", "Want a caption?", "Published.")
+    llm.when("You are Checker", "Checked: Want a caption?", "Checked: Published.")
+    wf = await workflow(
+        tenant_client,
+        [INPUT, {"id": "c", "type": "condition", "condition_config": {"mode": "ai"}},
+         {"id": "p", "type": "agent", "agent_id": publisher}, {"id": "r", "type": "agent", "agent_id": reporter},
+         {"id": "k", "type": "agent", "agent_id": checker}, OUTPUT],
+        [("in", "c"), ("c", "p", "Publish"), ("c", "r", "Report"), ("p", "k"), ("r", "out"), ("k", "out")],
+        answer_general_questions=False,
+    )
+    r = await tenant_client.post(f"{WF}/{wf['id']}/runs", json={"input": "post https://x.test/a.png", "new_conversation": True})
+    assert r.status_code == 202, r.text
+    chat_id = r.json()["conversation_id"]
+    await worker(runtime).drain()
+    r = await tenant_client.post(f"{WF}/{wf['id']}/runs", json={"input": "publish this", "conversation_id": chat_id})
+    assert r.status_code == 202, r.text
+    await worker(runtime).drain()
+    run = await get_run(tenant_client, r.json()["id"])
+    assert run["status"] == "succeeded" and run["output_text"] == "Checked: Published.", run
+
+    first_pick, second_pick = llm.calls("A workflow branches here")
+    assert "Earlier in this chat" not in first_pick.messages[-1].content
+    assert "https://x.test/a.png" in second_pick.messages[-1].content and "publish this" in second_pick.messages[-1].content
+    _, second_publish = llm.calls("You are Publisher")
+    said = [(m.role.value, m.content) for m in second_publish.messages[1:3]]
+    assert said == [("user", "post https://x.test/a.png"), ("assistant", "Checked: Want a caption?")]
+    _, second_check = llm.calls("You are Checker")
+    assert not any("x.test" in (m.content or "") for m in second_check.messages)
+
+
+async def test_a_file_sent_with_a_run_reaches_only_the_steps_after_the_input(tenant_client, llm, runtime):
+    reader, writer = await agent(tenant_client, "Reader"), await agent(tenant_client, "Writer")
+    llm.when("You are Reader", "Skills: Python, SQL").when("You are Writer", "Matched.")
+    wf = await workflow(tenant_client, [INPUT, {"id": "r", "type": "agent", "agent_id": reader},
+                                        {"id": "w", "type": "agent", "agent_id": writer}, OUTPUT],
+                        [("in", "r"), ("r", "w"), ("w", "out")], answer_general_questions=True)
+    r = await tenant_client.post("/api/v1/builder/attachments", files={"file": ("resume.txt", b"Asha - Python, SQL, 2026 batch", "text/plain")})
+    assert r.status_code == 201, r.text
+    r = await tenant_client.post(f"{WF}/{wf['id']}/runs", json={"input": "", "attachment_ids": [r.json()["id"]]})
+    assert r.status_code == 202, r.text
+    await worker(runtime).drain()
+
+    run = await get_run(tenant_client, r.json()["id"])
+    # A file is a task: the front desk doesn't answer it as small talk.
+    assert run["status"] == "succeeded" and run["output_text"] == "Matched.", run
+    (to_reader,) = llm.calls("You are Reader")
+    (to_writer,) = llm.calls("You are Writer")
+    assert "2026 batch" in to_reader.messages[-1].content and 'name="resume.txt"' in to_reader.messages[-1].content
+    assert "2026 batch" not in to_writer.messages[-1].content
+
+
+async def test_a_code_step_calls_its_own_tools_through_the_ledger(db, tenant_client, demo, llm, runtime):
+    """A code step with tool_needs calls the tools itself: a read runs at once, a send waits for a yes, and the
+    resumed step gets the read's recorded answer instead of calling again."""
+    from builder.workflows.code_steps import CodeResult, register
+
+    calls: list[str] = []
+
+    @register("test_echo_then_send")
+    async def _echo_then_send(inp):
+        assert inp.tools.has("Demo Labs", "echo") and not inp.tools.has("Demo Labs", "nope")
+        calls.append("run")
+        echoed = await inp.tools.call("Demo Labs", "echo", {"text": "hi"}, key="echo")
+        sent = await inp.tools.call("Demo Labs", "send_note", {"text": f"note: {echoed.text}"}, key="send")
+        missing = await inp.tools.call("Nowhere", "x", {}, key="x")
+        return CodeResult(output=f"{echoed.text} | {'declined' if sent.declined else sent.text} | {missing.is_error}")
+
+    demo.source_repo_url = "https://github.com/acme/demo-mcp.git"
+    await db.commit()
+    need = {"system": "Demo Labs", "match": ["acme/demo-mcp"], "tools": ["echo", "send_note"]}
+    wf = await workflow(tenant_client, [INPUT, {"id": "c", "type": "code", "code": "test_echo_then_send", "tool_needs": [need]},
+                                        OUTPUT], [("in", "c"), ("c", "out")])
+    assert wf["nodes"][1]["tool_needs"][0]["system"] == "Demo Labs"
+    run_id = await start(tenant_client, wf)
+    w = worker(runtime)
+    await w.drain()
+    assert (await get_run(tenant_client, run_id))["status"] == "waiting"
+    [ask] = (await tenant_client.get("/api/v1/builder/approvals")).json()
+    assert ask["tool_name"] == "send_note" and "hi" in ask["payload"]["arguments"]["text"]
+    await tenant_client.post(f"/api/v1/builder/approvals/{ask['id']}", json={"decision": "approve"})
+    await w.drain()
+    run = await get_run(tenant_client, run_id)
+    assert run["status"] == "succeeded", run
+    assert run["output_text"].startswith("hi | ") and run["output_text"].endswith("| True")
+    assert "note: hi" in runtime["notes"].read_text()
+    assert calls == ["run", "run"]  # ran again after the yes, with echo answered from the ledger
+
+
+def test_database_hiccups_are_told_apart_from_bugs():
+    from sqlalchemy.exc import DBAPIError
+    from sqlalchemy.exc import TimeoutError as PoolTimeout
+
+    from builder.runs.db import is_transient
+
+    class ConnectionDoesNotExistError(Exception):
+        pass
+
+    dropped = DBAPIError("SELECT 1", {}, ConnectionDoesNotExistError("connection was closed in the middle of operation"))
+    assert is_transient(dropped) and is_transient(PoolTimeout("QueuePool limit reached"))
+    assert not is_transient(DBAPIError("SELECT x", {}, Exception('column "x" does not exist')))
+    assert not is_transient(ValueError("a bug")) and not is_transient(TimeoutError("a tool was slow"))
+
+
+async def test_a_run_the_database_dropped_out_under_resumes_instead_of_failing(tenant_client, llm, runtime, monkeypatch):
+    """The connection dies mid-run: the run goes back to the queue and carries on from its checkpoint – the step
+    that had finished isn't run again – instead of failing (or hanging) the way it did on a dropped Supabase link."""
+    from sqlalchemy.exc import DBAPIError
+
+    from builder.runs import executor
+    from builder.workflows.code_steps import CodeResult, register
+
+    monkeypatch.setattr(executor, "RESUME_AFTER_SECONDS", 0)
+    ran = {"first": 0, "second": 0}
+
+    @register("test_first")
+    def _first(inp):
+        ran["first"] += 1
+        return CodeResult(output="first done")
+
+    @register("test_flaky")
+    def _flaky(inp):
+        ran["second"] += 1
+        if ran["second"] == 1:
+            raise DBAPIError("SELECT 1", {}, Exception("connection was closed in the middle of operation"))
+        return CodeResult(output=f"{inp.parts[0][1]} + second done")
+
+    wf = await workflow(tenant_client, [INPUT, {"id": "a", "type": "code", "code": "test_first"},
+                                        {"id": "b", "type": "code", "code": "test_flaky"}, OUTPUT],
+                        [("in", "a"), ("a", "b"), ("b", "out")])
+    run_id = await start(tenant_client, wf)
+    await worker(runtime).drain()
+    run = await get_run(tenant_client, run_id)
+    assert run["status"] == "succeeded", run
+    assert run["output_text"] == "first done + second done"
+    assert ran == {"first": 1, "second": 2}

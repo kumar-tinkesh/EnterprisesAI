@@ -127,6 +127,7 @@ def activate(state: dict, node_id: str, parts: list[tuple[str, str]], *, input_t
     node["parts"] = [list(p) for p in parts]
     node["input"] = render_accumulated(parts, input_text)
     node["output"] = node["error"] = None
+    node.pop("routed", None)
 
 
 def ready(state: dict) -> list[str]:
@@ -163,7 +164,8 @@ def _evaluate(state: dict, graph: Graph, node_id: str) -> None:
         prune(state, graph, node_id)
         return
     state["failed_inputs"][node_id] = failed
-    parts = [(graph.label(src), state["nodes"][src]["output"] or "") for src in fired]
+    # A code step may hand each step after it its own text (``routed``); the others get its output.
+    parts = [(graph.label(src), (state["nodes"][src].get("routed") or {}).get(node_id, state["nodes"][src]["output"] or "")) for src in fired]
     activate(state, node_id, parts, input_text=state["input"])
 
 
@@ -188,18 +190,23 @@ def _start_round(state: dict, graph: Graph, target: str, from_node: str) -> None
         node = state["nodes"][nid]
         if node["status"] in (DONE, FAILED, PRUNED, WAITING):
             node["status"], node["output"], node["error"] = WAITING, None, None
+            node.pop("routed", None)
     for edge_id, e in graph.edges.items():
         if edge_id not in graph.back_edges and e["source"] in region_set and e["target"] in region_set:
             state["edges"][edge_id] = UNRESOLVED
     activate(state, target, [(graph.label(from_node), carried)], input_text=state["input"])
 
 
-def complete(state: dict, graph: Graph, node_id: str, output: str, *, take: set[str] | None = None) -> None:
-    """A step finished. ``take`` (conditions only): which targets to go on to."""
+def complete(state: dict, graph: Graph, node_id: str, output: str, *, take: set[str] | None = None,
+             routed: dict[str, str] | None = None) -> None:
+    """A step finished. ``take`` (conditions only): which targets to go on to. ``routed`` (code steps only): the
+    text a given next step gets instead of ``output``."""
     node = state["nodes"][node_id]
     if node["status"] != RUNNING:
         return  # stale: a loop round reset it while it ran
     node["status"], node["output"] = DONE, output
+    if routed:
+        node["routed"] = routed
     status = {
         edge_id: (FIRED if take is None or graph.edges[edge_id]["target"] in take else DEAD)
         for edge_id in graph.out_edges[node_id]

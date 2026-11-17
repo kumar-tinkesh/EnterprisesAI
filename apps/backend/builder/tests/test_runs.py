@@ -525,3 +525,59 @@ async def test_a_failing_tool_is_tried_again_only_when_set_to_retry(tenant_clien
     run = await get_run(tenant_client, run_id)
     assert run["status"] == "succeeded" and run["output_text"] == "It didn't work."
     assert [c["tool_name"] for c in run["tool_calls"]] == ["fail"] * tries
+
+
+async def test_a_turns_read_only_calls_run_side_by_side(tenant_client, demo, gateway, runtime):
+    import time
+
+    agent = await make_agent(tenant_client, demo, ["wait_for", "echo"])
+    gw = gateway([
+        reply(calls=[("demo__wait_for", {"seconds": 1.5}), ("demo__echo", {"text": "in order"}),
+                     ("demo__wait_for", {"seconds": 1.5}), ("demo__wait_for", {"seconds": 1.5})]),
+        reply("All done."),
+    ])
+    run_id = await start(tenant_client, agent)
+    began = time.monotonic()
+    await worker(runtime).drain()
+    took = time.monotonic() - began
+
+    run = await get_run(tenant_client, run_id)
+    assert run["status"] == "succeeded", run
+    # Three 1.5s reads together, not one after another (4.5s); echo (an edit) ran by itself.
+    assert took < 4.0, took
+    answers = [m for m in gw.requests[1].messages if m.role.value == "tool"]
+    assert [m.tool_call_id for m in answers] == ["call-0-demo__wait_for", "call-1-demo__echo", "call-2-demo__wait_for", "call-3-demo__wait_for"]
+    assert "in order" in answers[1].content and all("done" in answers[i].content for i in (0, 2, 3))
+
+
+async def test_a_turn_with_two_approvals_resumes_its_second_call(tenant_client, demo, gateway, runtime):
+    """Paused between a turn's calls: the resume makes the call still owed, then asks the model — never before."""
+    agent = await make_agent(tenant_client, demo, ["send_note"])
+    gw = gateway([reply(calls=[("demo__send_note", {"text": "one"}), ("demo__send_note", {"text": "two"})]), reply("Sent both.")])
+    run_id = await start(tenant_client, agent)
+    w = worker(runtime)
+    for expected in ("one\n", "one\ntwo\n"):
+        await w.drain()
+        [approval] = [a for a in (await tenant_client.get("/api/v1/builder/approvals")).json() if a["status"] == "pending"]
+        await tenant_client.post(f"/api/v1/builder/approvals/{approval['id']}", json={"decision": "approve"})
+        await w.drain()
+        if expected == "one\n":
+            assert runtime["notes"].read_text() == "one\n" and (await get_run(tenant_client, run_id))["status"] == "waiting"
+
+    run = await get_run(tenant_client, run_id)
+    assert run["status"] == "succeeded" and run["output_text"] == "Sent both.", run
+    assert runtime["notes"].read_text() == "one\ntwo\n"
+    # The model was asked again only once both calls had answers.
+    assert len(gw.requests) == 2 and [m.role.value for m in gw.requests[1].messages][-2:] == ["tool", "tool"]
+
+
+async def test_side_by_side_can_be_turned_off(tenant_client, demo, gateway, runtime):
+    import time
+
+    agent = await make_agent(tenant_client, demo, ["wait_for"], tools={"side_by_side": False})
+    gateway([reply(calls=[("demo__wait_for", {"seconds": 1}), ("demo__wait_for", {"seconds": 1})]), reply("Done.")])
+    run_id = await start(tenant_client, agent)
+    began = time.monotonic()
+    await worker(runtime).drain()
+    assert (await get_run(tenant_client, run_id))["status"] == "succeeded"
+    assert time.monotonic() - began >= 2.0  # one after the other

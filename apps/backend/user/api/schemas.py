@@ -33,6 +33,8 @@ class CatalogEntry(BaseModel):
     auth_type: str | None = None
     credential_fields: list[str] = Field(default_factory=list)
     connected: bool = False
+    # "instagram" when people can "Connect with Instagram" (the admin set up the Meta app).
+    sign_in: str | None = None
 
 
 class CatalogResponse(BaseModel):

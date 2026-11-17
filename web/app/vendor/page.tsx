@@ -1,445 +1,229 @@
 "use client";
 
-import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  Building2,
-  Users,
-  UserCheck,
-  FolderKanban,
-  Plus,
-  Trash2,
-  PauseCircle,
-  PlayCircle,
-  X,
-  Eye,
-  EyeOff,
-  User,
-  ShieldCheck,
-  Server,
-} from "lucide-react";
+/** The platform admin's Overview: is the platform growing, is it working, and what needs them. */
+
+import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
+import { AlertTriangle, Building2, PauseCircle, User, XCircle } from "lucide-react";
 
 import ProtectedDashboard from "@/components/protected-dashboard";
 import { AuditLogsPanel } from "@/components/audit-logs-panel";
+import { DailyBars } from "@/components/charts/daily-bars";
+import { ConnectorIcon } from "@/components/connections/connector-icon";
+import { Stat, Stats, type Delta } from "@/components/ui/stats";
 import { useAuthStore } from "@/stores/auth-store";
-import { api, ApiError } from "@/lib/api";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Spinner } from "@/components/ui/spinner";
-import { Field } from "@/components/auth-fields";
+import { api, vendorApi } from "@/lib/api";
+import { appLabel } from "@/lib/connectors";
+import { cn } from "@/lib/utils";
 
-export default function VendorDashboard() {
+const DAYS = 14;
+
+function delta(cur: number, prev: number, higherIsBetter = true): Delta {
+  if (!prev) return null;
+  const change = (cur - prev) / prev;
+  if (Math.abs(change) < 0.005) return { text: "0%", up: true, good: true };
+  return { text: `${Math.round(Math.abs(change) * 100)}%`, up: change > 0, good: change > 0 === higherIsBetter };
+}
+const money = (usd: number) => (usd === 0 ? "$0" : usd < 0.01 ? `$${usd.toFixed(3)}` : `$${usd.toFixed(2)}`);
+
+export default function VendorOverview() {
   const accessToken = useAuthStore((s) => s.accessToken) || "";
-  const queryClient = useQueryClient();
-
-  const [showAddModal, setShowAddModal] = useState(false);
-
-  // Queries
-  const { data: stats, isLoading: statsLoading } = useQuery({
-    queryKey: ["vendor-stats", accessToken],
-    queryFn: () => api.getVendorStats(accessToken),
+  const overview = useQuery({
+    queryKey: ["platform-overview", accessToken, DAYS],
+    queryFn: () => vendorApi.platformOverview(accessToken, DAYS),
     enabled: !!accessToken,
+    refetchInterval: 60000,
   });
+  const { data: tenants = [] } = useQuery({ queryKey: ["vendor-tenants", accessToken], queryFn: () => api.getVendorTenants(accessToken), enabled: !!accessToken });
+  const { data: servers = [] } = useQuery({ queryKey: ["vendor-mcp-servers", accessToken], queryFn: () => vendorApi.listMCPServers(accessToken), enabled: !!accessToken });
 
-  const { data: tenants = [], isLoading: tenantsLoading } = useQuery({
-    queryKey: ["vendor-tenants", accessToken],
-    queryFn: () => api.getVendorTenants(accessToken),
-    enabled: !!accessToken,
-  });
-
-  // Mutations
-  const addMutation = useMutation({
-    mutationFn: (vals: {
-      name: string;
-      slug?: string;
-      admin_email: string;
-      admin_full_name: string;
-      admin_password: string;
-    }) => api.createVendorTenant(accessToken, vals),
-    onSuccess: () => {
-      setShowAddModal(false);
-      queryClient.invalidateQueries({ queryKey: ["vendor-tenants"] });
-      queryClient.invalidateQueries({ queryKey: ["vendor-stats"] });
+  const o = overview.data;
+  const appsToFix = servers.filter((s) => s.status !== "VERIFIED" || !(s.bound_tools?.length ?? 0));
+  const suspended = tenants.filter((t) => t.status !== "active");
+  const failedRate = o && o.runs.current ? o.failed_runs.current / o.runs.current : 0;
+  const names = Object.fromEntries(servers.map((s) => [s.id, appLabel(s.name, s.description).title]));
+  const attention = [
+    appsToFix.length > 0 && {
+      key: "apps",
+      href: "/vendor/tools",
+      Icon: AlertTriangle,
+      tone: "text-amber-600",
+      title: `${appsToFix.length} app${appsToFix.length === 1 ? "" : "s"} can't be used yet`,
+      text: `${appsToFix.slice(0, 4).map((s) => appLabel(s.name, s.description).title).join(", ")}: test them so people can connect.`,
     },
-  });
-
-  const toggleStatusMutation = useMutation({
-    mutationFn: ({ id, status }: { id: string; status: string }) =>
-      api.updateVendorTenant(accessToken, id, { status }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["vendor-tenants"] });
+    o && o.failed_runs.current >= 3 && failedRate >= 0.2 && {
+      key: "failed",
+      href: "/vendor/accounts",
+      Icon: XCircle,
+      tone: "text-red-600",
+      title: `${Math.round(failedRate * 100)}% of runs failed in the last ${DAYS} days`,
+      text: `${o.failed_runs.current} of ${o.runs.current}. The busiest accounts below show where.`,
     },
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => api.deleteVendorTenant(accessToken, id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["vendor-tenants"] });
-      queryClient.invalidateQueries({ queryKey: ["vendor-stats"] });
+    suspended.length > 0 && {
+      key: "suspended",
+      href: "/vendor/accounts?show=suspended",
+      Icon: PauseCircle,
+      tone: "text-zinc-500",
+      title: `${suspended.length} suspended account${suspended.length === 1 ? "" : "s"}`,
+      text: "Their people can't sign in until you turn them back on.",
     },
-  });
-
-  const [activeTab, setActiveTab] = useState<"all" | "team" | "solo">("all");
-
-  const teamTenantsCount = tenants.filter((t) => !t.is_personal).length;
-  const soloTenantsCount = tenants.filter((t) => t.is_personal).length;
-
-  const filteredTenants = tenants.filter((t) => {
-    if (activeTab === "team") return !t.is_personal;
-    if (activeTab === "solo") return t.is_personal;
-    return true;
-  });
+  ].filter(Boolean) as { key: string; href: string; Icon: typeof AlertTriangle; tone: string; title: string; text: string }[];
 
   return (
-    <ProtectedDashboard
-      path="/vendor"
-      title="Vendor Admin Dashboard"
-      description="Platform-level administration & tenant management for EnterpriseAI."
-    >
-      {/* MCP Servers shortcut */}
-      <div className="mt-6 flex justify-end">
-        <a
-          href="/vendor/tools"
-          className="inline-flex items-center gap-1.5 rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700"
-        >
-          <Server className="h-4 w-4" /> Manage MCP Servers
-        </a>
-      </div>
-
-      {/* 4 Platform Metric Cards */}
-      <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard
-          icon={<Building2 className="h-5 w-5 text-indigo-600" />}
-          label="Team Organizations"
-          value={statsLoading ? "…" : stats?.total_tenants ?? 0}
-        />
-        <StatCard
-          icon={<UserCheck className="h-5 w-5 text-purple-600" />}
-          label="Individual Users"
-          value={statsLoading ? "…" : stats?.individual_users ?? 0}
-        />
-        <StatCard
-          icon={<Users className="h-5 w-5 text-sky-600" />}
-          label="Total Platform Users"
-          value={statsLoading ? "…" : stats?.total_users ?? 0}
-        />
-        <StatCard
-          icon={<FolderKanban className="h-5 w-5 text-amber-600" />}
-          label="Total Workspaces"
-          value={statsLoading ? "…" : stats?.total_workspaces ?? 0}
-        />
-      </div>
-
-      {/* Tenant Management Table */}
-      <div className="mt-8 rounded-xl border border-zinc-200 bg-white p-6 shadow-xs">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-zinc-100 pb-4">
-          <div>
-            <h2 className="text-lg font-semibold text-zinc-900">Managed Tenants & Accounts</h2>
-            <p className="text-sm text-zinc-500">
-              Overview of all organization tenants and individual user accounts.
-            </p>
-          </div>
-          <Button onClick={() => setShowAddModal(true)} size="sm">
-            <Plus className="h-4 w-4 mr-1" /> Create Tenant
-          </Button>
-        </div>
-
-        {/* Tab Switcher */}
-        <div className="mt-4 flex border-b border-zinc-200 gap-6 text-sm font-medium">
-          <button
-            onClick={() => setActiveTab("all")}
-            className={`pb-3 relative cursor-pointer ${
-              activeTab === "all"
-                ? "text-zinc-900 border-b-2 border-indigo-600 font-semibold"
-                : "text-zinc-500 hover:text-zinc-700"
-            }`}
-          >
-            All Accounts ({tenants.length})
-          </button>
-          <button
-            onClick={() => setActiveTab("team")}
-            className={`pb-3 relative cursor-pointer flex items-center gap-1.5 ${
-              activeTab === "team"
-                ? "text-indigo-600 border-b-2 border-indigo-600 font-semibold"
-                : "text-zinc-500 hover:text-zinc-700"
-            }`}
-          >
-            <Building2 className="h-4 w-4" /> Team Organizations ({teamTenantsCount})
-          </button>
-          <button
-            onClick={() => setActiveTab("solo")}
-            className={`pb-3 relative cursor-pointer flex items-center gap-1.5 ${
-              activeTab === "solo"
-                ? "text-purple-600 border-b-2 border-purple-600 font-semibold"
-                : "text-zinc-500 hover:text-zinc-700"
-            }`}
-          >
-            <User className="h-4 w-4" /> Solo Accounts ({soloTenantsCount})
-          </button>
-        </div>
-
-        {tenantsLoading ? (
-          <div className="flex justify-center py-8">
-            <Spinner className="h-6 w-6 text-zinc-500" />
-          </div>
-        ) : filteredTenants.length === 0 ? (
-          <p className="py-8 text-center text-sm text-zinc-400">
-            No accounts found in this view.
-          </p>
-        ) : (
-          <div className="mt-4 overflow-x-auto">
-            <table className="w-full text-left text-sm text-zinc-600">
-              <thead className="bg-zinc-50 text-xs font-semibold uppercase text-zinc-500">
-                <tr>
-                  <th className="px-4 py-3">Tenant / Account</th>
-                  <th className="px-4 py-3">Type</th>
-                  <th className="px-4 py-3">Owner / Admin</th>
-                  <th className="px-4 py-3 text-center">Users</th>
-                  <th className="px-4 py-3 text-center">Workspaces</th>
-                  <th className="px-4 py-3">Status</th>
-                  <th className="px-4 py-3 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-zinc-100">
-                {filteredTenants.map((t) => (
-                  <tr key={t.id} className="hover:bg-zinc-50/50">
-                    <td className="px-4 py-3">
-                      <div className="font-medium text-zinc-900">{t.name}</div>
-                      <div className="text-xs text-zinc-400">slug: {t.slug}</div>
-                    </td>
-                    <td className="px-4 py-3">
-                      {t.is_personal ? (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-purple-50 px-2 py-0.5 text-xs font-medium text-purple-700">
-                          <User className="h-3 w-3" /> Solo Account
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700">
-                          <Building2 className="h-3 w-3" /> Team Org
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="text-zinc-800 font-medium text-xs">
-                        {t.admin_name || "—"}
-                      </div>
-                      <div className="text-xs text-zinc-400">{t.admin_email || "—"}</div>
-                    </td>
-                    <td className="px-4 py-3 text-center font-semibold text-zinc-800">
-                      {t.user_count}
-                    </td>
-                    <td className="px-4 py-3 text-center font-semibold text-zinc-800">
-                      {t.workspace_count}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span
-                        className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                          t.status === "active"
-                            ? "bg-emerald-100 text-emerald-700"
-                            : "bg-rose-100 text-rose-700"
-                        }`}
-                      >
-                        {t.status === "active" ? "Active" : "Suspended"}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <button
-                          onClick={() =>
-                            toggleStatusMutation.mutate({
-                              id: t.id,
-                              status: t.status === "active" ? "suspended" : "active",
-                            })
-                          }
-                          className="p-1 text-zinc-400 hover:text-zinc-700 cursor-pointer"
-                          title={t.status === "active" ? "Suspend tenant" : "Activate tenant"}
-                        >
-                          {t.status === "active" ? (
-                            <PauseCircle className="h-4 w-4 text-amber-600" />
-                          ) : (
-                            <PlayCircle className="h-4 w-4 text-emerald-600" />
-                          )}
-                        </button>
-                        <button
-                          onClick={() => {
-                            if (
-                              confirm(
-                                `Are you sure you want to delete tenant "${t.name}"? This will permanently delete all associated workspaces and users.`
-                              )
-                            ) {
-                              deleteMutation.mutate(t.id);
-                            }
-                          }}
-                          className="p-1 text-zinc-400 hover:text-red-600 cursor-pointer"
-                          title="Delete tenant"
-                          disabled={deleteMutation.isPending}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+    <ProtectedDashboard path="/vendor" title="Overview" description="How the platform is doing, across every account.">
+      <div className="mt-6 space-y-6">
+        {attention.length > 0 && (
+          <Panel title="Needs your attention">
+            <ul className="divide-y divide-zinc-100">
+              {attention.map((a) => (
+                <li key={a.key}>
+                  <Link href={a.href} className="flex items-center gap-3 px-4 py-3 hover:bg-zinc-50">
+                    <a.Icon className={cn("h-4 w-4 shrink-0", a.tone)} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm font-medium text-zinc-900">{a.title}</span>
+                      <span className="block truncate text-xs text-zinc-500">{a.text}</span>
+                    </span>
+                    <span className="shrink-0 text-sm font-medium text-zinc-700">Open</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </Panel>
         )}
+
+        <Stats>
+          <Stat
+            label="Active people"
+            loading={!o}
+            value={o ? String(o.active_people.current) : ""}
+            suffix={o ? ` / ${o.people_total}` : ""}
+            delta={o ? delta(o.active_people.current, o.active_people.previous) : null}
+            sub={`signed in during the last ${DAYS} days`}
+          />
+          <Stat
+            label="New people"
+            loading={!o}
+            value={o ? String(o.new_people.current) : ""}
+            delta={o ? delta(o.new_people.current, o.new_people.previous) : null}
+            sub={`joined in ${DAYS} days, vs the ${DAYS} before`}
+            href="/vendor/accounts"
+          />
+          <Stat
+            label="Agent runs"
+            loading={!o}
+            value={o ? String(o.runs.current) : ""}
+            delta={o ? delta(o.runs.current, o.runs.previous) : null}
+            sub={o && o.failed_runs.current ? `${o.failed_runs.current} failed` : "none failed"}
+          />
+          <Stat
+            label="Cost this month"
+            loading={!o}
+            value={o ? money(o.cost_month_usd) : ""}
+            sub={o ? `estimated · last month ${money(o.cost_last_month_usd)}` : ""}
+          />
+        </Stats>
+
+        <div className="grid gap-6 lg:grid-cols-3">
+          <div className="lg:col-span-2">
+            <DailyBars
+              title="Agent runs"
+              subtitle={`Every account, last ${DAYS * 2} days`}
+              days={(o?.run_days ?? []).map((d) => ({ date: d.date, good: d.succeeded, bad: d.failed }))}
+              goodLabel="Succeeded"
+              badLabel="Failed"
+              empty="No runs yet."
+            />
+          </div>
+          <DailyBars
+            title="Sign-ups"
+            subtitle="Each week, last 8 weeks"
+            days={(o?.signups_by_week ?? []).map((w) => ({ date: w.week_start, good: w.count, bad: 0 }))}
+            goodLabel="New people"
+            single
+            period="Week of"
+            empty="Nobody has joined yet."
+          />
+        </div>
+
+        <div className="grid gap-6 lg:grid-cols-2">
+          <Panel title="Most used apps" aside={<Link href="/vendor/tools" className="text-sm font-medium text-zinc-700 hover:text-zinc-900">All apps →</Link>}>
+            {!o ? (
+              <Skeleton />
+            ) : o.top_apps.length === 0 ? (
+              <Empty text="Nobody has connected an app yet." />
+            ) : (
+              <ol className="divide-y divide-zinc-100">
+                {o.top_apps.map((a) => (
+                  <li key={a.id} className="flex items-center gap-3 px-4 py-2.5">
+                    <ConnectorIcon name={a.name} size="sm" />
+                    <span className="min-w-0 flex-1 truncate text-sm text-zinc-900">{appLabel(a.name).title}</span>
+                    <span className="shrink-0 text-right text-xs tabular-nums text-zinc-500">
+                      {a.people} connected
+                      <span className="block">{a.tool_calls} tool calls</span>
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </Panel>
+
+          <Panel title="Busiest accounts" aside={<span className="text-xs text-zinc-500">this month</span>}>
+            {!o ? (
+              <Skeleton />
+            ) : o.top_accounts.length === 0 ? (
+              <Empty text="No runs this month yet." />
+            ) : (
+              <ol className="divide-y divide-zinc-100">
+                {o.top_accounts.map((a) => (
+                  <li key={a.id}>
+                    <Link href={`/vendor/accounts?open=${encodeURIComponent(a.id)}`} className="flex items-center gap-3 px-4 py-2.5 hover:bg-zinc-50">
+                      <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", a.is_personal ? "bg-purple-50 text-purple-700" : "bg-indigo-50 text-indigo-700")}>
+                        {a.is_personal ? <User className="h-4 w-4" /> : <Building2 className="h-4 w-4" />}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-sm text-zinc-900">{a.name}</span>
+                      <span className="shrink-0 text-right text-xs tabular-nums text-zinc-500">
+                        {a.runs} runs
+                        <span className="block">{money(a.cost_usd)}</span>
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </Panel>
+        </div>
+
+        <AuditLogsPanel title="Recent activity" limit={6} names={names} moreHref="/vendor/activity" compact />
       </div>
-
-      {/* Create Tenant Modal */}
-      {showAddModal && (
-        <CreateTenantModal
-          onClose={() => setShowAddModal(false)}
-          onSubmit={(vals) => addMutation.mutate(vals)}
-          isPending={addMutation.isPending}
-          error={
-            addMutation.isError
-              ? addMutation.error instanceof ApiError
-                ? addMutation.error.message
-                : "Failed to create tenant"
-              : null
-          }
-        />
-      )}
-
-      <AuditLogsPanel limit={25} />
     </ProtectedDashboard>
   );
 }
 
-function StatCard({
-  icon,
-  label,
-  value,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: React.ReactNode;
-}) {
+function Panel({ title, aside, children }: { title: string; aside?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div className="rounded-xl border border-zinc-200 bg-white p-5 shadow-xs">
-      <div className="flex items-center gap-2 text-zinc-500">{icon}{label}</div>
-      <p className="mt-2 text-3xl font-semibold text-zinc-900">{value}</p>
-    </div>
+    <section className="overflow-hidden rounded-xl border border-zinc-200">
+      <div className="flex items-center justify-between gap-2 border-b border-zinc-100 px-4 py-3">
+        <h2 className="text-base font-semibold text-zinc-900">{title}</h2>
+        {aside}
+      </div>
+      {children}
+    </section>
   );
 }
 
-function CreateTenantModal({
-  onClose,
-  onSubmit,
-  isPending,
-  error,
-}: {
-  onClose: () => void;
-  onSubmit: (vals: {
-    name: string;
-    admin_email: string;
-    admin_full_name: string;
-    admin_password: string;
-  }) => void;
-  isPending: boolean;
-  error: string | null;
-}) {
-  const [name, setName] = useState("");
-  const [adminName, setAdminName] = useState("");
-  const [adminEmail, setAdminEmail] = useState("");
-  const [adminPassword, setAdminPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!name || !adminName || !adminEmail || !adminPassword) return;
-    onSubmit({
-      name,
-      admin_full_name: adminName,
-      admin_email: adminEmail,
-      admin_password: adminPassword,
-    });
-  };
-
+function Skeleton() {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
-        <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
-          <h3 className="text-lg font-semibold text-zinc-900">Create New Tenant</h3>
-          <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600 cursor-pointer">
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-
-        <form onSubmit={handleSubmit} className="mt-4 space-y-4">
-          <Field label="Organization Name">
-            <Input
-              placeholder="Acme Corporation"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              required
-            />
-          </Field>
-
-          <div className="border-t border-zinc-100 pt-3">
-            <h4 className="text-xs font-semibold uppercase text-zinc-400 mb-3">
-              Initial Tenant Admin Account
-            </h4>
-
-            <div className="space-y-4">
-              <Field label="Admin Full Name">
-                <Input
-                  placeholder="Jane Smith"
-                  value={adminName}
-                  onChange={(e) => setAdminName(e.target.value)}
-                  required
-                />
-              </Field>
-
-              <Field label="Admin Email">
-                <Input
-                  type="email"
-                  placeholder="admin@acme.com"
-                  value={adminEmail}
-                  onChange={(e) => setAdminEmail(e.target.value)}
-                  required
-                />
-              </Field>
-
-              <Field label="Admin Password">
-                <div className="relative">
-                  <Input
-                    type={showPassword ? "text" : "password"}
-                    placeholder="At least 8 characters"
-                    value={adminPassword}
-                    onChange={(e) => setAdminPassword(e.target.value)}
-                    required
-                    className="pr-10"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 cursor-pointer"
-                    title={showPassword ? "Hide password" : "Show password"}
-                  >
-                    {showPassword ? (
-                      <EyeOff className="h-4 w-4" />
-                    ) : (
-                      <Eye className="h-4 w-4" />
-                    )}
-                  </button>
-                </div>
-              </Field>
-            </div>
-          </div>
-
-          {error && <p className="text-xs text-red-600">{error}</p>}
-
-          <div className="flex justify-end gap-2 pt-2">
-            <Button type="button" variant="outline" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={isPending}>
-              {isPending ? <Spinner /> : <Plus className="h-4 w-4 mr-1" />} Create Tenant
-            </Button>
-          </div>
-        </form>
-      </div>
-    </div>
+    <ul className="divide-y divide-zinc-100" aria-busy="true">
+      {[0, 1, 2].map((i) => (
+        <li key={i} className="space-y-2 px-4 py-3">
+          <div className="h-3 w-1/3 animate-pulse rounded bg-zinc-100" />
+          <div className="h-3 w-2/3 animate-pulse rounded bg-zinc-100" />
+        </li>
+      ))}
+    </ul>
   );
+}
+
+function Empty({ text }: { text: string }) {
+  return <p className="px-6 py-8 text-center text-sm text-zinc-500">{text}</p>;
 }

@@ -9,7 +9,9 @@ export type NodeType =
   | "condition"
   | "join"
   | "human_approval"
-  | "output";
+  | "output"
+  // Fixed logic a template adds (sorting, filtering) – no AI; not offered in the palette.
+  | "code";
 
 export type Risk = "read" | "edit" | "delete";
 
@@ -53,9 +55,11 @@ export interface AgentConfig {
   tool_ids?: string[];
   /** Systems picked up at run time once connected (see ToolNeed). */
   tool_needs?: ToolNeed[];
+  /** None of its systems connected: the step still runs without them (an optional extra, e.g. an alert). */
+  runs_without_needs?: boolean;
   knowledge_base_ids?: string[];
   response?: { tone?: string; verbosity?: string; language?: string; citations?: string; formats?: string[] };
-  tools?: { max_calls?: number; timeout_seconds?: number; on_failure?: string };
+  tools?: { max_calls?: number; timeout_seconds?: number; on_failure?: string; side_by_side?: boolean };
   reliability?: { retries?: number; request_timeout_seconds?: number | null; fallback_model?: string; retry_on?: string[] };
   approvals?: ApprovalPolicy;
   guardrails?: GuardrailSettings;
@@ -235,6 +239,8 @@ export interface WorkflowNode {
   } | null;
   join_policy?: { mode: "all" | "any" | "count"; min_required?: number | null } | null;
   approval_message?: string | null;
+  /** code: the registered function it runs (a template's sorting / filtering step). */
+  code?: string | null;
   output_config?: OutputConfig | null;
   /** schedule_trigger: when the workflow runs by itself. */
   schedule?: TriggerSchedule | null;
@@ -258,7 +264,7 @@ export interface Schedule {
   cron: string;
   timezone: string;
   description: string;
-  input: { text?: string; variables?: Record<string, unknown> };
+  input: { text?: string; variables?: Record<string, unknown>; attachments?: { id: string; filename: string; kind: "document" | "image" }[] };
   enabled: boolean;
   next_run_at: string | null;
   last_run_at: string | null;
@@ -267,7 +273,7 @@ export interface Schedule {
   last_error: string | null;
   owner_id: string;
   is_mine: boolean;
-  /** Agent schedules are changed directly; a workflow's on its Schedule step. */
+  /** Made from a Schedule panel (an agent's, or a workflow's without a Schedule step): changed there. A Schedule step's is changed on the step. */
   editable: boolean;
   created_at: string;
 }
@@ -359,7 +365,10 @@ export interface OverviewItem {
   last_run_at: string | null;
   last_status: RunStatus | null;
   running: number;
+  /** Waiting for a decision, started in the last week. */
   waiting: number;
+  /** Still waiting, but for over a week: most likely forgotten. */
+  stale_waiting: number;
   health_status: Health["status"];
   health_score: number | null;
   schedule: string | null;
@@ -368,7 +377,7 @@ export interface OverviewItem {
 }
 export interface Overview {
   days: number;
-  totals: { runs: number; succeeded: number; failed: number; running: number; waiting: number };
+  totals: { runs: number; succeeded: number; failed: number; running: number; waiting: number; stale_waiting: number };
   items: OverviewItem[];
 }
 
@@ -389,6 +398,8 @@ export interface InsightsWindow {
   failed: number;
   success_rate: number;
   avg_latency_ms: number;
+  /** The typical run's time: one very long run doesn't move it. */
+  median_latency_ms: number;
   /** Distinct agents/workflows that ran. */
   active: number;
 }
@@ -482,6 +493,8 @@ export interface SharedStep {
   title: string;
   kind: string;
   status: "pending" | "running" | "succeeded" | "failed" | "waiting" | "skipped";
+  /** The step's "▸ " progress lines — only on a run that's the caller's own (builder.publishing.outline). */
+  notes?: string[];
 }
 
 /** One of my runs through a share link: only what a caller may see. */
@@ -664,6 +677,17 @@ export interface WorkflowEditResult {
   changes: string[];
   warnings: string[];
   problems: Problem[];
+  /** Agent steps this edit picked tools for, by node id. */
+  agent_tools?: Record<string, AgentToolReport>;
+}
+
+/** What an AI edit picked for one agent step: its tools, and the rest of the shortlist to suggest. */
+export interface AgentToolReport {
+  agent: string;
+  /** What it does in an app ("" = a thinking-only agent). */
+  need: string;
+  tools: ToolCandidate[];
+  related: ToolCandidate[];
 }
 
 export type RunStatus = "queued" | "running" | "waiting" | "succeeded" | "failed" | "cancelled";
@@ -712,6 +736,8 @@ export interface Approval {
   created_at: string;
   /** Set when the run came in through a share link: whose request you're deciding on. */
   caller?: Caller | null;
+  /** Which agent/workflow it's for (in the approvals list). */
+  run?: { kind: "agent" | "workflow"; agent_id: string | null; workflow_id: string | null; name: string | null };
 }
 
 export interface OutboundDraft {
@@ -840,3 +866,20 @@ export type RunEvent =
   | { type: "output"; text: string; sources?: string[] }
   /** The answer as it's written: ``text`` starts at ``at`` in that turn's answer. */
   | { type: "output_delta"; node_id: string; turn: number; at: number; text: string };
+
+/** What your runs cost this month (estimates), and your own monthly limit. */
+export interface Spend {
+  month_start: string;
+  /** The 1st of next month: the limit starts over. */
+  resets_on: string;
+  spent_usd: number;
+  last_month_usd: number;
+  runs: number;
+  /** Runs whose model has no known price (not in spent_usd). */
+  unpriced_runs: number;
+  limit_usd: number | null;
+  /** near = 80%+ of the limit; over = new runs wait. */
+  status: "ok" | "near" | "over";
+  daily: { date: string; cost_usd: number }[];
+  by_item: { kind: "agent" | "workflow"; id: string; name: string; exists: boolean; runs: number; cost_usd: number }[];
+}

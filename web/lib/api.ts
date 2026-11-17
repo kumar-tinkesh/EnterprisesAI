@@ -379,6 +379,66 @@ export interface MCPServerEntry {
   auth_type?: string | null;
   credential_fields?: string[];
   connected?: boolean;
+  /** "instagram" when "Connect with Instagram" works (the admin set up the Meta app). */
+  sign_in?: string | null;
+}
+
+/** The platform admin's Overview (vendor/api/v1/platform.py). */
+export interface PlatformOverview {
+  days: number;
+  people_total: number;
+  active_people: { current: number; previous: number };
+  new_people: { current: number; previous: number };
+  runs: { current: number; previous: number };
+  failed_runs: { current: number; previous: number };
+  cost_month_usd: number;
+  cost_last_month_usd: number;
+  run_days: { date: string; succeeded: number; failed: number }[];
+  signups_by_week: { week_start: string; count: number }[];
+  top_apps: { id: string; name: string; people: number; tool_calls: number }[];
+  top_accounts: { id: string; name: string; is_personal: boolean; runs: number; cost_usd: number }[];
+}
+
+export interface PlatformAccount {
+  id: string;
+  name: string;
+  is_personal: boolean;
+  status: string;
+  created_at: string;
+  members: { id: string; name: string; email: string; role: string; is_active: boolean; joined: string }[];
+  apps: { id: string; name: string; people: number }[];
+  runs_month: number;
+  failed_month: number;
+  cost_month_usd: number;
+  last_active: string | null;
+}
+
+/** Per server on the admin Apps page: people connected, tools, tenants it's granted to. */
+export interface MCPServerCounts {
+  id: string;
+  users_connected: number;
+  tools: number;
+  tenants_granted: number;
+}
+
+export interface MCPServerDetails {
+  id: string;
+  users_connected: number;
+  /** risk: what the builder treats it as — read, edit (changes data) or delete. */
+  tools: { name: string; description: string; risk: "read" | "edit" | "delete" | string; on: boolean }[];
+  grants: { tenant_id: string; name: string }[];
+  last_tested_at: string | null;
+}
+
+/** The Meta app behind "Connect with Instagram" (never its secret). */
+export interface InstagramSignIn {
+  app_id: string | null;
+  config_id: string | null;
+  has_secret: boolean;
+  ready: boolean;
+  /** Register this as the Redirect URL in the Meta app's login configuration. */
+  redirect_uri: string;
+  redirect_is_https: boolean;
 }
 
 export interface CatalogResponse {
@@ -519,6 +579,22 @@ export const vendorApi = {
       body: JSON.stringify({ is_global: isGlobal }),
     }, token, BACKEND_API_URL),
   // "Connect via OAuth" bootstrap — see apps/backend/vendor/services/oauth_flow.py
+  platformOverview: (token: string, days = 14) => request<PlatformOverview>(`${VR}/platform/overview?days=${days}`, {}, token, BACKEND_API_URL),
+  platformAccount: (token: string, tenantId: string) => request<PlatformAccount>(`${VR}/platform/accounts/${tenantId}`, {}, token, BACKEND_API_URL),
+  // The admin Apps page (vendor/api/v1/server_details.py)
+  mcpOverview: (token: string) => request<MCPServerCounts[]>(`${VR}/mcp/overview`, {}, token, BACKEND_API_URL),
+  mcpDetails: (token: string, serverId: string) => request<MCPServerDetails>(`${VR}/mcp/${serverId}/details`, {}, token, BACKEND_API_URL),
+  setDisabledTools: (token: string, serverId: string, names: string[]) =>
+    request<{ names: string[] }>(`${VR}/mcp/${serverId}/disabled-tools`, { method: "PUT", body: JSON.stringify({ names }) }, token, BACKEND_API_URL),
+  revokeGrant: (token: string, serverId: string, tenantId: string) =>
+    request<void>(`${VR}/mcp/${serverId}/grants/${tenantId}`, { method: "DELETE" }, token, BACKEND_API_URL),
+  getInstagramSignIn: (token: string, serverId: string) =>
+    request<InstagramSignIn>(`${VR}/mcp/${serverId}/instagram-sign-in`, {}, token, BACKEND_API_URL),
+  setInstagramSignIn: (token: string, serverId: string, body: { app_id: string; app_secret?: string; config_id: string }) =>
+    request<InstagramSignIn>(`${VR}/mcp/${serverId}/instagram-sign-in`, { method: "PUT", body: JSON.stringify(body) }, token, BACKEND_API_URL),
+  /** "Connect with Instagram": this user's own Meta sign-in, in a popup. */
+  startInstagramSignIn: (token: string, serverId: string) =>
+    request<OAuthAuthorizeResponse>(`${VR}/mcp/${serverId}/instagram/authorize`, { method: "POST" }, token, BACKEND_API_URL),
   setMCPOAuthConfig: (token: string, serverId: string, body: OAuthConfigBody) =>
     request<VendorMCPServer>(`${VR}/mcp/${serverId}/oauth-config`, {
       method: "PATCH",

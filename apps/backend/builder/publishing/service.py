@@ -129,8 +129,10 @@ def input_fields(definition: dict) -> list[dict]:
 
 
 def _needs_in(definition: dict) -> list[list[ToolNeed]]:
-    """Each agent's ``tool_needs`` (systems it gets tools from once connected)."""
-    return [AgentConfig.model_validate(a.get("config") or {}).tool_needs for a in _agents_in(definition)]
+    """Each agent's ``tool_needs`` (systems it gets tools from once connected), and each code step's own."""
+    code = [[ToolNeed.model_validate(n) for n in node.get("tool_needs") or []]
+            for node in (definition.get("workflow") or {}).get("nodes") or [] if node.get("type") == "code"]
+    return [AgentConfig.model_validate(a.get("config") or {}).tool_needs for a in _agents_in(definition)] + [c for c in code if c]
 
 
 async def connection_problems(
@@ -151,8 +153,9 @@ async def connection_problems(
     theirs: list[GraphProblem] = []
     for owner, tids in by_owner.values():
         theirs += await tool_problems(db, owner, tids, check_connection=True)
-    for needs in _needs_in(definition):
-        for p in need_problems(await resolve_needs(db, user, needs, user_for=lambda sid: owners.get(sid, user))):
+    for config in (AgentConfig.model_validate(a.get("config") or {}) for a in _agents_in(definition)):
+        states = await resolve_needs(db, user, config.tool_needs, user_for=lambda sid: owners.get(sid, user))
+        for p in need_problems(states, optional=config.runs_without_needs):
             (theirs if p.server_id in owners else problems).append(p)
     names = {s.id: s.name for s in (await db.execute(select(VendorMCPServer).where(VendorMCPServer.id.in_(list(owners) or [""])))).scalars()}
     messages = [p.message for p in problems] + [
@@ -246,7 +249,7 @@ def start_of_day(now: datetime) -> datetime:
 
 async def start_public_run(
     db: AsyncSession, key: BuilderPublicKey, *, text: str, variables: dict, caller_user_id: str | None = None,
-    run_as: CurrentUser | None = None, stream: bool = True,
+    run_as: CurrentUser | None = None, attachments: list[dict] | None = None, stream: bool = True,
 ) -> BuilderRun:
     """Run what ``key`` published, as its publisher — or as ``run_as`` (a
     visitor on a "visitor" share link: their connections, their approvals).
@@ -274,7 +277,7 @@ async def start_public_run(
             owners = {sid: user for sid in share_publisher_servers(key)}
             definition["tool_owners"] = {sid: key.owner_id for sid in owners}
         user = run_as
-    if key.kind == "agent" and not text.strip():
+    if key.kind == "agent" and not text.strip() and not attachments:
         raise PublishError(422, "Send an input.")
     problems = await definition_problems(db, user, definition, variables, owners)
     if problems:
@@ -282,7 +285,7 @@ async def start_public_run(
     key.last_used_at = now
     return await create_run(
         db, user, key.kind, target.id, definition=definition, version=version, text=text, variables=variables,
-        purpose="public", public_key_id=key.id, caller_user_id=caller_user_id, stream=stream,
+        purpose="public", public_key_id=key.id, caller_user_id=caller_user_id, attachments=attachments, stream=stream,
     )
 
 

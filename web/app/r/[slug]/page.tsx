@@ -4,7 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUp, Check, ChevronRight, Circle, History, Info, LogIn, RotateCw, ShieldAlert, Square, UserPlus, X, XCircle } from "lucide-react";
+import { ArrowUp, Check, ChevronRight, Circle, History, Info, LogIn, Paperclip, RotateCw, ShieldAlert, Square, UserPlus, X, XCircle } from "lucide-react";
 
 import { buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,15 +12,16 @@ import { Menu } from "@/components/ui/menu";
 import { Spinner } from "@/components/ui/spinner";
 import { Field, Select } from "@/components/builder/fields";
 import { ApprovalCard } from "@/components/builder/approval-card";
-import { CopyButton } from "@/components/builder/chat/chat-message";
+import { CopyButton, FileChip } from "@/components/builder/chat/chat-message";
+import { ACCEPT, MAX_FILES } from "@/components/builder/chat/chat-panel";
 import { MarkdownView } from "@/components/builder/chat/markdown-view";
 import { AnswerView } from "@/components/builder/run-output";
 import { NeedsList } from "@/components/builder/tool-needs";
 import { TypeIcon } from "@/components/builder/type-icon";
 import { ApiError } from "@/lib/api";
-import { sharedApi } from "@/lib/builder/api";
+import { builderApi, sharedApi } from "@/lib/builder/api";
 import { formatCost, formatDuration, formatTokens } from "@/lib/builder/chat";
-import type { InputVariable, SharedInfo, SharedNeeds, SharedRun, SharedStep, ToolMode } from "@/lib/builder/types";
+import type { Attachment, InputVariable, SharedInfo, SharedNeeds, SharedRun, SharedStep, ToolMode } from "@/lib/builder/types";
 import { useStreamPref } from "@/lib/builder/stream-pref";
 import { useAuthStore } from "@/stores/auth-store";
 import { cn } from "@/lib/utils";
@@ -59,8 +60,11 @@ async function readEvents(res: Response, on: (event: string, data: unknown) => v
   }
 }
 
-/** The answer being written: one turn's text, built from batches that must line up (``at``). */
-type Live = { runId: string; turn: number; text: string };
+/** The answer being written: one turn's text, built from batches that must line up (``at``).
+ * ``paused``: it went on to use a tool; the text stays in view, dimmed, until the next turn writes. */
+type Live = { runId: string; turn: number; text: string; paused?: boolean };
+/** What it's doing now (the "doing" event): using a tool, or thinking. Never which tool. */
+type Doing = { runId: string; what: "tool" | "thinking" };
 
 function errorText(err: unknown): string {
   if (err instanceof ApiError) {
@@ -266,9 +270,20 @@ function Runner({
   const [text, setText] = useState("");
   const [values, setValues] = useState<Record<string, string>>({});
   const [current, setCurrent] = useState<SharedRun | null>(null);
+  // Earlier questions of this visit stay in view above the current one (each answered on its own).
+  const [earlier, setEarlier] = useState<SharedRun[]>([]);
+  // The question just sent, shown at once while the run is being started.
+  const [sending, setSending] = useState<string | null>(null);
+  const [doing, setDoing] = useState<Doing | null>(null);
+  // The input fields: null = decide on our own (open until a file is attached or a run is under way); else the reader's choice.
+  const [fieldsChoice, setFieldsChoice] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [live, setLive] = useState<Live | null>(null);
+  const [files, setFiles] = useState<Attachment[]>([]);
+  const [uploading, setUploading] = useState(0);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const picker = useRef<HTMLInputElement>(null);
   const [streamOn] = useStreamPref();
   const alive = useRef(true);
   const watching = useRef<AbortController | null>(null);
@@ -318,11 +333,16 @@ function Runner({
           if (last.output !== null || DONE.has(last.status)) setLive((l) => (l?.runId === last.run_id ? null : l));
         } else if (event === "delta") {
           const d = data as { turn: number; at: number; text: string };
+          setDoing(null);
           setLive((l) =>
             d.at === 0 ? { runId: run.run_id, turn: d.turn, text: d.text }
               : l && l.runId === run.run_id && l.turn === d.turn && l.text.length === d.at ? { ...l, text: l.text + d.text }
                 : l,
           );
+        } else if (event === "doing") {
+          const what = (data as { what?: string }).what === "tool" ? "tool" : "thinking";
+          setDoing({ runId: run.run_id, what });
+          if (what === "tool") setLive((l) => (l?.runId === run.run_id ? { ...l, paused: true } : l));
         }
       });
     } catch {
@@ -347,27 +367,65 @@ function Runner({
     return out;
   };
 
+  // Files go with the run only on a link that runs with the visitor's own apps (the run is theirs).
+  const attach = async (list: FileList | null) => {
+    setFileError(null);
+    setFieldsChoice(null); // a file usually answers the fields: fold them away
+
+    const chosen = Array.from(list ?? []).slice(0, Math.max(0, MAX_FILES - files.length));
+    if ((list?.length ?? 0) > chosen.length) setFileError(`At most ${MAX_FILES} files per run.`);
+    for (const file of chosen) {
+      setUploading((n) => n + 1);
+      try {
+        const uploaded = await builderApi.uploadAttachment(token, file);
+        setFiles((cur) => [...cur, uploaded]);
+      } catch (err) {
+        setFileError(err instanceof Error ? `${file.name}: ${err.message}` : `Couldn't attach ${file.name}.`);
+      } finally {
+        setUploading((n) => n - 1);
+      }
+    }
+  };
+
   const submit = async (input = text) => {
     setBusy(true);
     setError(null);
+    // Show the question at once; the one before it moves up into this visit's earlier turns.
+    const before = current;
+    if (before) setEarlier((e) => [...e.filter((r) => r.run_id !== before.run_id), before]);
+    setCurrent(null);
+    setSending(input.trim());
+    setText("");
     try {
       // Streaming: start at once and watch it being written; otherwise wait a little for the whole answer.
-      const run = await sharedApi.run(token, slug, { input: input.trim(), variables: variables(), wait_seconds: streamOn ? 0 : 20, stream: streamOn });
+      const run = await sharedApi.run(token, slug, {
+        input: input.trim(), variables: variables(), wait_seconds: streamOn ? 0 : 20, stream: streamOn,
+        ...(files.length ? { attachment_ids: files.map((f) => f.id) } : {}),
+      });
       setCurrent(run);
       setLive(null);
-      setText("");
+      setDoing(null);
+      setFiles([]);
       refreshHistory();
       if (!DONE.has(run.status)) void (streamOn ? watch(run) : follow(run));
     } catch (err) {
       setError(errorText(err));
+      setText((t) => t || input);
+      if (before) {
+        setEarlier((e) => e.filter((r) => r.run_id !== before.run_id));
+        setCurrent(before);
+      }
     } finally {
+      setSending(null);
       setBusy(false);
     }
   };
 
   const open = (run: SharedRun) => {
+    setEarlier([]);
     setCurrent(run);
     setLive(null);
+    setDoing(null);
     if (!DONE.has(run.status)) void (streamOn ? watch(run) : follow(run));
   };
 
@@ -384,6 +442,17 @@ function Runner({
     }
   };
 
+  // Keep the newest question and the answer being written in view, unless the reader scrolled up.
+  const end = useRef<HTMLDivElement>(null);
+  const nearBottom = useRef(true);
+  useEffect(() => {
+    nearBottom.current = true;
+    end.current?.scrollIntoView({ block: "end" });
+  }, [sending, current?.run_id]);
+  useEffect(() => {
+    if (nearBottom.current) end.current?.scrollIntoView({ block: "end" });
+  }, [live?.text, current?.status, current?.output, current?.steps?.length, doing]);
+
   // The box grows with what's typed.
   useLayoutEffect(() => {
     const el = box.current;
@@ -393,25 +462,53 @@ function Runner({
   }, [text]);
 
   const missing = inputs.filter((v) => v.required && !(values[v.name] ?? "").trim());
+  const filled = inputs.filter((v) => (values[v.name] ?? "").trim()).length;
+  const fieldsOpen = missing.length > 0 || (fieldsChoice ?? (files.length === 0 && uploading === 0 && !current && sending === null));
   const blocked = own && (!needs.data || needs.data.problems.length > 0);
   const running = !!current && !DONE.has(current.status);
-  const canSend = !busy && !running && missing.length === 0 && !blocked && (kind === "workflow" || !!text.trim());
+  const canSend = !busy && !running && uploading === 0 && missing.length === 0 && !blocked && (kind === "workflow" || !!text.trim() || files.length > 0);
 
   return (
     <div className="flex h-full">
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-8">
+        <div
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            nearBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+          }}
+          className="min-h-0 flex-1 overflow-y-auto px-4 py-8"
+        >
           <div className="mx-auto max-w-[720px] space-y-8">
-            {!current && (
+            {!current && sending === null && earlier.length === 0 && (
               <>
                 <Intro shared={shared} />
                 <Accounts own={own} mode={toolMode} needs={needs.data} loading={needs.isLoading} error={needs.isError ? errorText(needs.error) : null} token={token} />
               </>
             )}
+            {earlier.length > 0 && (
+              <p className="text-center text-xs text-zinc-500">Earlier in this visit · each question is answered on its own</p>
+            )}
+            {earlier.map((r) => (
+              <Turn key={r.run_id} run={r} live={null} doing={null} kind={kind} own={own} token={token} onDecided={() => undefined} />
+            ))}
+            {sending !== null && (
+              <Turn
+                run={null}
+                question={sending}
+                live={null}
+                doing={null}
+                kind={kind}
+                own={own}
+                token={token}
+                onDecided={() => undefined}
+              />
+            )}
             {current && (
               <Turn
+                key={current.run_id}
                 run={current}
-                live={live?.runId === current.run_id ? live.text : ""}
+                live={live?.runId === current.run_id ? live : null}
+                doing={doing?.runId === current.run_id ? doing.what : null}
                 kind={kind}
                 own={own}
                 token={token}
@@ -425,6 +522,7 @@ function Runner({
                 }}
               />
             )}
+            <div ref={end} />
           </div>
         </div>
 
@@ -434,8 +532,26 @@ function Runner({
               <p className="rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-sm text-zinc-700">{needs.data.problems.join(" ")}</p>
             )}
             {inputs.length > 0 && (
-              <div className="grid gap-3 rounded-xl border border-zinc-200 bg-[var(--surface)] p-3 sm:grid-cols-2">
-                {inputs.map((v) => <InputField key={v.name} v={v} value={values[v.name] ?? ""} onChange={(x) => setValues({ ...values, [v.name]: x })} />)}
+              <div className="rounded-xl border border-zinc-200 bg-[var(--surface)]">
+                <button
+                  type="button"
+                  onClick={() => setFieldsChoice(!fieldsOpen)}
+                  disabled={missing.length > 0}
+                  aria-expanded={fieldsOpen}
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-zinc-700 hover:text-zinc-900 disabled:cursor-default cursor-pointer"
+                >
+                  <ChevronRight className={cn("h-4 w-4 shrink-0 text-zinc-500 transition-transform", fieldsOpen && "rotate-90")} />
+                  <span className="font-medium">Details</span>
+                  <span className="min-w-0 truncate text-xs text-zinc-500">
+                    · {filled ? `${filled} of ${inputs.length} filled` : `${inputs.length} optional field${inputs.length === 1 ? "" : "s"}`}
+                    {files.length > 0 && filled < inputs.length ? " · the rest from your file" : ""}
+                  </span>
+                </button>
+                {fieldsOpen && (
+                  <div className="grid max-h-[45dvh] gap-3 overflow-y-auto border-t border-zinc-200 p-3 sm:grid-cols-2">
+                    {inputs.map((v) => <InputField key={v.name} v={v} value={values[v.name] ?? ""} onChange={(x) => setValues({ ...values, [v.name]: x })} />)}
+                  </div>
+                )}
               </div>
             )}
             {error && <p className="text-sm text-red-600" role="alert">{error}</p>}
@@ -446,6 +562,15 @@ function Runner({
               }}
               className="rounded-2xl border border-[var(--border-strong)] bg-[var(--surface)] px-3 pb-2 pt-2.5 transition focus-within:border-[var(--accent-hover)]"
             >
+              {(files.length > 0 || uploading > 0 || fileError) && (
+                <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                  {files.map((f) => (
+                    <FileChip key={f.id} file={f} onRemove={() => setFiles((cur) => cur.filter((x) => x.id !== f.id))} />
+                  ))}
+                  {uploading > 0 && <span className="inline-flex items-center gap-1.5 text-xs text-zinc-500"><Spinner className="h-3 w-3" /> Reading {uploading} file{uploading === 1 ? "" : "s"}…</span>}
+                  {fileError && <span className="text-xs text-red-600">{fileError}</span>}
+                </div>
+              )}
               <textarea
                 ref={box}
                 rows={1}
@@ -463,6 +588,33 @@ function Runner({
                 className="block max-h-40 min-h-[36px] w-full resize-none bg-transparent px-1 py-1 text-sm text-zinc-900 outline-none placeholder:text-zinc-500"
               />
               <div className="mt-1 flex items-center gap-2">
+                {own && (
+                  <input
+                    ref={picker}
+                    type="file"
+                    multiple
+                    accept={ACCEPT}
+                    className="hidden"
+                    onChange={(e) => {
+                      void attach(e.target.files);
+                      e.target.value = "";
+                    }}
+                  />
+                )}
+                {/* On a link that runs with the sharer's apps the run can't read your file: say so instead of hiding the button. */}
+                <button
+                  type="button"
+                  onClick={() => (own ? picker.current?.click() : setFileError("Files can't be added here: this link runs with the sharer's apps, which can't read your files."))}
+                  disabled={own && (busy || running || files.length >= MAX_FILES)}
+                  aria-label="Attach files"
+                  title={own ? "Attach a document (PDF, Word, Excel, CSV, text) or an image (JPG, PNG)" : "Files work only on links that run with your own apps"}
+                  className={cn(
+                    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-40 cursor-pointer",
+                    !own && "opacity-40",
+                  )}
+                >
+                  <Paperclip className="h-4 w-4" />
+                </button>
                 <p className="min-w-0 flex-1 truncate text-xs text-zinc-500">
                   {missing.length ? `Fill in ${missing.map((v) => v.label || v.name).join(", ")} first.` : limit ? `Up to ${limit} runs a day.` : ""}
                 </p>
@@ -507,7 +659,9 @@ function Runner({
                   type="button"
                   onClick={() => {
                     setCurrent(null);
+                    setEarlier([]);
                     setLive(null);
+                    setDoing(null);
                     setPanel(null);
                     box.current?.focus();
                   }}
@@ -608,24 +762,55 @@ function StatusDot({ run }: { run: SharedRun }) {
 }
 
 /** "▸ 3 steps" above the answer; while it runs, the step it's on. Open: each step and where it got. */
-function Steps({ steps, running }: { steps: SharedStep[]; running: boolean }) {
+/** How many of the newest progress lines stay in view while it runs; the rest fold away. */
+const LIVE_NOTES = 3;
+
+/** Where the run is: while it runs, the newest progress lines; once done, one line that opens to all of it. */
+function Steps({ steps, running, ms }: { steps: SharedStep[]; running: boolean; ms?: number | null }) {
   const [open, setOpen] = useState(false);
   // Every step skipped: it answered directly (a greeting, a general question) — nothing to show.
   if (!steps.length || (!running && steps.every((s) => s.status === "skipped"))) return null;
   const now = steps.find((s) => s.status === "running" || s.status === "waiting");
   const done = steps.filter((s) => s.status === "succeeded").length;
   const failed = steps.filter((s) => s.status === "failed").length;
+  // What the finished steps found so far, as they finish: something to read while it runs.
+  const notes = steps.flatMap((s) => (s.notes ?? []).map((text, i) => ({ key: `${s.id}-${i}`, text })));
   const summary = running
-    ? now ? `${now.title}… (step ${steps.indexOf(now) + 1} of ${steps.length})` : `Working… ${done} of ${steps.length} done`
-    : `${steps.length} step${steps.length === 1 ? "" : "s"}${failed ? `, ${failed} failed` : ""}`;
+    ? now ? `${now.title}… · step ${steps.indexOf(now) + 1} of ${steps.length}` : `Working… · ${done} of ${steps.length} done`
+    : `${steps.length} step${steps.length === 1 ? "" : "s"}${failed ? `, ${failed} failed` : ""}${notes.length ? ` · ${notes.length} update${notes.length === 1 ? "" : "s"}` : ""}${ms != null ? ` · ${formatDuration(ms)}` : ""}`;
+  const shown = open ? notes : running ? notes.slice(-LIVE_NOTES) : [];
+  const hidden = notes.length - shown.length;
   return (
-    <div className="mb-2">
-      <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="inline-flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-900 cursor-pointer">
-        <ChevronRight className={cn("h-3.5 w-3.5 transition-transform", open && "rotate-90")} />
-        {summary}
+    <div className="mb-3">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="inline-flex max-w-full items-center gap-1.5 rounded-md py-0.5 text-xs text-zinc-500 hover:text-zinc-900 cursor-pointer"
+      >
+        {running ? <Spinner className="h-3.5 w-3.5 shrink-0" /> : <ChevronRight className={cn("h-3.5 w-3.5 shrink-0 transition-transform", open && "rotate-90")} />}
+        <span className="truncate">{summary}</span>
+        {running && <ChevronRight className={cn("h-3.5 w-3.5 shrink-0 transition-transform", open && "rotate-90")} />}
       </button>
+      {shown.length > 0 && (
+        <ul className="mt-1.5 space-y-1 rounded-lg border border-zinc-200 bg-[var(--surface)] px-3 py-2" aria-label="Progress">
+          {hidden > 0 && (
+            <li>
+              <button type="button" onClick={() => setOpen(true)} className="text-xs text-zinc-500 hover:text-zinc-900 cursor-pointer">
+                + {hidden} earlier update{hidden === 1 ? "" : "s"}
+              </button>
+            </li>
+          )}
+          {shown.map((n) => (
+            <li key={n.key} className="flex gap-2 text-xs text-zinc-700">
+              <ChevronRight className="mt-0.5 h-3 w-3 shrink-0 text-[var(--accent-hover)]" />
+              <span className="min-w-0 break-words">{n.text}</span>
+            </li>
+          ))}
+        </ul>
+      )}
       {open && (
-        <ol className="mt-1.5 space-y-1 border-l-2 border-zinc-200 pl-3">
+        <ol className="mt-2 space-y-1 border-l-2 border-zinc-200 pl-3">
           {steps.map((s) => (
             <li key={s.id} className="flex items-center gap-2 text-xs text-zinc-700">
               {s.status === "succeeded" ? <Check className="h-3.5 w-3.5 text-emerald-700" />
@@ -644,21 +829,38 @@ function Steps({ steps, running }: { steps: SharedStep[]; running: boolean }) {
 
 /** One question and its answer, the way a chat shows it. */
 function Turn({
-  run, live, kind, own, token, onRetry, onDecided,
-}: { run: SharedRun; live: string; kind: "agent" | "workflow"; own: boolean; token: string; onRetry?: () => void; onDecided: () => void }) {
+  run, question, live, doing, kind, own, token, onRetry, onDecided,
+}: {
+  /** null: just sent, the run is still being started (``question`` is what was asked). */
+  run: SharedRun | null;
+  question?: string;
+  live: Live | null;
+  doing: Doing["what"] | null;
+  kind: "agent" | "workflow";
+  own: boolean;
+  token: string;
+  onRetry?: () => void;
+  onDecided: () => void;
+}) {
   const [details, setDetails] = useState(false);
-  const running = !DONE.has(run.status);
+  const running = !run || !DONE.has(run.status);
+  const working = doing === "tool" ? "Looking things up…" : "Working on it…";
+  const asked = run ? run.input : (question ?? "");
   return (
     <div className="space-y-6" aria-live="polite">
       <div className="flex justify-end">
         <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-[var(--surface-strong)] px-4 py-2.5 text-sm text-zinc-900">
-          {run.input || "(ran with its inputs)"}
+          {asked || "(ran with its inputs)"}
         </div>
       </div>
       <div className="flex gap-3">
         <TypeIcon kind={kind} size="sm" live={running} />
         <div className="min-w-0 flex-1 pt-0.5">
-          <Steps steps={run.steps ?? []} running={running} />
+          {!run ? (
+            <p className="flex items-center gap-2 text-sm text-zinc-500"><Spinner className="h-4 w-4" /> Starting…</p>
+          ) : (
+          <>
+          <Steps steps={run.steps ?? []} running={running} ms={run.duration_ms} />
           {run.status === "succeeded" ? (
             <AnswerView text={run.output ?? ""} />
           ) : run.status === "failed" || run.status === "cancelled" ? (
@@ -673,10 +875,20 @@ function Turn({
                 {own && run.approvals.length > 0 ? "It needs your OK before going on:" : "Waiting for whoever shared this to approve a step. You can leave — the answer will be under History."}
               </p>
             )
-          ) : live ? (
-            <MarkdownView text={live + " ▍"} />
+          ) : run.output ? (
+            // The finished answer can land a moment before the run says it's done: show it straight away.
+            <AnswerView text={run.output} />
+          ) : live?.text ? (
+            <>
+              <div className={cn("transition-opacity", live.paused && "opacity-50")}>
+                <MarkdownView text={live.paused ? live.text : live.text + " ▍"} />
+              </div>
+              {live.paused && (
+                <p className="mt-2 flex items-center gap-2 text-sm text-zinc-500"><Spinner className="h-4 w-4" /> {working}</p>
+              )}
+            </>
           ) : (
-            <p className="flex items-center gap-2 text-sm text-zinc-500"><Spinner className="h-4 w-4" /> Working on it…</p>
+            <p className="flex items-center gap-2 text-sm text-zinc-500"><Spinner className="h-4 w-4" /> {working}</p>
           )}
           {run.approvals.map((a) => <div key={a.id} className="mt-2"><ApprovalCard approval={a} token={token} onDone={onDecided} /></div>)}
           {run.sources.length > 0 && (
@@ -713,6 +925,8 @@ function Turn({
                 </p>
               )}
             </>
+          )}
+          </>
           )}
         </div>
       </div>

@@ -2,12 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CalendarClock, CheckCircle2, Pause, Play, Plus, Trash2 } from "lucide-react";
+import { AlertTriangle, CalendarClock, CheckCircle2, Play, Plus, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
-import { Field, Section, Select, Textarea, Toggle } from "@/components/builder/fields";
+import { Field, Section, Select, Switch, Textarea, Toggle } from "@/components/builder/fields";
 import { builderApi, browserTimezone } from "@/lib/builder/api";
 import {
   COMMON_TIMEZONES,
@@ -263,7 +263,10 @@ export function AgentSchedules({ agentId, token }: { agentId: string; token: str
       {notice && <p className="text-xs text-emerald-700">{notice}</p>}
       {(list.data ?? []).map((s) => (
         <div key={s.id} className="space-y-2 rounded-lg border border-zinc-200 p-3">
-          <div className="flex items-start gap-2">
+          <div className="flex items-start gap-3">
+            {s.editable && (
+              <Switch checked={s.enabled} label={s.enabled ? "On: click to turn off" : "Off: click to turn on"} disabled={toggle.isPending} onChange={() => toggle.mutate(s)} />
+            )}
             <div className="min-w-0 flex-1">
               <p className="text-sm font-medium text-zinc-900">{s.description}</p>
               <p className="truncate text-xs text-zinc-500">{s.timezone} · “{s.input.text || "—"}”</p>
@@ -272,9 +275,6 @@ export function AgentSchedules({ agentId, token }: { agentId: string; token: str
               <div className="flex shrink-0 gap-1">
                 <button type="button" title="Run now" aria-label="Run now" disabled={runNow.isPending} onClick={() => runNow.mutate(s)} className="rounded p-1 text-zinc-400 hover:bg-zinc-100 hover:text-indigo-600 cursor-pointer">
                   <Play className="h-3.5 w-3.5" />
-                </button>
-                <button type="button" title={s.enabled ? "Pause" : "Resume"} aria-label={s.enabled ? "Pause" : "Resume"} onClick={() => toggle.mutate(s)} className="rounded p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-800 cursor-pointer">
-                  {s.enabled ? <Pause className="h-3.5 w-3.5" /> : <CalendarClock className="h-3.5 w-3.5" />}
                 </button>
                 <button
                   type="button"

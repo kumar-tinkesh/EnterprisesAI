@@ -44,6 +44,12 @@ class ToolSettings(_Strict):
     max_calls: int = Field(default=8, ge=1, le=20)
     timeout_seconds: float = Field(default=30.0, ge=5, le=300)
     on_failure: Literal["retry", "continue", "stop"] = "continue"
+    # A turn's read-only calls run side by side (builder.agents.runtime); off for a system that rate-limits or
+    # can't take two at once (a logged-in browser session such as LinkedIn).
+    side_by_side: bool = True
+    # Stop calling tools once the step has run this long and answer with what it has (a search lane that must not
+    # hold up the steps waiting on it). None = only max_calls limits it.
+    time_budget_seconds: float | None = Field(default=None, ge=10, le=1800)
 
 
 class ReliabilitySettings(_Strict):
@@ -136,7 +142,8 @@ class ToolNeed(_Strict):
 
     system: str = Field(min_length=1, max_length=80)
     match: list[str] = Field(min_length=1, max_length=5)
-    tools: list[str] = Field(default_factory=list, max_length=20)
+    # A whole template lists every tool its steps use together (Instagram: 31 of 47).
+    tools: list[str] = Field(default_factory=list, max_length=50)
     required: bool = False
 
     @field_validator("match")
@@ -154,6 +161,9 @@ class AgentConfig(_Strict):
     tool_ids: list[str] = Field(default_factory=list, max_length=50)
     # Systems whose tools are added at run time, once connected (ToolNeed).
     tool_needs: list[ToolNeed] = Field(default_factory=list, max_length=10)
+    # None of its (optional) systems connected: the step still runs, without their tools, instead of stopping
+    # the run — for an extra like a WhatsApp alert, whose instructions say what to answer then.
+    runs_without_needs: bool = False
     knowledge_base_ids: list[str] = Field(default_factory=list, max_length=10)
     response: ResponseSettings = Field(default_factory=ResponseSettings)
     tools: ToolSettings = Field(default_factory=ToolSettings)

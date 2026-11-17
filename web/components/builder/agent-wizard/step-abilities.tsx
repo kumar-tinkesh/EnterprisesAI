@@ -11,7 +11,7 @@ import { ToolPicker } from "@/components/builder/tool-picker";
 import { ConnectButton, useConnectedServers } from "@/components/connections/connect-button";
 import { AiNote, Badge, Category, type ServerInfo, type StepProps } from "@/components/builder/agent-wizard/wizard-ui";
 import { ApiError, knowledgeApi } from "@/lib/api";
-import { accessOf, groupByServer, presetToolIds, replaceServerTools, type Access } from "@/lib/builder/agent-wizard";
+import { accessOf, addServerTools, groupByServer, presetToolIds, replaceServerTools, type Access } from "@/lib/builder/agent-wizard";
 import { toolName } from "@/lib/builder/graph";
 import type { ToolCandidate } from "@/lib/builder/types";
 import { cn } from "@/lib/utils";
@@ -27,6 +27,11 @@ export function AbilitiesStep(props: StepProps) {
   const addTool = (t: ToolCandidate) => {
     addMeta([t]);
     if (!toolIds.includes(t.tool_id)) setTools([...toolIds, t.tool_id]);
+  };
+  const addTools = (tools: ToolCandidate[]) => {
+    if (tools.length === 0) return;
+    addMeta(tools);
+    setTools(addServerTools(toolIds, tools[0].server_id, tools.map((t) => t.tool_id)));
   };
 
   return (
@@ -87,7 +92,7 @@ export function AbilitiesStep(props: StepProps) {
       )}
 
       <Category icon={Search} tone="sky" title="Find another tool" hint="Describe what it should be able to do; we search every app you can use." defaultOpen={toolIds.length === 0}>
-        <ToolPicker token={token} exclude={toolIds} onPick={addTool} />
+        <ToolPicker token={token} exclude={toolIds} onPick={addTool} onPickMany={addTools} />
       </Category>
 
       <KnowledgeCategory {...props} />
