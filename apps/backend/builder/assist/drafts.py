@@ -95,10 +95,8 @@ async def draft_agent(db: AsyncSession, user: CurrentUser, description: str) -> 
     profile = _text(raw.get("profile"), 20).lower()
     if profile not in AGENT_PROFILES:
         profile = "balanced"
+    # Tone, formatting and safety checks are left for the person to choose (Behaviour starts empty).
     config = apply_profile({"tool_ids": [c.tool_id for c in chosen]}, profile)
-    tone = _text(raw.get("tone"), 300)
-    if tone:
-        config["response"] = {**config.get("response", {}), "tone": tone}
     # Delete tools always ask first; the policy defaults already say so — set it
     # explicitly so the draft shows what will happen.
     config["approvals"] = AgentConfig().approvals.model_dump()

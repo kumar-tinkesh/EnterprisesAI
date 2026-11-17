@@ -109,7 +109,6 @@ use, e.g. "read Gmail and create Jira tickets"; "" if it only answers from what 
 "profile" (how it should trade quality for speed: "quality" for careful multi-step research, analysis or
 anything where a wrong answer is costly; "speed" for quick lookups and short replies; "cost" for simple,
 high-volume, repetitive work; "balanced" otherwise), "profile_reason" (one short sentence: why that profile),
-"tone" (2-4 words for how it should sound, e.g. "friendly and clear"; "" if nothing in the description says),
 "uses_documents" (true only if it must answer from the user's own documents — policies, manuals, price
 lists, contracts — rather than from tools or general knowledge), "documents_reason" (one short sentence
 naming which documents, "" when uses_documents is false), "try_asking" (one realistic first request a

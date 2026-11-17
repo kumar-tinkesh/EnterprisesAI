@@ -441,108 +441,111 @@ function AgentLibrary({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
         </div>
       </div>
 
-      {/* View: Templates Tab */}
-      {tab === "templates" ? (
-        shownTemplates.length === 0 ? (
-          <p className="rounded-xl border border-dashed border-white/10 px-4 py-12 text-center text-xs text-zinc-400">
-            No templates match &ldquo;{query}&rdquo;.
-          </p>
-        ) : (
-          <TemplatesGrid templates={shownTemplates} onOpen={onOpen} token={token} />
-        )
-      ) : shown.length === 0 ? (
-        /* Empty States */
-        <div className="rounded-xl border border-dashed border-white/10 p-8 text-center">
-          {query ? (
-            <div className="space-y-2">
-              <p className="text-sm text-zinc-400">
-                No {tab === "all" ? "items" : `${tab}s`} match &ldquo;{query}&rdquo;.
-              </p>
-              <button
-                type="button"
-                onClick={() => setQuery("")}
-                className="text-xs font-medium text-indigo-400 hover:underline cursor-pointer"
-              >
-                Clear search filter
-              </button>
-            </div>
+      {/* Scrollable Container for Cards & Templates */}
+      <div className="max-h-[calc(100dvh-370px)] min-h-[300px] overflow-y-auto pr-1.5 pb-4 pt-1 [scrollbar-width:thin] [scrollbar-color:rgba(255,255,255,0.15)_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-white/10 hover:[&::-webkit-scrollbar-thumb]:bg-white/20">
+        {/* View: Templates Tab */}
+        {tab === "templates" ? (
+          shownTemplates.length === 0 ? (
+            <p className="rounded-xl border border-dashed border-white/10 px-4 py-12 text-center text-xs text-zinc-400">
+              No templates match &ldquo;{query}&rdquo;.
+            </p>
           ) : (
-            <div className="mx-auto max-w-sm space-y-3">
-              <Bot className="mx-auto h-8 w-8 text-zinc-500" />
-              <h3 className="text-sm font-medium text-zinc-200">
-                No {tab === "all" ? "agents or workflows" : `${tab}s`} yet
-              </h3>
-              <p className="text-xs text-zinc-400">
-                Use the AI prompt bar above to generate one instantly, or explore our pre-built templates.
-              </p>
-              {templateList.length > 0 && (
+            <TemplatesGrid templates={shownTemplates} onOpen={onOpen} token={token} />
+          )
+        ) : shown.length === 0 ? (
+          /* Empty States */
+          <div className="rounded-xl border border-dashed border-white/10 p-8 text-center">
+            {query ? (
+              <div className="space-y-2">
+                <p className="text-sm text-zinc-400">
+                  No {tab === "all" ? "items" : `${tab}s`} match &ldquo;{query}&rdquo;.
+                </p>
                 <button
                   type="button"
-                  onClick={() => setTab("templates")}
-                  className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-indigo-300 hover:bg-white/[0.08] cursor-pointer transition-colors"
+                  onClick={() => setQuery("")}
+                  className="text-xs font-medium text-indigo-400 hover:underline cursor-pointer"
                 >
-                  <Sparkles className="h-3.5 w-3.5 text-indigo-400" /> Browse ready-made templates
+                  Clear search filter
                 </button>
-              )}
-            </div>
-          )}
-        </div>
-      ) : (
-        /* Modern Cards Grid */
-        <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2 lg:grid-cols-3">
-          {shown.map((it) => (
-            <div
-              key={`${it.kind}:${it.id}`}
-              className="group flex flex-col justify-between rounded-xl border border-white/10 bg-[var(--surface)] p-4 shadow-xs transition-all hover:border-white/20 hover:bg-[var(--surface-raised)]"
-            >
-              {/* Card Header & Content */}
-              <div className="space-y-2.5">
-                <div className="flex items-start justify-between gap-2">
+              </div>
+            ) : (
+              <div className="mx-auto max-w-sm space-y-3">
+                <Bot className="mx-auto h-8 w-8 text-zinc-500" />
+                <h3 className="text-sm font-medium text-zinc-200">
+                  No {tab === "all" ? "agents or workflows" : `${tab}s`} yet
+                </h3>
+                <p className="text-xs text-zinc-400">
+                  Use the AI prompt bar above to generate one instantly, or explore our pre-built templates.
+                </p>
+                {templateList.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setTab("templates")}
+                    className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-indigo-300 hover:bg-white/[0.08] cursor-pointer transition-colors"
+                  >
+                    <Sparkles className="h-3.5 w-3.5 text-indigo-400" /> Browse ready-made templates
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        ) : (
+          /* Modern Cards Grid */
+          <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2 lg:grid-cols-3">
+            {shown.map((it) => (
+              <div
+                key={`${it.kind}:${it.id}`}
+                className="group flex flex-col justify-between rounded-xl border border-white/10 bg-[var(--surface)] p-4 shadow-xs transition-all hover:border-white/20 hover:bg-[var(--surface-raised)]"
+              >
+                {/* Card Header & Content */}
+                <div className="space-y-2.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={() => onOpen({ kind: it.kind, id: it.id })}
+                      className="flex min-w-0 flex-1 items-center gap-2.5 text-left cursor-pointer"
+                      title={`Open ${it.name} in canvas editor`}
+                    >
+                      <TypeIcon kind={it.kind} />
+                      <span className="truncate text-sm font-medium text-zinc-100 group-hover:text-white transition-colors">
+                        {it.name}
+                      </span>
+                    </button>
+                    <span className="shrink-0 text-[11px] text-zinc-500">
+                      {timeAgo(it.updated)}
+                    </span>
+                  </div>
+
+                  <p className="line-clamp-2 text-xs leading-relaxed text-zinc-400">
+                    {it.sub}
+                  </p>
+                </div>
+
+                {/* Card Action Footer */}
+                <div className="mt-4 flex items-center justify-end gap-2 border-t border-white/5 pt-3">
+                  <Link
+                    href={`/user/executions?chat=${it.kind}:${encodeURIComponent(it.id)}&tab=chat`}
+                    className="inline-flex h-7 items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.04] px-2.5 text-xs font-medium text-zinc-300 hover:bg-white/[0.08] hover:text-white transition-colors"
+                    title="Open Chat with this agent/workflow"
+                  >
+                    <MessageSquare className="h-3 w-3 text-zinc-400" />
+                    <span>Chat</span>
+                  </Link>
                   <button
                     type="button"
                     onClick={() => onOpen({ kind: it.kind, id: it.id })}
-                    className="flex min-w-0 flex-1 items-center gap-2.5 text-left cursor-pointer"
-                    title={`Open ${it.name} in canvas editor`}
+                    className="inline-flex h-7 items-center gap-1.5 rounded-md border border-indigo-500/30 bg-indigo-500/10 px-2.5 text-xs font-medium text-indigo-300 hover:bg-indigo-500/20 hover:text-indigo-200 cursor-pointer transition-colors"
+                    title="Edit in visual canvas"
                   >
-                    <TypeIcon kind={it.kind} />
-                    <span className="truncate text-sm font-medium text-zinc-100 group-hover:text-white transition-colors">
-                      {it.name}
-                    </span>
+                    <Layers className="h-3 w-3" />
+                    <span>Edit Canvas</span>
                   </button>
-                  <span className="shrink-0 text-[11px] text-zinc-500">
-                    {timeAgo(it.updated)}
-                  </span>
                 </div>
-
-                <p className="line-clamp-2 text-xs leading-relaxed text-zinc-400">
-                  {it.sub}
-                </p>
               </div>
-
-              {/* Card Action Footer */}
-              <div className="mt-4 flex items-center justify-end gap-2 border-t border-white/5 pt-3">
-                <Link
-                  href={`/user/executions?chat=${it.kind}:${encodeURIComponent(it.id)}&tab=chat`}
-                  className="inline-flex h-7 items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.04] px-2.5 text-xs font-medium text-zinc-300 hover:bg-white/[0.08] hover:text-white transition-colors"
-                  title="Open Chat with this agent/workflow"
-                >
-                  <MessageSquare className="h-3 w-3 text-zinc-400" />
-                  <span>Chat</span>
-                </Link>
-                <button
-                  type="button"
-                  onClick={() => onOpen({ kind: it.kind, id: it.id })}
-                  className="inline-flex h-7 items-center gap-1.5 rounded-md border border-indigo-500/30 bg-indigo-500/10 px-2.5 text-xs font-medium text-indigo-300 hover:bg-indigo-500/20 hover:text-indigo-200 cursor-pointer transition-colors"
-                  title="Edit in visual canvas"
-                >
-                  <Layers className="h-3 w-3" />
-                  <span>Edit Canvas</span>
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+            ))}
+          </div>
+        )}
+      </div>
     </section>
   );
 }
