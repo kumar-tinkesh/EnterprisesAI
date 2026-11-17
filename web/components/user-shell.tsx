@@ -13,8 +13,8 @@ type NavItem = { href: string; label: string; Icon: typeof LayoutDashboard };
 
 const NAV: NavItem[] = [
   { href: "/user", label: "Dashboard", Icon: LayoutDashboard },
-  { href: "/user/agents", label: "AI Compiler", Icon: Bot },
-  { href: "/user/executions", label: "Executions", Icon: Zap },
+  { href: "/user/agents", label: "Agents & Workflows", Icon: Bot },
+  { href: "/user/executions", label: "Executions & Logs", Icon: Zap },
   { href: "/user/published", label: "Published", Icon: Globe },
   { href: "/user/connectors", label: "Connectors", Icon: Plug },
   { href: "/user/knowledge", label: "Knowledge Base", Icon: Brain },

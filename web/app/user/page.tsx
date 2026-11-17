@@ -2,14 +2,16 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, CheckCircle2, ChevronRight, Circle, Clock, Loader2, MessageSquare, Network, Plus, ShieldAlert, XCircle } from "lucide-react";
+import { ArrowRight, CheckCircle2, ChevronDown, ChevronRight, Circle, Clock, Loader2, MessageSquare, Network, Plus, ShieldAlert, XCircle } from "lucide-react";
 
 import ProtectedDashboard from "@/components/protected-dashboard";
 import { ApprovalCard } from "@/components/builder/approval-card";
 import { DailyBars } from "@/components/charts/daily-bars";
 import { SpendAlert, SpendPanel, useSpend } from "@/components/builder/spend-panel";
 import { Stat, Stats, type Delta } from "@/components/ui/stats";
+import { Menu } from "@/components/ui/menu";
 import { builderApi } from "@/lib/builder/api";
 import { vendorApi } from "@/lib/api";
 import type { Approval, InsightsWindow, Run, RunStatus } from "@/lib/builder/types";
@@ -88,11 +90,11 @@ function duration(run: Run): string | null {
 }
 
 const STATUS: Record<RunStatus, { label: string; Icon: typeof CheckCircle2; className: string }> = {
-  succeeded: { label: "Succeeded", Icon: CheckCircle2, className: "text-emerald-700" },
-  failed: { label: "Failed", Icon: XCircle, className: "text-red-600" },
-  running: { label: "Running", Icon: Loader2, className: "text-indigo-600 animate-spin" },
+  succeeded: { label: "Succeeded", Icon: CheckCircle2, className: "text-emerald-400" },
+  failed: { label: "Failed", Icon: XCircle, className: "text-red-400" },
+  running: { label: "Running", Icon: Loader2, className: "text-indigo-400 animate-spin" },
   queued: { label: "Queued", Icon: Clock, className: "text-zinc-400" },
-  waiting: { label: "Waiting", Icon: ShieldAlert, className: "text-amber-700" },
+  waiting: { label: "Waiting", Icon: ShieldAlert, className: "text-amber-400" },
   cancelled: { label: "Cancelled", Icon: XCircle, className: "text-zinc-400" },
 };
 
@@ -118,6 +120,7 @@ export default function UserDashboard() {
 }
 
 function Dashboard() {
+  const router = useRouter();
   const token = useAuthStore((s) => s.accessToken) || "";
   const user = useAuthStore((s) => s.user);
   const firstName = (user?.full_name || "").split(" ")[0] || "there";
@@ -174,10 +177,32 @@ function Dashboard() {
             {new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}
           </p>
         </div>
-        <div className="flex shrink-0 gap-2">
-          <Link href="/user/executions" className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border-strong)] px-3 text-sm font-medium text-zinc-900 hover:bg-zinc-50">
-            <MessageSquare className="h-4 w-4" /> Chat
-          </Link>
+        <div className="flex shrink-0 items-center gap-2">
+          {projects.length > 0 ? (
+            <Menu
+              label="Chat with an agent"
+              trigger={
+                <>
+                  <MessageSquare className="h-4 w-4" /> Chat <ChevronDown className="h-3.5 w-3.5 opacity-60" />
+                </>
+              }
+              triggerClassName="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border-strong)] px-3 text-sm font-medium text-zinc-900 hover:bg-zinc-50 cursor-pointer"
+              items={[
+                ...projects.slice(0, 6).map((p) => ({
+                  label: `💬 ${p.name}`,
+                  onClick: () => router.push(chatHref(p.kind, p.id)),
+                })),
+                {
+                  label: "Browse all in Executions…",
+                  onClick: () => router.push("/user/executions?view=inspector"),
+                },
+              ]}
+            />
+          ) : (
+            <Link href="/user/executions" className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border-strong)] px-3 text-sm font-medium text-zinc-900 hover:bg-zinc-50">
+              <MessageSquare className="h-4 w-4" /> Chat
+            </Link>
+          )}
           <Link href="/user/agents" className="inline-flex h-9 items-center gap-2 rounded-md bg-[var(--accent)] px-3 text-sm font-medium text-white hover:bg-[var(--accent-hover)]">
             <Plus className="h-4 w-4" /> New agent
           </Link>
@@ -228,29 +253,29 @@ function Dashboard() {
               const more = g.approvals.length > 1 ? ` · ${g.approvals.length} decisions${g.runIds.length > 1 ? ` in ${g.runIds.length} runs` : ""}` : "";
               return (
                 <li key={g.key}>
-                  <Link href={g.href} className="flex items-center gap-3 px-4 py-3 hover:bg-zinc-50">
-                    <ShieldAlert className="h-4 w-4 shrink-0 text-amber-700" />
+                  <Link href={g.href} className="group flex items-center gap-3 px-4 py-3 transition-colors hover:bg-white/[0.04]">
+                    <ShieldAlert className="h-4 w-4 shrink-0 text-amber-400" />
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium text-zinc-900">{g.name} is waiting for you</span>
-                      <span className="block truncate text-xs text-zinc-500">
+                      <span className="block truncate text-sm font-medium text-zinc-100 group-hover:text-white">{g.name} is waiting for you</span>
+                      <span className="block truncate text-xs text-zinc-400 group-hover:text-zinc-300">
                         {(a.payload.message || (a.tool_name ? `Approve “${a.payload.tool_name || a.tool_name}”` : "Approve or answer to continue")) + more}
                       </span>
                     </span>
-                    <span className="hidden shrink-0 text-xs text-zinc-500 sm:block">{ago(g.newest)}</span>
-                    <span className="shrink-0 text-sm font-medium text-zinc-700">Review</span>
+                    <span className="hidden shrink-0 text-xs text-zinc-400 sm:block">{ago(g.newest)}</span>
+                    <span className="shrink-0 text-sm font-medium text-zinc-300 group-hover:text-white">Review</span>
                   </Link>
                 </li>
               );
             })}
             {failedRecently.map((r) => (
               <li key={r.id}>
-                <Link href={runHref(r)} className="flex items-center gap-3 px-4 py-3 hover:bg-zinc-50">
-                  <XCircle className="h-4 w-4 shrink-0 text-red-600" />
+                <Link href={runHref(r)} className="group flex items-center gap-3 px-4 py-3 transition-colors hover:bg-white/[0.04]">
+                  <XCircle className="h-4 w-4 shrink-0 text-red-400" />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium text-zinc-900">{r.name || "A run"} failed {ago(r.created_at)}</span>
-                    <span className="block truncate text-xs text-zinc-500">{r.error || r.input?.text || "Open the chat to see what happened."}</span>
+                    <span className="block truncate text-sm font-medium text-zinc-100 group-hover:text-white">{r.name || "A run"} failed {ago(r.created_at)}</span>
+                    <span className="block truncate text-xs text-zinc-400 group-hover:text-zinc-300">{r.error || r.input?.text || "Open the chat to see what happened."}</span>
                   </span>
-                  <span className="shrink-0 text-sm font-medium text-zinc-700">Open</span>
+                  <span className="shrink-0 text-sm font-medium text-zinc-300 group-hover:text-white">Open</span>
                 </Link>
               </li>
             ))}
@@ -364,16 +389,16 @@ function Dashboard() {
               const name = r.name || (r.kind === "workflow" ? "Workflow" : "Agent");
               return (
                 <li key={r.id}>
-                  <Link href={runHref(r)} className="flex items-center gap-3 px-4 py-3 hover:bg-zinc-50">
+                  <Link href={runHref(r)} className="group flex items-center gap-3 px-4 py-3 transition-colors hover:bg-white/[0.04]">
                     <st.Icon className={cn("h-4 w-4 shrink-0", st.className)} aria-label={st.label} />
                     <span className="min-w-0 flex-1">
-                      <span className={cn("block truncate text-sm", r.input?.text?.trim() ? "text-zinc-900" : "text-zinc-500")}>{asked(r)}</span>
-                      <span className="block truncate text-xs text-zinc-500">
-                        {name} · <span className={r.status === "failed" ? "text-red-600" : r.status === "waiting" ? "text-amber-700" : undefined}>{st.label}</span>
+                      <span className={cn("block truncate text-sm", r.input?.text?.trim() ? "text-zinc-100 group-hover:text-white" : "text-zinc-400")}>{asked(r)}</span>
+                      <span className="block truncate text-xs text-zinc-400 group-hover:text-zinc-300">
+                        {name} · <span className={r.status === "failed" ? "text-red-400" : r.status === "waiting" ? "text-amber-400" : undefined}>{st.label}</span>
                       </span>
                     </span>
-                    <span className="hidden w-14 shrink-0 text-right text-xs tabular-nums text-zinc-500 md:block">{took ?? "—"}</span>
-                    <span className="w-24 shrink-0 text-right text-xs text-zinc-500">{ago(r.created_at)}</span>
+                    <span className="hidden w-14 shrink-0 text-right text-xs tabular-nums text-zinc-400 group-hover:text-zinc-200 md:block">{took ?? "—"}</span>
+                    <span className="w-24 shrink-0 text-right text-xs text-zinc-400 group-hover:text-zinc-200">{ago(r.created_at)}</span>
                   </Link>
                 </li>
               );
@@ -409,12 +434,39 @@ function OldWaits({ groups, token }: { groups: WaitGroup[]; token: string }) {
       setAsking(null);
     }
   };
+  const cancelAll = async () => {
+    setBusy("all");
+    setError(null);
+    try {
+      for (const g of groups) {
+        for (const id of g.runIds) await builderApi.cancelRun(token, id);
+      }
+      await Promise.all(
+        [["builder-approvals"], ["dashboard-runs"], ["insights"], ["builder-overview"]].map((queryKey) => queryClient.invalidateQueries({ queryKey })),
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't cancel all.");
+    } finally {
+      setBusy(null);
+    }
+  };
   return (
     <div>
-      <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-xs text-zinc-500 hover:text-zinc-900 cursor-pointer">
-        <ChevronRight className={cn("h-3.5 w-3.5 transition-transform", open && "rotate-90")} />
-        {groups.length} older one{groups.length === 1 ? "" : "s"}, waiting over {OLD_WAIT_DAYS} days
-      </button>
+      <div className="flex items-center justify-between px-4 py-2.5">
+        <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="flex items-center gap-2 text-left text-xs text-zinc-500 hover:text-zinc-900 cursor-pointer">
+          <ChevronRight className={cn("h-3.5 w-3.5 transition-transform", open && "rotate-90")} />
+          <span>{groups.length} older one{groups.length === 1 ? "" : "s"}, waiting over {OLD_WAIT_DAYS} days</span>
+        </button>
+        <button
+          type="button"
+          disabled={busy !== null}
+          onClick={() => void cancelAll()}
+          className="rounded-md border border-zinc-200 px-2 py-0.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50 cursor-pointer"
+          title="Stop all stale runs"
+        >
+          {busy === "all" ? "Stopping all…" : "Cancel all older"}
+        </button>
+      </div>
       {open && (
         <ul className="divide-y divide-zinc-100 border-t border-zinc-100">
           {groups.map((g) => (

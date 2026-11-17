@@ -126,9 +126,9 @@ export function DailyBars({
                     </span>
                     {hover === i && (
                       <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 -translate-x-1/2 whitespace-nowrap rounded-md border border-zinc-200 bg-[var(--surface-raised)] px-2.5 py-1.5 text-xs shadow-lg">
-                        <p className="font-medium text-zinc-900">{dayLabel(d.date)}</p>
-                        <p className="flex items-center gap-1 text-zinc-600"><CheckCircle2 className="h-3 w-3" style={{ color: GOOD }} /> {d.good} {good}</p>
-                        {!single && <p className="flex items-center gap-1 text-zinc-600"><XCircle className="h-3 w-3" style={{ color: CRITICAL }} /> {d.bad} {bad}</p>}
+                        <p className="font-medium text-zinc-900">{dayLabel(d.date)} <span className="font-normal text-zinc-400">({n} total)</span></p>
+                        <p className="flex items-center gap-1 text-zinc-600"><CheckCircle2 className="h-3 w-3" style={{ color: GOOD }} /> {d.good} {good}{n > 0 ? ` (${Math.round((d.good / n) * 100)}%)` : ""}</p>
+                        {!single && d.bad > 0 && <p className="flex items-center gap-1 text-zinc-600"><XCircle className="h-3 w-3" style={{ color: CRITICAL }} /> {d.bad} {bad}</p>}
                       </div>
                     )}
                   </div>

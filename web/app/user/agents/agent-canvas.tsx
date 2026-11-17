@@ -3,7 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUp, Bot, ChevronDown, ListChecks, Network, Plus, Plug, Sparkles } from "lucide-react";
+import { ArrowUp, Bot, ChevronDown, ListChecks, MessageSquare, Network, Plus, Plug, Search, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
@@ -96,10 +96,10 @@ export default function BuilderHome({ hasAnyConnectedServer, onOpen }: { hasAnyC
   return (
     <div className="mx-auto mt-8 max-w-2xl space-y-10 pb-10 sm:mt-12">
       {!hasAnyConnectedServer && (
-        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
-          <Plug className="h-4 w-4 shrink-0 text-amber-700" />
-          <p className="min-w-0 flex-1 text-zinc-700">Connect an app first — agents and workflows work through them.</p>
-          <Link href="/user/connectors" className="shrink-0 font-medium text-zinc-900 underline-offset-2 hover:underline">
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-zinc-300">
+          <Plug className="h-4 w-4 shrink-0 text-amber-400" />
+          <p className="min-w-0 flex-1">Connect an app first — agents and workflows work through them.</p>
+          <Link href="/user/connectors" className="shrink-0 font-medium text-amber-300 underline-offset-2 hover:underline">
             Open Connectors
           </Link>
         </div>
@@ -200,51 +200,124 @@ export default function BuilderHome({ hasAnyConnectedServer, onOpen }: { hasAnyC
       </section>
 
       {mode === "workflow" && <Templates onOpen={onOpen} />}
-      <Recent onOpen={onOpen} />
+      <AgentLibrary onOpen={onOpen} />
     </div>
   );
 }
 
-/** Agents and workflows together, the most recently changed first. */
-function Recent({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
+/** All agents and workflows in one place, searchable and filterable with instant chat & edit access. */
+function AgentLibrary({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
   const token = useAuthStore((s) => s.accessToken) || "";
-  const [all, setAll] = useState(false);
+  const [tab, setTab] = useState<"all" | "agent" | "workflow">("all");
+  const [query, setQuery] = useState("");
   const agents = useQuery({ queryKey: ["builder-agents"], queryFn: () => builderApi.listAgents(token), enabled: !!token });
   const workflows = useQuery({ queryKey: ["builder-workflows"], queryFn: () => builderApi.listWorkflows(token), enabled: !!token });
-  const items = [
-    ...(agents.data ?? []).map((a) => ({ kind: "agent" as const, id: a.id, name: a.name, updated: a.updated_at })),
-    ...(workflows.data ?? []).map((w) => ({ kind: "workflow" as const, id: w.id, name: w.name, updated: w.updated_at, steps: w.node_count })),
-  ].sort((a, b) => b.updated.localeCompare(a.updated));
-  if (!items.length) return null;
-  const shown = all ? items : items.slice(0, 6);
+
+  const agentItems = (agents.data ?? []).map((a) => ({
+    kind: "agent" as const,
+    id: a.id,
+    name: a.name,
+    sub: a.role || a.goal || "Agent",
+    updated: a.updated_at,
+  }));
+
+  const workflowItems = (workflows.data ?? []).map((w) => ({
+    kind: "workflow" as const,
+    id: w.id,
+    name: w.name,
+    sub: w.description || `${w.node_count} steps`,
+    updated: w.updated_at,
+  }));
+
+  const allItems = [...agentItems, ...workflowItems].sort((a, b) => b.updated.localeCompare(a.updated));
+  if (!allItems.length && !agents.isLoading && !workflows.isLoading) return null;
+
+  const filteredByTab = tab === "agent" ? agentItems : tab === "workflow" ? workflowItems : allItems;
+  const needle = query.trim().toLowerCase();
+  const shown = filteredByTab.filter((it) => !needle || it.name.toLowerCase().includes(needle) || it.sub.toLowerCase().includes(needle));
 
   return (
-    <section className="space-y-3" aria-labelledby="recent-heading">
-      <h2 id="recent-heading" className="text-base font-semibold text-zinc-900">Recent</h2>
-      <ul className="divide-y divide-zinc-100 overflow-hidden rounded-lg border border-zinc-200">
-        {shown.map((it) => (
-          <li key={`${it.kind}:${it.id}`}>
+    <section className="space-y-4" aria-labelledby="library-heading">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 id="library-heading" className="text-base font-semibold text-zinc-900">
+          Your Agents & Workflows <span className="font-normal text-zinc-500">· {allItems.length}</span>
+        </h2>
+        <div className="inline-flex rounded-lg border border-zinc-200 p-0.5" role="tablist">
+          {(["all", "agent", "workflow"] as const).map((t) => (
             <button
+              key={t}
               type="button"
-              onClick={() => onOpen({ kind: it.kind, id: it.id })}
-              className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-zinc-50 cursor-pointer"
+              role="tab"
+              aria-selected={tab === t}
+              onClick={() => setTab(t)}
+              className={cn(
+                "rounded-md px-2.5 py-1 text-xs font-medium transition-colors cursor-pointer",
+                tab === t ? "bg-zinc-100 text-zinc-900" : "text-zinc-500 hover:text-zinc-900"
+              )}
             >
-              <TypeIcon kind={it.kind} />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-medium text-zinc-900">{it.name}</span>
-                <span className="block text-xs text-zinc-500">
-                  {it.kind === "agent" ? "Agent" : `Workflow · ${"steps" in it ? it.steps : 0} steps`}
-                </span>
-              </span>
-              <span className="shrink-0 text-xs text-zinc-500">Edited {timeAgo(it.updated)}</span>
+              {t === "all" ? `All (${allItems.length})` : t === "agent" ? `Agents (${agentItems.length})` : `Workflows (${workflowItems.length})`}
             </button>
-          </li>
-        ))}
-      </ul>
-      {items.length > shown.length && (
-        <button type="button" onClick={() => setAll(true)} className="text-sm font-medium text-zinc-700 hover:text-zinc-900 cursor-pointer">
-          Show all {items.length}
-        </button>
+          ))}
+        </div>
+      </div>
+
+      {allItems.length > 3 && (
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-400" />
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search by name or description…"
+            className="w-full rounded-lg border border-zinc-200 bg-transparent py-1.5 pl-8 pr-3 text-xs text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none"
+          />
+        </div>
+      )}
+
+      {shown.length === 0 ? (
+        <p className="rounded-lg border border-dashed border-zinc-200 px-4 py-8 text-center text-xs text-zinc-500">
+          No matches found for &ldquo;{query}&rdquo;.
+        </p>
+      ) : (
+        <ul className="divide-y divide-white/5 overflow-hidden rounded-lg border border-white/10 bg-[var(--surface)]">
+          {shown.map((it) => (
+            <li key={`${it.kind}:${it.id}`} className="group flex items-center justify-between gap-3 px-4 py-3 transition-colors hover:bg-white/[0.04]">
+              <button
+                type="button"
+                onClick={() => onOpen({ kind: it.kind, id: it.id })}
+                className="flex min-w-0 flex-1 items-center gap-3 text-left cursor-pointer"
+                title={`Open ${it.name} in canvas editor`}
+              >
+                <TypeIcon kind={it.kind} />
+                <div className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium text-zinc-100 group-hover:text-white">
+                    {it.name}
+                  </span>
+                  <span className="block truncate text-xs text-zinc-400 group-hover:text-zinc-300">{it.sub}</span>
+                </div>
+              </button>
+
+              <div className="flex shrink-0 items-center gap-2">
+                <span className="hidden text-xs text-zinc-400 sm:inline">{timeAgo(it.updated)}</span>
+                <Link
+                  href={`/user/executions?chat=${it.kind}:${encodeURIComponent(it.id)}&tab=chat`}
+                  className="inline-flex h-7 items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.04] px-2.5 text-xs font-medium text-zinc-300 hover:bg-white/[0.08] hover:text-white transition-colors"
+                  title="Open Chat"
+                >
+                  <MessageSquare className="h-3 w-3" /> Chat
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => onOpen({ kind: it.kind, id: it.id })}
+                  className="inline-flex h-7 items-center gap-1.5 rounded-md border border-indigo-500/30 bg-indigo-500/10 px-2.5 text-xs font-medium text-indigo-300 hover:bg-indigo-500/20 hover:text-indigo-200 cursor-pointer transition-colors"
+                  title="Edit in Canvas"
+                >
+                  Edit Canvas
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
       )}
     </section>
   );

@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { ArrowDown, CalendarClock, ChevronDown, Globe, Loader2, MessageSquare, Plus, Search, ShieldAlert, Users } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowDown, CalendarClock, CheckCircle2, ChevronDown, Clock, Eye, Globe, Loader2, MessageSquare, Plus, RefreshCw, Search, ShieldAlert, Users, X, XCircle } from "lucide-react";
 
 import ProtectedDashboard from "@/components/protected-dashboard";
 import { Button } from "@/components/ui/button";
+import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Menu } from "@/components/ui/menu";
 import { Spinner } from "@/components/ui/spinner";
@@ -21,7 +22,7 @@ import { TypeIcon } from "@/components/builder/type-icon";
 import { vendorApi } from "@/lib/api";
 import { builderApi } from "@/lib/builder/api";
 import { serverIdOf } from "@/lib/builder/graph";
-import type { OverviewItem } from "@/lib/builder/types";
+import type { OverviewItem, Run, RunStatus } from "@/lib/builder/types";
 import { useBuilderActions, type BuildMode, type BuildTarget } from "@/lib/builder/use-builder-actions";
 import { Templates } from "@/app/user/agents/agent-canvas";
 import { useAuthStore } from "@/stores/auth-store";
@@ -74,10 +75,10 @@ function cronLabel(cron: string): string {
 }
 
 const HEALTH: Record<OverviewItem["health_status"], { label: string; dot: string; text: string; order: number }> = {
-  needs_attention: { label: "Needs attention", dot: "bg-[var(--warning)]", text: "text-amber-700", order: 0 },
-  testing: { label: "Testing", dot: "bg-[var(--warning)]", text: "text-amber-700", order: 1 },
-  not_tested: { label: "Not tested", dot: "bg-zinc-400", text: "text-zinc-500", order: 2 },
-  production_ready: { label: "Ready", dot: "bg-[var(--success)]", text: "text-emerald-700", order: 3 },
+  needs_attention: { label: "Needs attention", dot: "bg-amber-400/90", text: "text-zinc-300", order: 0 },
+  testing: { label: "In testing", dot: "bg-sky-400/80", text: "text-zinc-400", order: 1 },
+  not_tested: { label: "Not tested", dot: "bg-zinc-500", text: "text-zinc-500", order: 2 },
+  production_ready: { label: "Ready", dot: "bg-[var(--success)]", text: "text-emerald-400", order: 3 },
 };
 
 const FILTERS = {
@@ -119,6 +120,14 @@ type Item = {
 export default function ExecutionsPage() {
   const token = useAuthStore((s) => s.accessToken) || "";
   const userId = useAuthStore((s) => s.user?.id);
+  const [viewMode, setViewMode] = useState<"runs" | "inspector">(() => {
+    if (typeof window !== "undefined") {
+      const p = new URLSearchParams(window.location.search);
+      if (p.has("chat")) return "inspector";
+      if (p.get("view") === "inspector") return "inspector";
+    }
+    return "runs";
+  });
   const [tab, setTab] = useState<BuildMode>("agent");
   const [chat, setChat] = useState<ChatTarget | null>(null);
   // The selected one is open on the canvas, in place of the list.
@@ -136,6 +145,7 @@ export default function ExecutionsPage() {
       setTab(fromUrl.kind);
       setEditing(new URLSearchParams(window.location.search).get("edit") === "1");
       setDetail(tabFromUrl());
+      setViewMode("inspector");
       return;
     }
     try {
@@ -159,6 +169,7 @@ export default function ExecutionsPage() {
     setEditing(false);
     setDetail(view);
     setChatUrl(target, false, view);
+    if (target) setViewMode("inspector");
   };
   const pickDetail = (view: DetailTab) => {
     setDetail(view);
@@ -336,8 +347,9 @@ export default function ExecutionsPage() {
             {groups.map((g) => (
               <section key={g.label ?? "all"} aria-label={g.label ?? undefined}>
                 {g.label && (
-                  <h2 className={cn("border-b border-zinc-100 bg-zinc-50 px-4 py-1.5 text-xs font-medium", g.items === attention ? "text-amber-700" : "text-zinc-500")}>
-                    {g.label} · {g.items.length}
+                  <h2 className={cn("border-b border-zinc-100 bg-zinc-50 px-4 py-1.5 text-xs font-medium flex items-center gap-1.5", g.items === attention ? "text-zinc-300 font-medium" : "text-zinc-400")}>
+                    {g.items === attention && <span className="h-1.5 w-1.5 rounded-full bg-amber-400/80 shrink-0" />}
+                    <span>{g.label} · {g.items.length}</span>
                   </h2>
                 )}
                 <ul className="divide-y divide-zinc-100 border-b border-zinc-100 last:border-b-0">{g.items.map(renderRow)}</ul>
@@ -356,7 +368,7 @@ export default function ExecutionsPage() {
   // details take the rest. Editing swaps the list for the canvas. A phone
   // shows one side at a time.
   return (
-    <ProtectedDashboard path="/user" title="Executions" description="Every agent and workflow, how it's doing, and a chat with it." fullBleed>
+    <ProtectedDashboard path="/user" title="Executions & Logs" description="Live execution history across all agents, with deep run traces." fullBleed>
       <div className="flex h-full overflow-hidden bg-[var(--bg)]">
         {editing && chat ? (
           <section className="flex min-w-0 flex-1 flex-col [&>div]:h-full" aria-label="Editor">
@@ -366,11 +378,73 @@ export default function ExecutionsPage() {
               <AgentEditor key={chat.id} id={chat.id} onBack={closeEditor} onChat={openChatTab} onOpen={openEditor} />
             )}
           </section>
+        ) : viewMode === "runs" && !chat ? (
+          <section className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-5 px-4 py-6 sm:px-8 sm:py-8 overflow-y-auto">
+            <header className="flex flex-wrap items-end justify-between gap-4">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-3">
+                  <h1 className="text-xl font-semibold text-zinc-900">Executions & Logs</h1>
+                  <div className="inline-flex rounded-lg border border-white/10 bg-white/[0.03] p-0.5" role="tablist">
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected="true"
+                      onClick={() => setViewMode("runs")}
+                      className="rounded-md bg-white/[0.1] px-3 py-1 text-xs font-medium text-white shadow-xs cursor-pointer transition-colors"
+                    >
+                      Run Logs
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected="false"
+                      onClick={() => setViewMode("inspector")}
+                      className="rounded-md px-3 py-1 text-xs font-medium text-zinc-400 hover:text-white hover:bg-white/[0.04] cursor-pointer transition-colors"
+                    >
+                      Agent Inspector
+                    </button>
+                  </div>
+                </div>
+                <p className="mt-1 text-sm text-zinc-500">Live execution history across all agents, with deep run traces.</p>
+              </div>
+            </header>
+            <RunLogsView
+              token={token}
+              onOpenChat={(target) => {
+                openChat(target, "chat");
+                setViewMode("inspector");
+              }}
+            />
+          </section>
         ) : (
           <section className={cn("min-w-0 flex-col gap-5 px-4 py-6 sm:px-8 sm:py-8", chat ? "hidden md:flex md:w-2/5 md:px-4 lg:w-1/3 lg:px-6" : "mx-auto flex w-full max-w-6xl flex-1")}>
             <header className="flex flex-wrap items-end justify-between gap-4">
               <div className="min-w-0">
-                <h1 className="text-xl font-semibold text-zinc-900">Executions</h1>
+                <div className="flex flex-wrap items-center gap-3">
+                  <h1 className="text-xl font-semibold text-zinc-900">Executions & Logs</h1>
+                  {!chat && (
+                    <div className="inline-flex rounded-lg border border-white/10 bg-white/[0.03] p-0.5" role="tablist">
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected="false"
+                        onClick={() => setViewMode("runs")}
+                        className="rounded-md px-3 py-1 text-xs font-medium text-zinc-400 hover:text-white hover:bg-white/[0.04] cursor-pointer transition-colors"
+                      >
+                        Run Logs
+                      </button>
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected="true"
+                        onClick={() => setViewMode("inspector")}
+                        className="rounded-md bg-white/[0.1] px-3 py-1 text-xs font-medium text-white shadow-xs cursor-pointer transition-colors"
+                      >
+                        Agent Inspector
+                      </button>
+                    </div>
+                  )}
+                </div>
                 {!chat && <p className="mt-1 text-sm text-zinc-500">Every agent and workflow, how it&apos;s doing, and a chat with it.</p>}
               </div>
               <Button className="shrink-0" disabled={createBlank.isPending} onClick={() => createBlank.mutate(tab)}>
@@ -409,7 +483,7 @@ function FilterTab({ on, onClick, children }: { on: boolean; onClick: () => void
       onClick={onClick}
       className={cn(
         "shrink-0 rounded-md px-3 py-1.5 text-sm font-medium transition-colors cursor-pointer",
-        on ? "bg-zinc-100 text-zinc-900" : "text-zinc-500 hover:bg-zinc-50 hover:text-zinc-900",
+        on ? "bg-white/[0.1] text-white" : "text-zinc-400 hover:bg-white/[0.04] hover:text-zinc-200",
       )}
     >
       {children}
@@ -440,8 +514,8 @@ function recent(iso: string | null): boolean {
 /** Running, waiting for you, or how ready it is: a dot and a word. */
 function StatusLabel({ s, className }: { s: OverviewItem | undefined; className?: string }) {
   const cls = cn("items-center gap-1.5 text-sm", className);
-  if (s?.running) return <span className={cn(cls, "text-zinc-700")}><Loader2 className="h-3.5 w-3.5 animate-spin" /> Running</span>;
-  if (s?.waiting) return <span className={cn(cls, "font-medium text-amber-700")}><ShieldAlert className="h-3.5 w-3.5" /> Waiting for you</span>;
+  if (s?.running) return <span className={cn(cls, "text-zinc-300")}><Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-400" /> Running</span>;
+  if (s?.waiting) return <span className={cn(cls, "font-medium text-zinc-300")}><ShieldAlert className="h-3.5 w-3.5 text-amber-400/80" /> Waiting for you</span>;
   const h = HEALTH[s?.health_status ?? "not_tested"];
   return (
     <span className={cn(cls, h.text)}>
@@ -479,13 +553,13 @@ function Row({
   if (s?.schedule) extras.push(<span key="s" className="inline-flex items-center gap-1" title={s.next_run_at ? `Next: ${new Date(s.next_run_at).toLocaleString()}` : s.schedule}><CalendarClock className="h-3 w-3" /> {cronLabel(s.schedule)}</span>);
   if (s?.stale_waiting) {
     extras.push(
-      <span key="w" className="inline-flex items-center gap-1 text-amber-700" title="Waiting for a decision for over a week. Decide in its chat, or cancel it from the Dashboard.">
-        <ShieldAlert className="h-3 w-3" /> {s.stale_waiting} old approval{s.stale_waiting === 1 ? "" : "s"}
+      <span key="w" className="inline-flex items-center gap-1 text-zinc-400" title="Waiting for a decision for over a week. Decide in its chat, or cancel it from the Dashboard.">
+        <ShieldAlert className="h-3 w-3 text-zinc-400" /> {s.stale_waiting} old approval{s.stale_waiting === 1 ? "" : "s"}
       </span>,
     );
   }
-  if (s?.published) extras.push(<span key="p" className="inline-flex items-center gap-1"><Globe className="h-3 w-3" /> Published</span>);
-  if (!item.mine) extras.push(<span key="m" className="inline-flex items-center gap-1" title="Shared by a teammate"><Users className="h-3 w-3" /> Shared</span>);
+  if (s?.published) extras.push(<span key="p" className="inline-flex items-center gap-1 text-zinc-400"><Globe className="h-3 w-3" /> Published</span>);
+  if (!item.mine) extras.push(<span key="m" className="inline-flex items-center gap-1 text-zinc-400" title="Shared by a teammate"><Users className="h-3 w-3" /> Shared</span>);
   if (servers.length) {
     extras.push(
       <span key="c" className="inline-flex items-center -space-x-1">
@@ -501,7 +575,11 @@ function Row({
   return (
     <li
       onClick={() => onOpen("overview")}
-      className={cn("flex cursor-pointer items-center gap-3 px-4 py-3 transition-colors @3xl:items-center", GRID, active ? "bg-zinc-100" : "hover:bg-zinc-50")}
+      className={cn(
+        "group flex cursor-pointer items-center gap-3 px-4 py-3 transition-colors @3xl:items-center",
+        GRID,
+        active ? "bg-white/[0.08]" : "hover:bg-white/[0.04]"
+      )}
     >
       <div className="flex min-w-0 flex-1 items-center gap-3">
         <TypeIcon kind={item.kind} />
@@ -513,23 +591,23 @@ function Row({
               onOpen("overview");
             }}
             aria-current={active ? "true" : undefined}
-            className="block max-w-full truncate text-left text-sm font-medium text-zinc-900 cursor-pointer"
+            className="block max-w-full truncate text-left text-sm font-medium text-zinc-100 group-hover:text-white cursor-pointer"
           >
             {item.name}
           </button>
           {/* Narrow: the columns, folded into one line. */}
-          <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-zinc-500 @3xl:hidden">
+          <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-zinc-400 @3xl:hidden">
             <StatusLabel s={s} className="inline-flex text-xs" />
             {lastRun}
             {s?.runs ? <span className="tabular-nums">{s.runs} runs{rate !== null ? `, ${Math.round(rate * 100)}%` : ""}</span> : null}
           </p>
-          {extras.length > 0 && <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-zinc-500">{extras}</p>}
+          {extras.length > 0 && <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-zinc-400">{extras}</p>}
         </div>
       </div>
       <StatusLabel s={s} className="hidden @3xl:flex" />
-      <span className="hidden text-sm text-zinc-700 @3xl:block">{lastRun}</span>
-      <span className="hidden text-right text-sm tabular-nums text-zinc-700 @3xl:block">{s?.runs || "—"}</span>
-      <span className="hidden text-right text-sm tabular-nums text-zinc-700 @3xl:block">{rate !== null ? `${Math.round(rate * 100)}%` : "—"}</span>
+      <span className="hidden text-sm text-zinc-400 group-hover:text-zinc-200 @3xl:block">{lastRun}</span>
+      <span className="hidden text-right text-sm tabular-nums text-zinc-400 group-hover:text-zinc-200 @3xl:block">{s?.runs || "—"}</span>
+      <span className="hidden text-right text-sm tabular-nums text-zinc-400 group-hover:text-zinc-200 @3xl:block">{rate !== null ? `${Math.round(rate * 100)}%` : "—"}</span>
       <div className="flex shrink-0 items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
         <Button size="sm" variant="outline" onClick={() => onOpen("chat")} aria-label={`Chat with ${item.name}`}>
           <MessageSquare /> <span className="hidden @md:inline">Chat</span>
@@ -543,5 +621,297 @@ function Row({
         />
       </div>
     </li>
+  );
+}
+
+const RUN_STATUS: Record<RunStatus, { label: string; Icon: typeof CheckCircle2; className: string; pill: string }> = {
+  succeeded: { label: "Succeeded", Icon: CheckCircle2, className: "text-emerald-400", pill: "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" },
+  failed: { label: "Failed", Icon: XCircle, className: "text-red-400", pill: "bg-red-500/10 text-red-400 border border-red-500/20" },
+  running: { label: "Running", Icon: Loader2, className: "text-indigo-400 animate-spin", pill: "bg-indigo-500/10 text-indigo-300 border border-indigo-500/20" },
+  queued: { label: "Queued", Icon: Clock, className: "text-zinc-400", pill: "bg-white/[0.05] text-zinc-400 border border-white/10" },
+  waiting: { label: "Waiting", Icon: ShieldAlert, className: "text-amber-400", pill: "bg-amber-500/10 text-amber-300 border border-amber-500/20" },
+  cancelled: { label: "Cancelled", Icon: XCircle, className: "text-zinc-400", pill: "bg-white/[0.05] text-zinc-400 border border-white/10" },
+};
+
+function runDuration(r: Run): string {
+  if (!r.started_at || !r.finished_at) return "—";
+  const diff = new Date(r.finished_at).getTime() - new Date(r.started_at).getTime();
+  if (diff >= 60000) return `${Math.round(diff / 60000)}m`;
+  if (diff >= 1000) return `${(diff / 1000).toFixed(1)}s`;
+  return `${diff}ms`;
+}
+
+function runInputText(r: Run): string {
+  if (r.input?.text?.trim()) return r.input.text;
+  if (r.input?.attachments?.[0]?.filename) return `📎 ${r.input.attachments[0].filename}`;
+  return r.kind === "workflow" ? "Workflow execution" : "—";
+}
+
+function RunLogsView({
+  token,
+  onOpenChat,
+}: {
+  token: string;
+  onOpenChat: (target: ChatTarget) => void;
+}) {
+  const queryClient = useQueryClient();
+  const [filter, setFilter] = useState<string>("all");
+  const [query, setQuery] = useState("");
+  const [inspectRun, setInspectRun] = useState<Run | null>(null);
+
+  const runsQuery = useQuery({
+    queryKey: ["all-executions-runs"],
+    queryFn: () => builderApi.listRuns(token, { limit: 100 }),
+    enabled: !!token,
+    refetchInterval: 10000,
+  });
+
+  const runs = runsQuery.data ?? [];
+  const needle = query.trim().toLowerCase();
+  const filtered = runs.filter((r) => {
+    if (filter !== "all" && r.status !== filter) return false;
+    if (!needle) return true;
+    return (
+      (r.name && r.name.toLowerCase().includes(needle)) ||
+      (r.input?.text && r.input.text.toLowerCase().includes(needle)) ||
+      (r.error && r.error.toLowerCase().includes(needle)) ||
+      r.id.toLowerCase().includes(needle)
+    );
+  });
+
+  const cancelRun = async (id: string) => {
+    try {
+      await builderApi.cancelRun(token, id);
+      void queryClient.invalidateQueries({ queryKey: ["all-executions-runs"] });
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const statusCounts = useMemo(() => {
+    const counts: Record<string, number> = { all: runs.length };
+    for (const r of runs) counts[r.status] = (counts[r.status] ?? 0) + 1;
+    return counts;
+  }, [runs]);
+
+  return (
+    <div className="space-y-4">
+      {/* Controls row */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="relative min-w-0 flex-1 sm:max-w-sm">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+          <Input
+            className="pl-9 text-xs"
+            placeholder="Search runs by prompt, target, or ID…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void runsQuery.refetch()}
+            disabled={runsQuery.isRefetching}
+            className="inline-flex h-9 items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.03] px-3 text-xs font-medium text-zinc-300 hover:bg-white/[0.06] hover:text-white cursor-pointer transition-colors"
+            title="Refresh runs"
+          >
+            <RefreshCw className={cn("h-3.5 w-3.5", runsQuery.isRefetching && "animate-spin")} />
+            <span>Refresh</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Filter Chips */}
+      <div className="no-scrollbar -mx-4 flex items-center gap-1 overflow-x-auto px-4 sm:mx-0 sm:px-0" role="tablist">
+        {(["all", "succeeded", "failed", "running", "waiting", "cancelled"] as const).map((st) => {
+          const count = statusCounts[st] ?? 0;
+          if (st !== "all" && count === 0) return null;
+          return (
+            <button
+              key={st}
+              type="button"
+              role="tab"
+              aria-selected={filter === st}
+              onClick={() => setFilter(st)}
+              className={cn(
+                "inline-flex shrink-0 items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer capitalize",
+                filter === st ? "bg-white/[0.1] text-white shadow-xs" : "text-zinc-400 hover:bg-white/[0.04] hover:text-zinc-200"
+              )}
+            >
+              <span>{st === "all" ? "All Runs" : st}</span>
+              <span className="tabular-nums text-zinc-400">({count})</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Table / Empty State */}
+      {runsQuery.isLoading ? (
+        <div className="flex justify-center py-16"><Spinner className="h-6 w-6 text-zinc-400" /></div>
+      ) : filtered.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-white/10 bg-white/[0.02] px-4 py-12 text-center text-sm text-zinc-400">
+          {runs.length === 0 ? "No execution runs recorded yet. Chat with an agent to start a run." : `No runs match filter "${filter}".`}
+        </div>
+      ) : (
+        <div className="overflow-hidden rounded-lg border border-white/10 bg-[var(--surface)] shadow-xs">
+          <div className="w-full overflow-hidden">
+            <table className="w-full table-fixed text-left text-xs">
+              <thead className="border-b border-white/10 bg-white/[0.02] text-zinc-400 font-medium">
+                <tr>
+                  <th className="w-28 px-3.5 py-2.5">Status</th>
+                  <th className="w-40 sm:w-48 px-3.5 py-2.5">Target</th>
+                  <th className="px-3.5 py-2.5">Input / Query</th>
+                  <th className="hidden w-20 px-3.5 py-2.5 sm:table-cell">Duration</th>
+                  <th className="hidden w-20 px-3.5 py-2.5 lg:table-cell">Cost</th>
+                  <th className="hidden w-24 px-3.5 py-2.5 md:table-cell">Triggered</th>
+                  <th className="w-32 sm:w-36 px-3.5 py-2.5 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {filtered.map((r) => {
+                  const meta = RUN_STATUS[r.status] ?? RUN_STATUS.queued;
+                  const targetId = r.kind === "workflow" ? r.workflow_id : r.agent_id;
+                  const targetName = r.name || (r.kind === "workflow" ? "Workflow" : "Agent");
+                  const isPending = r.status === "running" || r.status === "waiting";
+                  return (
+                    <tr key={r.id} className="group transition-colors hover:bg-white/[0.04]">
+                      <td className="w-28 whitespace-nowrap px-3.5 py-3 align-middle">
+                        <span className={cn("inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium", meta.pill)}>
+                          <meta.Icon className="h-3 w-3 shrink-0" />
+                          <span>{meta.label}</span>
+                        </span>
+                      </td>
+                      <td className="w-40 sm:w-48 px-3.5 py-3 align-middle font-medium text-zinc-200 group-hover:text-white">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <TypeIcon kind={r.kind} />
+                          <span className="truncate">{targetName}</span>
+                        </div>
+                      </td>
+                      <td className="px-3.5 py-3 align-middle text-zinc-400 group-hover:text-zinc-200">
+                        <div className="truncate" title={r.input?.text || ""}>
+                          {runInputText(r)}
+                        </div>
+                      </td>
+                      <td className="hidden w-20 whitespace-nowrap px-3.5 py-3 align-middle tabular-nums text-zinc-400 group-hover:text-zinc-200 sm:table-cell">
+                        {runDuration(r)}
+                      </td>
+                      <td className="hidden w-20 whitespace-nowrap px-3.5 py-3 align-middle tabular-nums text-zinc-400 group-hover:text-zinc-200 lg:table-cell">
+                        {r.cost_usd != null ? `$${r.cost_usd.toFixed(4)}` : "—"}
+                      </td>
+                      <td className="hidden w-24 whitespace-nowrap px-3.5 py-3 align-middle text-zinc-400 group-hover:text-zinc-200 md:table-cell">
+                        {ago(r.created_at)}
+                      </td>
+                      <td className="w-32 sm:w-36 whitespace-nowrap px-3.5 py-3 align-middle text-right">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setInspectRun(r)}
+                            className="inline-flex h-7 items-center gap-1 rounded-md border border-white/10 bg-white/[0.04] px-2 text-xs font-medium text-zinc-300 hover:bg-white/[0.08] hover:text-white cursor-pointer transition-colors"
+                            title="Inspect Run"
+                          >
+                            <Eye className="h-3 w-3" /> Inspect
+                          </button>
+                          {targetId && (
+                            <button
+                              type="button"
+                              onClick={() => onOpenChat({ kind: r.kind, id: targetId })}
+                              className="inline-flex h-7 items-center gap-1 rounded-md border border-indigo-500/30 bg-indigo-500/10 px-2 text-xs font-medium text-indigo-300 hover:bg-indigo-500/20 hover:text-indigo-200 cursor-pointer transition-colors"
+                              title="Open in Chat"
+                            >
+                              <MessageSquare className="h-3 w-3" /> Chat
+                            </button>
+                          )}
+                          {isPending && (
+                            <button
+                              type="button"
+                              onClick={() => cancelRun(r.id)}
+                              className="inline-flex h-7 items-center rounded-md border border-red-500/30 bg-red-500/10 px-2 text-xs font-medium text-red-400 hover:bg-red-500/20 cursor-pointer transition-colors"
+                              title="Cancel Run"
+                            >
+                              Cancel
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {inspectRun && (
+        <InspectRunDialog run={inspectRun} onClose={() => setInspectRun(null)} />
+      )}
+    </div>
+  );
+}
+
+function InspectRunDialog({ run, onClose }: { run: Run; onClose: () => void }) {
+  const meta = RUN_STATUS[run.status] ?? RUN_STATUS.queued;
+  const targetName = run.name || (run.kind === "workflow" ? "Workflow" : "Agent");
+  return (
+    <Dialog title={`Run Trace: ${targetName}`} onClose={onClose}>
+      <div className="space-y-4 text-xs">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
+          <div className="flex items-center gap-2">
+            <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium", meta.pill)}>
+              <meta.Icon className="h-3 w-3" /> {meta.label}
+            </span>
+            <span className="font-mono text-zinc-400">ID: {run.id.slice(0, 8)}…</span>
+          </div>
+          <span className="text-zinc-400 tabular-nums">Duration: {runDuration(run)}</span>
+        </div>
+
+        {run.error && (
+          <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-red-300">
+            <p className="font-semibold">Error Message:</p>
+            <p className="mt-1 font-mono">{run.error}</p>
+          </div>
+        )}
+
+        <div>
+          <p className="font-semibold text-zinc-200">Input / Prompt:</p>
+          <div className="mt-1 max-h-32 overflow-y-auto rounded-md border border-white/10 bg-white/[0.03] p-2.5 font-mono text-zinc-300">
+            {run.input?.text || JSON.stringify(run.input, null, 2)}
+          </div>
+        </div>
+
+        {(run.output_text || run.output?.text) && (
+          <div>
+            <p className="font-semibold text-zinc-200">Output Response:</p>
+            <div className="mt-1 max-h-48 overflow-y-auto rounded-md border border-white/10 bg-white/[0.03] p-2.5 text-zinc-300 whitespace-pre-wrap">
+              {run.output_text || run.output?.text}
+            </div>
+          </div>
+        )}
+
+        {run.tool_calls && run.tool_calls.length > 0 && (
+          <div>
+            <p className="font-semibold text-zinc-200">Tool Calls ({run.tool_calls.length}):</p>
+            <ul className="mt-1 space-y-1.5">
+              {run.tool_calls.map((tc, idx) => (
+                <li key={idx} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-xs">
+                  <div className="flex items-center justify-between font-mono font-medium text-zinc-200">
+                    <span>{tc.tool_name}</span>
+                    <span className="text-[11px] text-zinc-400">{tc.duration_ms ? `${tc.duration_ms}ms` : ""}</span>
+                  </div>
+                  {tc.result_preview && (
+                    <p className="mt-1 truncate font-mono text-[11px] text-zinc-400">{tc.result_preview}</p>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <div className="flex items-center justify-between border-t border-white/10 pt-3 text-zinc-400">
+          <span>Tokens: {((run.prompt_tokens ?? 0) + (run.completion_tokens ?? 0)).toLocaleString()}</span>
+          <span>Cost: {run.cost_usd != null ? `$${run.cost_usd.toFixed(4)}` : "—"}</span>
+        </div>
+      </div>
+    </Dialog>
   );
 }

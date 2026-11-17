@@ -57,7 +57,7 @@ export default function UserAgentsPage() {
 
   if (editing) {
     return (
-      <ProtectedDashboard path="/user" title="AI Compiler" description="Build and test an agent or workflow" fullBleed>
+      <ProtectedDashboard path="/user" title="Editor" description="Build and test an agent or workflow" fullBleed>
         {editing.kind === "workflow" ? (
           <WorkflowEditor key={editing.id} id={editing.id} onBack={closeEditor} onExit={closeEditor} onOpen={openEditor} onSwitch={(workflowId) => openEditor({ kind: "workflow", id: workflowId })} />
         ) : (
@@ -69,7 +69,7 @@ export default function UserAgentsPage() {
   }
 
   return (
-    <ProtectedDashboard path="/user" title="AI Compiler" description="Describe an agent or a workflow and it's built for you.">
+    <ProtectedDashboard path="/user" title="Agents & Workflows" description="Build, manage, and run your AI agents and automated workflows.">
       <BuilderHome hasAnyConnectedServer={hasAnyConnectedServer} onOpen={openEditor} />
       <AgentWizardHost onOpen={openEditor} />
     </ProtectedDashboard>

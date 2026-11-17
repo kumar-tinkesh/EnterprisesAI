@@ -87,7 +87,11 @@ function Connectors() {
 
   const shown = servers
     .filter((s) => {
-      if (category !== "All" && !CATEGORIES[category]?.includes(connectorKey(s.name) ?? "")) return false;
+      if (category === "Connected") {
+        if (!s.connected) return false;
+      } else if (category !== "All" && !CATEGORIES[category]?.includes(connectorKey(s.name) ?? "")) {
+        return false;
+      }
       const q = query.trim().toLowerCase();
       const app = appLabel(s.name, s.description);
       return !q || [s.name, s.description ?? "", app.title, app.blurb].some((t) => t.toLowerCase().includes(q));
@@ -140,7 +144,7 @@ function Connectors() {
         </div>
         {/* One row that scrolls sideways on a phone instead of wrapping into a block. */}
         <div className="no-scrollbar -mx-4 flex gap-1 overflow-x-auto px-4 sm:mx-0 sm:flex-wrap sm:px-0" role="tablist" aria-label="Category">
-          {["All", ...Object.keys(CATEGORIES)].map((c) => (
+          {["All", "Connected", ...Object.keys(CATEGORIES)].map((c) => (
             <button
               key={c}
               type="button"
@@ -152,7 +156,7 @@ function Connectors() {
                 category === c ? "bg-zinc-100 text-zinc-900" : "text-zinc-500 hover:bg-zinc-50 hover:text-zinc-900",
               )}
             >
-              {c}
+              {c === "Connected" ? `Connected (${connected.length})` : c}
             </button>
           ))}
         </div>
