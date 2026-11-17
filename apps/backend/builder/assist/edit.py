@@ -48,6 +48,35 @@ def _s(value: Any) -> str:
     return str(value).strip() if value is not None else ""
 
 
+# Keys the model sometimes wraps a step's fields in ({"op":"add_node","type":"agent","agent":{"name":..}})
+# instead of putting them on the op itself.
+_WRAPPERS = ("agent", "draft_agent", "fields", "node", "tool", "data", "config_fields")
+
+
+def normalize_ops(ops: list) -> list:
+    """Hoist fields the model nested under a wrapper key onto the op itself.
+
+    Without this an agent step's name/role/goal are never read and every new
+    agent falls back to the placeholder name "Assistant"."""
+    out = []
+    for op in ops:
+        if isinstance(op, dict) and op.get("op") in ("add_node", "replace_agent", "set_tool", "update_node"):
+            flat = dict(op)
+            for key in _WRAPPERS:
+                inner = flat.get(key)
+                if isinstance(inner, dict):
+                    del flat[key]
+                    for k, v in inner.items():
+                        if k not in ("op", "id") and (k not in flat or flat[k] in (None, "")):
+                            flat[k] = v
+            # "label" is the step's title: a fair name for an agent step that has none.
+            if flat.get("type") == "agent" and not _s(flat.get("name")) and _s(flat.get("label")):
+                flat["name"] = flat["label"]
+            op = flat
+        out.append(op)
+    return out
+
+
 @dataclass
 class Resolved:
     """What pass 1 worked out, by op index."""
@@ -371,4 +400,4 @@ class Editor:
             handlers[op["op"]](index, op)
 
 
-__all__ = ["EditError", "Editor", "Resolved", "resolve"]
+__all__ = ["EditError", "Editor", "Resolved", "normalize_ops", "resolve"]

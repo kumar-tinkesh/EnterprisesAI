@@ -27,7 +27,7 @@ from src.db.session import get_db
 from builder.api.v1.deps import get_end_user
 from builder.assist import prompts
 from builder.assist.drafts import X_GAP, draft_agent, draft_workflow
-from builder.assist.edit import Editor, EditError, resolve
+from builder.assist.edit import Editor, EditError, normalize_ops, resolve
 from builder.assist.llm import AssistUnavailable, Usage, ask, ask_json
 from builder.assist.tools import search_tools
 from builder.graph.schema import WorkflowConfig, WorkflowEdge, WorkflowNode
@@ -155,7 +155,7 @@ async def assist_workflow_edit(payload: EditRequest, user: CurrentUser = Depends
         editor = None
         error: str | None = None
         for attempt in range(2):
-            ops = answer.get("ops") if isinstance(answer.get("ops"), list) else []
+            ops = normalize_ops(answer.get("ops") if isinstance(answer.get("ops"), list) else [])
             resolved = await resolve(db, user, ops, payload.nodes, agents, usage, payload.name)
             editor = Editor(payload.name, payload.nodes, payload.edges, payload.config, resolved, timezone=payload.timezone)
             try:

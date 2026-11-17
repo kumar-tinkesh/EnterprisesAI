@@ -173,6 +173,8 @@ invent unrelated capabilities. Return ONLY the improved text, no preamble, no qu
 
 EDIT_OPS_DOC = """Operations (each an object with an "op" key):
 - {"op":"add_node","id":"new1","type":"agent|tool|human_approval|condition|output|join", ...fields}
+    Put the fields directly on the op object, never nested (no "agent": {...} wrapper), e.g.
+    {"op":"add_node","id":"new1","type":"agent","name":"Email Writer","role":"Email writer","goal":..,"instructions":..,"needs":"","after":"a"}
     agent: "name","role","goal","instructions" (all four) and "needs" (one sentence, "" if none)
     tool: "label" and "need" (the ONE action it performs)    human_approval: "approval_message"
     join: "join_policy" {"mode":"all"|"any"|"count","min_required":<n>}

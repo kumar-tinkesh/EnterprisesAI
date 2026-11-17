@@ -315,6 +315,21 @@ async def test_edit_adds_a_step_in_place(tenant_client, llm, catalog):
     assert next(n for n in out["nodes"] if n["id"] == "a") == next(n for n in wf["nodes"] if n["id"] == "a")
 
 
+async def test_edit_reads_an_agent_the_model_nested_under_a_key(tenant_client, llm, catalog):
+    # Real model output: the agent's fields wrapped in "agent": {...}. They used to be
+    # ignored, so every added agent came out as the placeholder "Assistant".
+    wf, _ = await _saved_flow(tenant_client)
+    llm.on("You are editing an EXISTING AI workflow", {
+        "summary": "Added a summarizer.", "answer": None,
+        "ops": [{"op": "add_node", "id": "new1", "type": "agent", "after": "a", "before": "out",
+                 "agent": {"name": "Summarizer", "role": "Summarizer", "goal": "Summarize the draft", "instructions": "Be brief.", "needs": ""}}],
+    })
+    out = (await tenant_client.post("/api/v1/builder/assist/workflow-edit", json={"instruction": "add a summarizer", **{k: wf[k] for k in ("name", "nodes", "edges", "config")}})).json()
+    new = next(n for n in out["nodes"] if n["id"] not in {"in", "a", "out"})
+    assert new["label"] == "Summarizer"
+    assert new["draft_agent"]["goal"] == "Summarize the draft" and new["draft_agent"]["instructions"] == "Be brief."
+
+
 async def test_a_failed_edit_is_repaired_once(tenant_client, llm, catalog):
     wf, _ = await _saved_flow(tenant_client)
     llm.on("Your operations failed", {"summary": "Renamed.", "answer": None, "ops": [{"op": "rename_workflow", "name": "Better"}]})
