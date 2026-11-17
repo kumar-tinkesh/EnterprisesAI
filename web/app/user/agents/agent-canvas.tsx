@@ -125,9 +125,18 @@ export default function BuilderHome({
     builder.createWithAi.mutate({ mode, description: q }, { onSuccess: () => setText("") });
   };
 
+  const isWriting = text.trim().length > 0;
+
   return (
-    <div className="w-full space-y-6 pt-1 pb-10">
-      {!hasAnyConnectedServer && (
+    <div
+      className={cn(
+        "w-full transition-all duration-300 ease-in-out",
+        isWriting
+          ? "mx-auto flex min-h-[62dvh] max-w-2xl flex-col justify-center py-6"
+          : "space-y-6 pt-1 pb-10"
+      )}
+    >
+      {!hasAnyConnectedServer && !isWriting && (
         <div className="flex flex-wrap items-center gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-xs text-zinc-300">
           <Plug className="h-4 w-4 shrink-0 text-amber-400" />
           <p className="min-w-0 flex-1">Connect an app first — agents and workflows work through them.</p>
@@ -140,17 +149,29 @@ export default function BuilderHome({
         </div>
       )}
 
-      {/* Top AI Command Bar: Compact & Non-Intrusive */}
-      <section className="relative">
+      {/* Focused Mode Header (appears only while writing) */}
+      {isWriting && (
+        <div className="mb-4 text-center transition-all duration-300">
+          <h2 className="text-xl font-semibold text-zinc-100">Describe your {mode}</h2>
+          <p className="mt-1 text-xs text-zinc-400">
+            {mode === "agent"
+              ? "AI will configure its identity, tools, and abilities step-by-step"
+              : "AI will design the multi-step canvas and connect tools"}
+          </p>
+        </div>
+      )}
+
+      {/* AI Command Bar: Centered when writing, at top when idle */}
+      <section className={cn("relative transition-all duration-300", !isWriting && "w-full")}>
         <form
           onSubmit={(e) => {
             e.preventDefault();
             submit();
           }}
           className={cn(
-            "rounded-2xl border border-[var(--border-strong)] bg-[var(--surface)] p-3 shadow-xs transition-all duration-200",
+            "rounded-2xl border border-[var(--border-strong)] bg-[var(--surface)] p-3.5 shadow-xs transition-all duration-200",
             isFocused || text.length > 0
-              ? "border-[var(--accent-hover)] shadow-[0_0_24px_rgba(99,102,241,0.12)]"
+              ? "border-[var(--accent-hover)] shadow-[0_0_28px_rgba(99,102,241,0.18)]"
               : "hover:border-white/20"
           )}
         >
@@ -233,7 +254,10 @@ export default function BuilderHome({
               onBlur={() => setIsFocused(false)}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  setText("");
+                } else if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault();
                   submit();
                 }
@@ -255,6 +279,18 @@ export default function BuilderHome({
             </p>
 
             <div className="flex shrink-0 items-center gap-2">
+              {isWriting && (
+                <button
+                  type="button"
+                  onClick={() => setText("")}
+                  className="inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-xs text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-200 cursor-pointer transition-colors"
+                  title="Clear and return to dashboard (Esc)"
+                >
+                  <X className="h-3.5 w-3.5" />
+                  <span>Cancel</span>
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={() => improve.mutate()}
@@ -295,8 +331,8 @@ export default function BuilderHome({
         )}
       </section>
 
-      {/* Main Workspace Dashboard: Unified Library & Templates */}
-      <AgentLibrary onOpen={onOpen} />
+      {/* Main Workspace Dashboard: Unified Library & Templates (Hidden while writing) */}
+      {!isWriting && <AgentLibrary onOpen={onOpen} />}
     </div>
   );
 }
