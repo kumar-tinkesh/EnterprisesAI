@@ -1,145 +1,531 @@
 "use client";
 
-import {
-  Rocket,
-  Bot,
-  Brain,
-  FolderKanban,
-  Zap,
-  ArrowRight,
-} from "lucide-react";
+import Link from "next/link";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowRight, CheckCircle2, ChevronDown, ChevronRight, Circle, Clock, Loader2, MessageSquare, Network, Plus, ShieldAlert, XCircle } from "lucide-react";
 
 import ProtectedDashboard from "@/components/protected-dashboard";
+import { ApprovalCard } from "@/components/builder/approval-card";
+import { DailyBars } from "@/components/charts/daily-bars";
+import { SpendAlert, SpendPanel, useSpend } from "@/components/builder/spend-panel";
+import { Stat, Stats, type Delta } from "@/components/ui/stats";
+import { Menu } from "@/components/ui/menu";
+import { builderApi } from "@/lib/builder/api";
+import { vendorApi } from "@/lib/api";
+import type { Approval, InsightsWindow, Run, RunStatus } from "@/lib/builder/types";
 import { useAuthStore } from "@/stores/auth-store";
+import { cn } from "@/lib/utils";
 
-const QUICK_ACTIONS = [
-  {
-    icon: Bot,
-    title: "Agent Builder",
-    desc: "Create and configure AI agents with custom prompts, tools, and knowledge bases.",
-    color: "#6366f1",
-    bg: "#eef2ff",
-  },
-  {
-    icon: Brain,
-    title: "Knowledge Base",
-    desc: "Upload documents, connect data sources, and build RAG pipelines.",
-    color: "#8b5cf6",
-    bg: "#f5f3ff",
-  },
-  {
-    icon: FolderKanban,
-    title: "Projects",
-    desc: "Organise agents into projects with shared context and workflows.",
-    color: "#0ea5e9",
-    bg: "#f0f9ff",
-  },
-  {
-    icon: Zap,
-    title: "Executions",
-    desc: "Monitor agent runs, view logs, and inspect tool-call traces.",
-    color: "#f59e0b",
-    bg: "#fffbeb",
-  },
-];
+const WINDOW = 7;
+
+/** Executions with this agent/workflow's chat open (and its editor, with ``edit``). */
+const chatHref = (kind: "agent" | "workflow", id: string, edit = false) =>
+  `/user/executions?chat=${kind}:${encodeURIComponent(id)}${edit ? "&edit=1" : "&tab=chat"}`;
+
+function runHref(run: Run): string {
+  const id = run.kind === "workflow" ? run.workflow_id : run.agent_id;
+  return id ? chatHref(run.kind, id) : "/user/executions";
+}
+
+/** What a run was asked: its text, else its file, else that it ran on its inputs. */
+function asked(run: Run): string {
+  if (run.input?.text?.trim()) return run.input.text;
+  const file = run.input?.attachments?.[0]?.filename;
+  if (file) return `📎 ${file}`;
+  return run.kind === "workflow" ? "Ran with its inputs" : "—";
+}
+
+/** Waiting longer than this: almost surely forgotten — folded away, with a way to cancel it. */
+const OLD_WAIT_DAYS = 7;
+
+/** Pending decisions, one line per agent/workflow (its runs and decisions counted), newest first. */
+type WaitGroup = { key: string; name: string; href: string | null; approvals: Approval[]; runIds: string[]; newest: string };
+
+function groupWaits(pending: Approval[]): WaitGroup[] {
+  const groups = new Map<string, WaitGroup>();
+  for (const a of pending) {
+    // Someone's request through a share link isn't in a chat of yours: it's decided right here.
+    const target = a.run && !a.caller ? (a.run.kind === "workflow" ? a.run.workflow_id : a.run.agent_id) : null;
+    const key = a.run && target ? `${a.run.kind}:${target}` : `run:${a.run_id}`;
+    const g = groups.get(key) ?? {
+      key,
+      name: a.run?.name || "A run",
+      href: a.run && target ? chatHref(a.run.kind, target) : null,
+      approvals: [],
+      runIds: [],
+      newest: a.created_at,
+    };
+    g.approvals.push(a);
+    if (!g.runIds.includes(a.run_id)) g.runIds.push(a.run_id);
+    if (a.created_at > g.newest) g.newest = a.created_at;
+    groups.set(key, g);
+  }
+  return [...groups.values()].sort((x, y) => y.newest.localeCompare(x.newest));
+}
+
+const isOld = (iso: string) => Date.now() - new Date(iso).getTime() > OLD_WAIT_DAYS * 86400000;
+
+function greeting(): string {
+  const h = new Date().getHours();
+  return h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
+}
+
+const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+function ago(iso: string): string {
+  const s = Math.round((new Date(iso).getTime() - Date.now()) / 1000);
+  const abs = Math.abs(s);
+  if (abs < 60) return rtf.format(s, "second");
+  if (abs < 3600) return rtf.format(Math.round(s / 60), "minute");
+  if (abs < 86400) return rtf.format(Math.round(s / 3600), "hour");
+  return rtf.format(Math.round(s / 86400), "day");
+}
+
+const ms = (n: number) => (n >= 60000 ? `${Math.round(n / 60000)} min` : n >= 1000 ? `${(n / 1000).toFixed(1)} s` : `${n} ms`);
+
+function duration(run: Run): string | null {
+  if (!run.started_at || !run.finished_at) return null;
+  return ms(new Date(run.finished_at).getTime() - new Date(run.started_at).getTime());
+}
+
+const STATUS: Record<RunStatus, { label: string; Icon: typeof CheckCircle2; className: string }> = {
+  succeeded: { label: "Succeeded", Icon: CheckCircle2, className: "text-emerald-400" },
+  failed: { label: "Failed", Icon: XCircle, className: "text-red-400" },
+  running: { label: "Running", Icon: Loader2, className: "text-indigo-400 animate-spin" },
+  queued: { label: "Queued", Icon: Clock, className: "text-zinc-400" },
+  waiting: { label: "Waiting", Icon: ShieldAlert, className: "text-amber-400" },
+  cancelled: { label: "Cancelled", Icon: XCircle, className: "text-zinc-400" },
+};
+
+function pctDelta(cur: number, prev: number, higherIsBetter: boolean): Delta {
+  if (!prev) return null;
+  const change = (cur - prev) / prev;
+  if (Math.abs(change) < 0.005) return { text: "0%", up: true, good: true };
+  return { text: `${Math.round(Math.abs(change) * 100)}%`, up: change > 0, good: change > 0 === higherIsBetter };
+}
+
+function ptsDelta(cur: InsightsWindow, prev: InsightsWindow): Delta {
+  if (!prev.runs || !cur.runs) return null;
+  const pts = (cur.success_rate - prev.success_rate) * 100;
+  return { text: `${Math.abs(pts).toFixed(1)} pts`, up: pts >= 0, good: pts >= 0 };
+}
 
 export default function UserDashboard() {
-  const user = useAuthStore((s) => s.user);
-  const displayName = user?.full_name || "there";
-
   return (
-    <ProtectedDashboard
-      path="/user"
-      title="My Workspace"
-      description="Your AI workspace — build, deploy, and run agents."
-    >
-      {/* Hero banner */}
-      <div
-        className="mt-6 rounded-xl p-6"
-        style={{
-          background:
-            "linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #a78bfa 100%)",
-        }}
-      >
-        <div className="flex items-center gap-3 text-white">
-          <Rocket className="h-7 w-7" />
-          <div>
-            <h2 className="text-lg font-bold">Welcome, {displayName}!</h2>
-            <p className="mt-0.5 text-sm text-indigo-100">
-              Everything you need to build AI agents — all in one place.
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {/* Quick-action cards */}
-      <div className="mt-6 grid gap-4 sm:grid-cols-2">
-        {QUICK_ACTIONS.map((a) => (
-          <button
-            key={a.title}
-            className="group rounded-xl border border-zinc-200 bg-white p-5 text-left transition-all hover:shadow-md hover:-translate-y-0.5"
-            style={{ borderColor: "transparent" }}
-            onMouseEnter={(e) =>
-              (e.currentTarget.style.borderColor = a.color + "40")
-            }
-            onMouseLeave={(e) =>
-              (e.currentTarget.style.borderColor = "transparent")
-            }
-          >
-            <div className="flex items-start gap-4">
-              <div
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
-                style={{ backgroundColor: a.bg }}
-              >
-                <a.icon className="h-5 w-5" style={{ color: a.color }} />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center justify-between">
-                  <h3 className="font-semibold text-zinc-900">{a.title}</h3>
-                  <ArrowRight className="h-4 w-4 text-zinc-300 transition-transform group-hover:translate-x-1 group-hover:text-zinc-500" />
-                </div>
-                <p className="mt-1 text-sm leading-relaxed text-zinc-500">
-                  {a.desc}
-                </p>
-              </div>
-            </div>
-          </button>
-        ))}
-      </div>
-
-      {/* Stats */}
-      <div className="mt-6 grid gap-4 sm:grid-cols-3">
-        <StatCard label="Agents" value="0" accent="#6366f1" />
-        <StatCard label="Executions today" value="0" accent="#0ea5e9" />
-        <StatCard label="Knowledge docs" value="0" accent="#8b5cf6" />
-      </div>
-
-      {/* Activity feed */}
-      <div className="mt-6 rounded-xl border border-zinc-200 bg-white p-6">
-        <h2 className="text-lg font-semibold text-zinc-900">Recent activity</h2>
-        <p className="mt-2 text-sm text-zinc-400">
-          No activity yet — create your first agent to get started.
-        </p>
-      </div>
+    <ProtectedDashboard path="/user" title="Dashboard" description="Your AI workspace — build, deploy, and run agents." fullBleed>
+      <Dashboard />
     </ProtectedDashboard>
   );
 }
 
-function StatCard({
-  label,
-  value,
-  accent,
-}: {
-  label: string;
-  value: string;
-  accent: string;
-}) {
+function Dashboard() {
+  const router = useRouter();
+  const token = useAuthStore((s) => s.accessToken) || "";
+  const user = useAuthStore((s) => s.user);
+  const firstName = (user?.full_name || "").split(" ")[0] || "there";
+
+  const insights = useQuery({ queryKey: ["insights", WINDOW], queryFn: () => builderApi.insights(token, WINDOW), enabled: !!token, refetchInterval: 30000 });
+  const agents = useQuery({ queryKey: ["builder-agents"], queryFn: () => builderApi.listAgents(token), enabled: !!token });
+  const workflows = useQuery({ queryKey: ["builder-workflows"], queryFn: () => builderApi.listWorkflows(token), enabled: !!token });
+  const runs = useQuery({ queryKey: ["dashboard-runs"], queryFn: () => builderApi.listRuns(token, { limit: 50 }), enabled: !!token, refetchInterval: 15000 });
+  const approvals = useQuery({ queryKey: ["builder-approvals"], queryFn: () => builderApi.listApprovals(token), enabled: !!token, refetchInterval: 15000 });
+  const catalog = useQuery({ queryKey: ["catalog", token, ""], queryFn: () => vendorApi.getCatalog(token), enabled: !!token });
+  const spend = useSpend(token);
+  const spendAlert = !!spend.data && spend.data.status !== "ok";
+
+  const ins = insights.data;
+  const agentList = agents.data ?? [];
+  const workflowList = workflows.data ?? [];
+  const runList = runs.data ?? [];
+  const servers = catalog.data?.servers ?? [];
+  const connected = servers.filter((s) => s.connected).length;
+  const pending = approvals.data ?? [];
+  const waits = groupWaits(pending);
+  const fresh = waits.filter((g) => !isOld(g.newest));
+  const stale = waits.filter((g) => isOld(g.newest));
+  const failedRecently = runList.filter((r) => r.status === "failed" && Date.now() - new Date(r.created_at).getTime() < 86400000).slice(0, 3);
+
+  const projects = [
+    ...agentList.map((a) => ({ kind: "agent" as const, id: a.id, name: a.name, updated: a.updated_at })),
+    ...workflowList.map((w) => ({ kind: "workflow" as const, id: w.id, name: w.name, updated: w.updated_at })),
+  ].sort((a, b) => b.updated.localeCompare(a.updated));
+
+  const setupLoaded = agents.isSuccess && workflows.isSuccess && insights.isSuccess && catalog.isSuccess;
+  const steps = [
+    { done: connected > 0, title: "Connect an app", desc: "Gmail, Slack, a search tool… your agents work through them.", href: "/user/connectors", cta: "Connect" },
+    { done: projects.length > 0, title: "Build your first agent", desc: "Describe what it should do and the AI sets it up.", href: "/user/agents", cta: "Build" },
+    { done: (ins?.all_time.runs ?? 0) > 0, title: "Run it", desc: "Chat with it and watch every tool it uses.", href: "/user/executions", cta: "Open" },
+  ];
+  const setupLeft = setupLoaded && steps.some((s) => !s.done);
+  // Never run anything: numbers, a chart and lists would all be empty — Get started says it all.
+  const noRuns = !!ins && ins.all_time.runs === 0 && runs.isSuccess && runList.length === 0;
+
+  const cur = ins?.current;
+  const prev = ins?.previous;
+  const chartDays = (ins?.series ?? []).map((d) => ({ date: d.date, good: d.succeeded, bad: d.failed }));
+
   return (
-    <div className="rounded-xl border border-zinc-200 bg-white p-5">
-      <p className="text-sm font-medium text-zinc-500">{label}</p>
-      <p className="mt-1 text-3xl font-bold" style={{ color: accent }}>
-        {value}
-      </p>
+    <section className="mx-auto max-w-6xl space-y-8 px-4 py-6 sm:px-8 sm:py-8">
+      {/* Greeting */}
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div className="min-w-0">
+          <h1 className="text-xl font-semibold text-zinc-900">
+            {greeting()}, {firstName}
+          </h1>
+          <p className="mt-1 text-sm text-zinc-500">
+            {new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {projects.length > 0 ? (
+            <Menu
+              label="Chat with an agent"
+              trigger={
+                <>
+                  <MessageSquare className="h-4 w-4" /> Chat <ChevronDown className="h-3.5 w-3.5 opacity-60" />
+                </>
+              }
+              triggerClassName="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border-strong)] px-3 text-sm font-medium text-zinc-900 hover:bg-zinc-50 cursor-pointer"
+              items={[
+                ...projects.slice(0, 6).map((p) => ({
+                  label: `💬 ${p.name}`,
+                  onClick: () => router.push(chatHref(p.kind, p.id)),
+                })),
+                {
+                  label: "Browse all in Executions…",
+                  onClick: () => router.push("/user/executions?view=inspector"),
+                },
+              ]}
+            />
+          ) : (
+            <Link href="/user/executions" className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border-strong)] px-3 text-sm font-medium text-zinc-900 hover:bg-zinc-50">
+              <MessageSquare className="h-4 w-4" /> Chat
+            </Link>
+          )}
+          <Link href="/user/agents" className="inline-flex h-9 items-center gap-2 rounded-md bg-[var(--accent)] px-3 text-sm font-medium text-white hover:bg-[var(--accent-hover)]">
+            <Plus className="h-4 w-4" /> New agent
+          </Link>
+        </div>
+      </div>
+
+      {/* Getting started */}
+      {setupLeft && (
+        <Panel title="Get started" aside={`${steps.filter((s) => s.done).length} of ${steps.length} done`}>
+          <ol className="divide-y divide-zinc-100">
+            {steps.map((s) => (
+              <li key={s.title} className="flex items-center gap-3 px-4 py-3">
+                {s.done ? <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-700" /> : <Circle className="h-5 w-5 shrink-0 text-zinc-400" />}
+                <div className="min-w-0 flex-1">
+                  <p className={cn("text-sm font-medium", s.done ? "text-zinc-500 line-through" : "text-zinc-900")}>{s.title}</p>
+                  <p className="text-xs text-zinc-500">{s.desc}</p>
+                </div>
+                {!s.done && (
+                  <Link href={s.href} className="inline-flex h-8 shrink-0 items-center rounded-md border border-[var(--border-strong)] px-3 text-sm font-medium text-zinc-900 hover:bg-zinc-50">
+                    {s.cta}
+                  </Link>
+                )}
+              </li>
+            ))}
+          </ol>
+        </Panel>
+      )}
+
+      {/* Needs attention: one line per agent/workflow; the long-forgotten ones folded away */}
+      {(fresh.length > 0 || stale.length > 0 || failedRecently.length > 0 || spendAlert) && (
+        <Panel title="Needs your attention" aside={fresh.length > 4 ? `+ ${fresh.length - 4} more waiting` : undefined}>
+          <ul className="divide-y divide-zinc-100">
+            {spendAlert && spend.data && (
+              <li>
+                <SpendAlert spend={spend.data} />
+              </li>
+            )}
+            {fresh.slice(0, 4).map((g) => {
+              // Not one of theirs to chat with (a share-link / API run): decide here.
+              if (!g.href) {
+                return g.approvals.map((a) => (
+                  <li key={a.id} className="p-3">
+                    <ApprovalCard approval={a} token={token} onDone={() => void approvals.refetch()} />
+                  </li>
+                ));
+              }
+              const a = g.approvals[0];
+              const more = g.approvals.length > 1 ? ` · ${g.approvals.length} decisions${g.runIds.length > 1 ? ` in ${g.runIds.length} runs` : ""}` : "";
+              return (
+                <li key={g.key}>
+                  <Link href={g.href} className="group flex items-center gap-3 px-4 py-3 transition-colors hover:bg-white/[0.04]">
+                    <ShieldAlert className="h-4 w-4 shrink-0 text-amber-400" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium text-zinc-100 group-hover:text-white">{g.name} is waiting for you</span>
+                      <span className="block truncate text-xs text-zinc-400 group-hover:text-zinc-300">
+                        {(a.payload.message || (a.tool_name ? `Approve “${a.payload.tool_name || a.tool_name}”` : "Approve or answer to continue")) + more}
+                      </span>
+                    </span>
+                    <span className="hidden shrink-0 text-xs text-zinc-400 sm:block">{ago(g.newest)}</span>
+                    <span className="shrink-0 text-sm font-medium text-zinc-300 group-hover:text-white">Review</span>
+                  </Link>
+                </li>
+              );
+            })}
+            {failedRecently.map((r) => (
+              <li key={r.id}>
+                <Link href={runHref(r)} className="group flex items-center gap-3 px-4 py-3 transition-colors hover:bg-white/[0.04]">
+                  <XCircle className="h-4 w-4 shrink-0 text-red-400" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium text-zinc-100 group-hover:text-white">{r.name || "A run"} failed {ago(r.created_at)}</span>
+                    <span className="block truncate text-xs text-zinc-400 group-hover:text-zinc-300">{r.error || r.input?.text || "Open the chat to see what happened."}</span>
+                  </span>
+                  <span className="shrink-0 text-sm font-medium text-zinc-300 group-hover:text-white">Open</span>
+                </Link>
+              </li>
+            ))}
+            {stale.length > 0 && (
+              <li>
+                <OldWaits groups={stale} token={token} />
+              </li>
+            )}
+          </ul>
+        </Panel>
+      )}
+
+      {!noRuns && (
+      <>
+      {/* KPIs: this week vs the one before */}
+      <Stats>
+        <Stat label="Runs" loading={!ins} value={cur ? String(cur.runs) : ""} delta={cur && prev ? pctDelta(cur.runs, prev.runs, true) : null} sub={`last ${WINDOW} days, vs the ${WINDOW} before`} />
+        <Stat
+          label="Success rate"
+          loading={!ins}
+          value={cur ? (cur.runs ? `${Math.round(cur.success_rate * 100)}%` : "—") : ""}
+          delta={cur && prev ? ptsDelta(cur, prev) : null}
+          sub={cur?.runs ? `${cur.succeeded} of ${cur.succeeded + cur.failed} finished` : "no runs yet"}
+        />
+        <Stat
+          label="Typical time"
+          loading={!ins}
+          value={cur ? (cur.median_latency_ms ? ms(cur.median_latency_ms) : "—") : ""}
+          delta={cur && prev && cur.median_latency_ms ? pctDelta(cur.median_latency_ms, prev.median_latency_ms, false) : null}
+          sub="a usual run, start to answer"
+        />
+        <Stat
+          label="In use"
+          loading={!ins || agents.isLoading || workflows.isLoading}
+          value={cur ? String(cur.active) : ""}
+          suffix={projects.length ? ` / ${projects.length}` : ""}
+          sub={`agents & workflows run in ${WINDOW} days`}
+          href="/user/executions"
+        />
+      </Stats>
+
+      <div className="grid gap-6 lg:grid-cols-3">
+        <div className="lg:col-span-2">
+          <DailyBars
+            title="Runs"
+            subtitle={`Last ${WINDOW * 2} days`}
+            days={chartDays}
+            goodLabel="Succeeded"
+            badLabel="Failed"
+            empty="No runs yet. Chat with an agent and its runs show up here."
+          />
+        </div>
+
+        <Panel title="Most used" aside={`last ${WINDOW * 2} days`}>
+          {!ins ? (
+            <SkeletonRows />
+          ) : ins.busiest.length === 0 ? (
+            <Empty text="Your most used agents show up here once they've run." />
+          ) : (
+            <ol className="divide-y divide-zinc-100">
+              {ins.busiest.map((b) => {
+                const rate = b.runs ? Math.round((b.succeeded / b.runs) * 100) : 0;
+                const body = (
+                  <>
+                    <span className="min-w-0 flex-1">
+                      <span className={cn("flex items-center gap-1.5 text-sm font-medium", b.exists ? "text-zinc-900" : "text-zinc-500")}>
+                        <span className="truncate">{b.name}</span>
+                        {b.kind === "workflow" && <Network className="h-3.5 w-3.5 shrink-0 text-zinc-400" aria-label="Workflow" />}
+                        {!b.exists && <span className="shrink-0 text-xs font-normal">(deleted)</span>}
+                      </span>
+                      <span className="block text-xs text-zinc-500">{rate}% succeeded</span>
+                    </span>
+                    <span className="shrink-0 text-sm tabular-nums text-zinc-700">{b.runs} runs</span>
+                  </>
+                );
+                return (
+                  <li key={`${b.kind}:${b.id}`}>
+                    {b.exists ? (
+                      <Link href={chatHref(b.kind, b.id)} className="flex items-center gap-3 px-4 py-3 hover:bg-zinc-50" title={`Chat with ${b.name}`}>{body}</Link>
+                    ) : (
+                      <div className="flex items-center gap-3 px-4 py-3">{body}</div>
+                    )}
+                  </li>
+                );
+              })}
+            </ol>
+          )}
+        </Panel>
+      </div>
+
+      <SpendPanel token={token} />
+
+      {/* Recent runs */}
+      <Panel
+        title="Recent runs"
+        aside={
+          <Link href="/user/executions" className="inline-flex items-center gap-1 text-sm font-medium text-zinc-700 hover:text-zinc-900">
+            View all <ArrowRight className="h-3.5 w-3.5" />
+          </Link>
+        }
+      >
+        {runs.isLoading ? (
+          <SkeletonRows />
+        ) : runList.length === 0 ? (
+          <Empty text="No runs yet. Chat with an agent and its runs show up here." />
+        ) : (
+          <ul className="divide-y divide-zinc-100">
+            {runList.slice(0, 7).map((r) => {
+              const st = STATUS[r.status] ?? STATUS.queued;
+              const took = duration(r);
+              const name = r.name || (r.kind === "workflow" ? "Workflow" : "Agent");
+              return (
+                <li key={r.id}>
+                  <Link href={runHref(r)} className="group flex items-center gap-3 px-4 py-3 transition-colors hover:bg-white/[0.04]">
+                    <st.Icon className={cn("h-4 w-4 shrink-0", st.className)} aria-label={st.label} />
+                    <span className="min-w-0 flex-1">
+                      <span className={cn("block truncate text-sm", r.input?.text?.trim() ? "text-zinc-100 group-hover:text-white" : "text-zinc-400")}>{asked(r)}</span>
+                      <span className="block truncate text-xs text-zinc-400 group-hover:text-zinc-300">
+                        {name} · <span className={r.status === "failed" ? "text-red-400" : r.status === "waiting" ? "text-amber-400" : undefined}>{st.label}</span>
+                      </span>
+                    </span>
+                    <span className="hidden w-14 shrink-0 text-right text-xs tabular-nums text-zinc-400 group-hover:text-zinc-200 md:block">{took ?? "—"}</span>
+                    <span className="w-24 shrink-0 text-right text-xs text-zinc-400 group-hover:text-zinc-200">{ago(r.created_at)}</span>
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </Panel>
+      </>
+      )}
+    </section>
+  );
+}
+
+/** Decisions nobody made for over a week: folded, each with a way to stop its runs for good. */
+function OldWaits({ groups, token }: { groups: WaitGroup[]; token: string }) {
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [asking, setAsking] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const cancel = async (g: WaitGroup) => {
+    setBusy(g.key);
+    setError(null);
+    try {
+      for (const id of g.runIds) await builderApi.cancelRun(token, id);
+      await Promise.all(
+        [["builder-approvals"], ["dashboard-runs"], ["insights"], ["builder-overview"]].map((queryKey) => queryClient.invalidateQueries({ queryKey })),
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't cancel it. Try again.");
+    } finally {
+      setBusy(null);
+      setAsking(null);
+    }
+  };
+  const cancelAll = async () => {
+    setBusy("all");
+    setError(null);
+    try {
+      for (const g of groups) {
+        for (const id of g.runIds) await builderApi.cancelRun(token, id);
+      }
+      await Promise.all(
+        [["builder-approvals"], ["dashboard-runs"], ["insights"], ["builder-overview"]].map((queryKey) => queryClient.invalidateQueries({ queryKey })),
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't cancel all.");
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <div>
+      <div className="flex items-center justify-between px-4 py-2.5">
+        <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="flex items-center gap-2 text-left text-xs text-zinc-500 hover:text-zinc-900 cursor-pointer">
+          <ChevronRight className={cn("h-3.5 w-3.5 transition-transform", open && "rotate-90")} />
+          <span>{groups.length} older one{groups.length === 1 ? "" : "s"}, waiting over {OLD_WAIT_DAYS} days</span>
+        </button>
+        <button
+          type="button"
+          disabled={busy !== null}
+          onClick={() => void cancelAll()}
+          className="rounded-md border border-zinc-200 px-2 py-0.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50 cursor-pointer"
+          title="Stop all stale runs"
+        >
+          {busy === "all" ? "Stopping all…" : "Cancel all older"}
+        </button>
+      </div>
+      {open && (
+        <ul className="divide-y divide-zinc-100 border-t border-zinc-100">
+          {groups.map((g) => (
+            <li key={g.key} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 pl-9">
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm text-zinc-700">{g.name}</span>
+                <span className="block truncate text-xs text-zinc-500">
+                  waiting since {ago(g.newest)}{g.runIds.length > 1 ? ` · ${g.runIds.length} runs` : ""}
+                </span>
+              </span>
+              {asking === g.key ? (
+                <span className="flex shrink-0 items-center gap-2 text-xs">
+                  <span className="text-zinc-500">Stop {g.runIds.length === 1 ? "this run" : "these runs"}?</span>
+                  <button type="button" disabled={busy === g.key} onClick={() => void cancel(g)} className="rounded-md px-2 py-1 font-medium text-red-600 hover:bg-zinc-100 disabled:opacity-50 cursor-pointer">
+                    {busy === g.key ? "Stopping…" : "Yes, stop"}
+                  </button>
+                  <button type="button" onClick={() => setAsking(null)} className="rounded-md px-2 py-1 text-zinc-500 hover:bg-zinc-100 cursor-pointer">No</button>
+                </span>
+              ) : (
+                <span className="flex shrink-0 items-center gap-1 text-xs">
+                  {g.href && <Link href={g.href} className="rounded-md px-2 py-1 font-medium text-zinc-700 hover:bg-zinc-100">Review</Link>}
+                  <button type="button" onClick={() => setAsking(g.key)} className="rounded-md px-2 py-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer">Cancel</button>
+                </span>
+              )}
+            </li>
+          ))}
+          {error && <li className="px-4 py-2 pl-9 text-xs text-red-600">{error}</li>}
+        </ul>
+      )}
     </div>
   );
+}
+
+/** A bordered block with a heading row: the dashboard's one container. */
+function Panel({ title, aside, children }: { title: string; aside?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <section className="overflow-hidden rounded-lg border border-zinc-200">
+      <div className="flex items-center justify-between gap-2 border-b border-zinc-100 px-4 py-3">
+        <h2 className="text-base font-semibold text-zinc-900">{title}</h2>
+        {typeof aside === "string" ? <span className="text-xs text-zinc-500">{aside}</span> : aside}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function SkeletonRows() {
+  return (
+    <ul className="divide-y divide-zinc-100" aria-busy="true">
+      {[0, 1, 2].map((i) => (
+        <li key={i} className="space-y-2 px-4 py-3">
+          <div className="h-3 w-1/3 animate-pulse rounded bg-zinc-100" />
+          <div className="h-3 w-2/3 animate-pulse rounded bg-zinc-100" />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function Empty({ text }: { text: string }) {
+  return <p className="px-6 py-10 text-center text-sm text-zinc-500">{text}</p>;
 }

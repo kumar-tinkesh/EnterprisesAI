@@ -1,0 +1,587 @@
+"""Workflow runs end to end: scheduling, every step type, failure policies,
+approvals, loops, crash recovery — against the real demo MCP server.
+
+The model is a routed fake: each request is answered by the route whose
+marker appears in it (an agent's "You are <Name>", a condition prompt, the
+tool-argument prompt, the output compose prompt), because parallel steps make
+the order of requests nondeterministic.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+
+import pytest
+
+from apps.llm_gateway.types import CompletionResponse, TokenUsage
+from builder.tests.test_runs import HANG, demo, get_run, kill, reply, runtime, worker  # noqa: F401  (fixtures)
+
+WF = "/api/v1/builder/workflows"
+
+
+class RoutedGateway:
+    def __init__(self):
+        self.routes: list[list] = []
+        self.requests = []
+        self.hung = asyncio.Event()
+        self.barrier: dict[str, asyncio.Event] = {}
+
+    def when(self, marker: str, *responses):
+        self.routes.append([marker, list(responses)])
+        return self
+
+    def calls(self, marker: str) -> list:
+        return [r for r in self.requests if marker in self._blob(r)]
+
+    @staticmethod
+    def _blob(request) -> str:
+        return "\n".join(m.content or "" for m in request.messages[:2])
+
+    async def complete(self, request, provider=None, fallback=True):
+        self.requests.append(request)
+        blob = self._blob(request)
+        for marker, responses in self.routes:
+            if marker in blob:
+                item = responses.pop(0) if len(responses) > 1 else responses[0]
+                if item is HANG:
+                    self.hung.set()
+                    await asyncio.Event().wait()
+                if callable(item):
+                    item = await item()
+                if isinstance(item, BaseException):
+                    raise item
+                return item if isinstance(item, CompletionResponse) else reply(item)
+        raise AssertionError(f"no route for request: {blob[:300]}")
+
+
+def label(text: str) -> CompletionResponse:
+    return CompletionResponse(content=json.dumps({"label": text}), usage=TokenUsage(3, 2, 5))
+
+
+@pytest.fixture
+def llm(monkeypatch):
+    gw = RoutedGateway()
+    monkeypatch.setattr("builder.agents.runtime._gateway", lambda: gw)
+    return gw
+
+
+async def agent(client, name: str, demo=None, tools: list[str] = (), **config) -> str:
+    body = {"name": name, "role": "assistant", "goal": f"{name} things", "config": {**config}}
+    if tools:
+        body["config"]["tool_ids"] = [f"mcp:{demo.id}:{t}" for t in tools]
+    r = await client.post("/api/v1/builder/agents", json=body)
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+async def workflow(client, nodes: list[dict], edges: list[tuple], **config) -> dict:
+    body = {
+        "name": "Flow",
+        "nodes": nodes,
+        "edges": [{"id": f"e{i}", "source": e[0], "target": e[1], **({"condition": e[2]} if len(e) > 2 else {})} for i, e in enumerate(edges)],
+        "config": config,
+    }
+    r = await client.post(WF, json=body)
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+async def start(client, wf: dict, text: str = "do it", **variables) -> str:
+    r = await client.post(f"{WF}/{wf['id']}/runs", json={"input": text, "variables": variables})
+    assert r.status_code == 202, r.text
+    return r.json()["id"]
+
+
+def nodes_by_id(run: dict) -> dict[str, list[dict]]:
+    out: dict[str, list[dict]] = {}
+    for n in run["nodes"]:
+        out.setdefault(n["node_id"], []).append(n)
+    return out
+
+
+INPUT = {"id": "in", "type": "input"}
+OUTPUT = {"id": "out", "type": "output"}
+
+
+# ── Flow ─────────────────────────────────────────────────────────────────────
+
+
+async def test_linear_workflow(tenant_client, llm, runtime):
+    writer = await agent(tenant_client, "Writer")
+    llm.when("You are Writer", "A short draft about cats.")
+    wf = await workflow(tenant_client, [INPUT, {"id": "w", "type": "agent", "agent_id": writer}, OUTPUT], [("in", "w"), ("w", "out")])
+    run_id = await start(tenant_client, wf, "write about cats")
+    await worker(runtime).drain()
+    run = await get_run(tenant_client, run_id)
+    assert run["status"] == "succeeded", run
+    assert run["output_text"] == "A short draft about cats." and run["output"]["final_node"] == "out"
+    assert {n["node_id"]: n["status"] for n in run["nodes"]} == {"in": "succeeded", "w": "succeeded", "out": "succeeded"}
+    assert run["name"] == "Flow"
+
+
+async def test_parallel_steps_run_together_and_the_output_composes(tenant_client, llm, runtime):
+    alpha, beta = await agent(tenant_client, "Alpha"), await agent(tenant_client, "Beta")
+    both_started = asyncio.Event()
+    started: set[str] = set()
+
+    def gate(name: str, answer: str):
+        async def respond():
+            started.add(name)
+            if len(started) == 2:
+                both_started.set()
+            await asyncio.wait_for(both_started.wait(), 10)  # deadlocks unless both run at once
+            return reply(answer)
+        return respond
+
+    llm.when("You are Alpha", gate("a", "Alpha facts")).when("You are Beta", gate("b", "Beta facts"))
+    llm.when("Several steps of a workflow", "One combined answer.")
+    wf = await workflow(
+        tenant_client,
+        [INPUT, {"id": "a", "type": "agent", "agent_id": alpha}, {"id": "b", "type": "agent", "agent_id": beta}, OUTPUT],
+        [("in", "a"), ("in", "b"), ("a", "out"), ("b", "out")],
+    )
+    run_id = await start(tenant_client, wf)
+    await worker(runtime).drain()
+    run = await get_run(tenant_client, run_id)
+    assert run["status"] == "succeeded" and run["output_text"] == "One combined answer."
+    compose = llm.calls("Several steps of a workflow")[0].messages[0].content
+    assert "Alpha facts" in compose and "Beta facts" in compose
+
+
+async def test_rule_condition_takes_one_branch(tenant_client, llm, runtime):
+    esc, filer = await agent(tenant_client, "Escalator"), await agent(tenant_client, "Filer")
+    llm.when("You are Escalator", "Paged the on-call.").when("You are Filer", "Filed it.")
+    wf = await workflow(
+        tenant_client,
+        [
+            INPUT,
+            {"id": "c", "type": "condition", "condition_config": {"mode": "rule", "rules": {"big": {"field": "text", "op": "contains", "value": "urgent"}}, "default_branch": "small"}},
+            {"id": "big", "type": "agent", "agent_id": esc},
+            {"id": "small", "type": "agent", "agent_id": filer},
+            OUTPUT,
+        ],
+        [("in", "c"), ("c", "big", "Urgent"), ("c", "small"), ("big", "out"), ("small", "out")],
+    )
+    run_id = await start(tenant_client, wf, "URGENT: checkout is down")
+    await worker(runtime).drain()
+    run = await get_run(tenant_client, run_id)
+    assert run["status"] == "succeeded" and run["output_text"] == "Paged the on-call."
+    assert "small" not in nodes_by_id(run)  # never ran
+    assert not llm.calls("You are Filer")
+
+
+async def test_ai_condition_review_loop(tenant_client, llm, runtime):
+    writer = await agent(tenant_client, "Writer")
+    llm.when("You are Writer", "draft one", "draft two")
+    llm.when("Outcome labels", label("Needs edits"), label("Approved"))
+    wf = await workflow(
+        tenant_client,
+        [INPUT, {"id": "w", "type": "agent", "agent_id": writer, "label": "Write"}, {"id": "c", "type": "condition", "label": "Review"}, OUTPUT],
+        [("in", "w"), ("w", "c"), ("c", "w", "Needs edits"), ("c", "out", "Approved")],
+    )
+    run_id = await start(tenant_client, wf, "write a tagline")
+    await worker(runtime).drain()
+    run = await get_run(tenant_client, run_id)
+    assert run["status"] == "succeeded" and run["output_text"] == "draft two"
+    assert [n["attempt"] for n in nodes_by_id(run)["w"]] == [1, 2]
+    second_round = llm.calls("You are Writer")[-1].messages[1].content
+    assert "draft one" in second_round  # the writer saw its first draft
+
+
+async def test_loop_limit_stops_a_run_that_never_exits(tenant_client, llm, runtime):
+    writer = await agent(tenant_client, "Writer")
+    llm.when("You are Writer", "again")
+    wf = await workflow(
+        tenant_client,
+        [INPUT, {"id": "w", "type": "agent", "agent_id": writer}, {"id": "c", "type": "condition", "condition_config": {"mode": "rule", "rules": {"out": {"field": "text", "op": "contains", "value": "never"}}, "default_branch": "w"}}, OUTPUT],
+        [("in", "w"), ("w", "c"), ("c", "w"), ("c", "out", "Done")],
+        max_steps=7,
+    )
+    run_id = await start(tenant_client, wf)
+    await worker(runtime).drain()
+    run = await get_run(tenant_client, run_id)
+    assert run["status"] == "failed" and "Stopped after 7 steps" in run["error"]
+
+
+# ── Tool steps ───────────────────────────────────────────────────────────────
+
+
+async def test_tool_step_waits_for_approval_and_passes_its_input_on(tenant_client, demo, llm, runtime):
+    wf = await workflow(tenant_client, [INPUT, {"id": "t", "type": "tool", "tool_id": f"mcp:{demo.id}:send_note"}, OUTPUT], [("in", "t"), ("t", "out")])
+    run_id = await start(tenant_client, wf, "hello world")
+    w = worker(runtime)
+    await w.drain()
+    assert (await get_run(tenant_client, run_id))["status"] == "waiting"
+    [ask] = (await tenant_client.get("/api/v1/builder/approvals")).json()
+    assert ask["kind"] == "tool_call" and ask["payload"]["arguments"] == {"text": "hello world"}
+    assert ask["run"]["kind"] == "workflow" and ask["run"]["workflow_id"] == wf["id"]  # a list can name what's waiting
+    assert "Workflow step" in ask["payload"]["message"]
+    await tenant_client.post(f"/api/v1/builder/approvals/{ask['id']}", json={"decision": "approve"})
+    await w.drain()
+    run = await get_run(tenant_client, run_id)
+    assert run["status"] == "succeeded" and run["output_text"] == "hello world"  # what was sent
+    assert runtime["notes"].read_text() == "hello world\n"
+
+
+async def test_tool_step_told_not_to_send_keeps_the_message(tenant_client, demo, llm, runtime):
+    wf = await workflow(tenant_client, [INPUT, {"id": "t", "type": "tool", "tool_id": f"mcp:{demo.id}:send_note"}, OUTPUT], [("in", "t"), ("t", "out")])
+    run_id = await start(tenant_client, wf, "hello world")
+    w = worker(runtime)
+    await w.drain()
+    [ask] = (await tenant_client.get("/api/v1/builder/approvals")).json()
+    assert ask["payload"]["draft"]["body"] == "hello world"
+    await tenant_client.post(f"/api/v1/builder/approvals/{ask['id']}", json={"decision": "reject"})
+    await w.drain()
+    run = await get_run(tenant_client, run_id)
+    # Not a failure: the run finishes with the message it didn't send.
+    assert run["status"] == "succeeded"
+    assert run["output_text"].startswith("hello world") and "Not sent" in run["output_text"]
+    assert not runtime["notes"].exists()
+
+
+async def test_missing_tool_input_is_asked_for_never_invented(tenant_client, demo, llm, runtime):
+    llm.when("is calling the tool", reply(json.dumps({"to": "boss@made-up.example"})))
+    wf = await workflow(
+        tenant_client, [INPUT, {"id": "t", "type": "tool", "tool_id": f"mcp:{demo.id}:email_report"}, OUTPUT],
+        [("in", "t"), ("t", "out")], approvals={"read": False, "edit": False, "delete": True},
+    )
+    run_id = await start(tenant_client, wf, "Weekly numbers are up 5%")
+    w = worker(runtime)
+    await w.drain()
+    [ask] = (await tenant_client.get("/api/v1/builder/approvals")).json()
+    assert ask["kind"] == "missing_input" and ask["payload"]["missing"] == ["to"]
+    url = f"/api/v1/builder/approvals/{ask['id']}"
+    assert (await tenant_client.post(url, json={"decision": "approve"})).status_code == 422
+    assert (await tenant_client.post(url, json={"decision": "edit", "arguments": {"to": 7}})).status_code == 422
+    assert (await tenant_client.post(url, json={"decision": "edit", "arguments": {"to": "ceo@acme.com"}})).status_code == 200
+    await w.drain()
+    assert (await get_run(tenant_client, run_id))["status"] == "succeeded"
+    assert runtime["notes"].read_text() == "to=ceo@acme.com body=Weekly numbers are up 5%\n"
+
+
+async def test_identifier_in_the_text_is_used(tenant_client, demo, llm, runtime):
+    llm.when("is calling the tool", reply(json.dumps({"to": "ceo@acme.com"})))
+    wf = await workflow(
+        tenant_client, [INPUT, {"id": "t", "type": "tool", "tool_id": f"mcp:{demo.id}:email_report"}, OUTPUT],
+        [("in", "t"), ("t", "out")], approvals={"read": False, "edit": False, "delete": True},
+    )
+    run_id = await start(tenant_client, wf, "Send the summary to ceo@acme.com")
+    await worker(runtime).drain()
+    assert (await get_run(tenant_client, run_id))["status"] == "succeeded"
+    assert runtime["notes"].read_text().startswith("to=ceo@acme.com")
+
+
+# ── Approval step ────────────────────────────────────────────────────────────
+
+
+async def test_human_approval_can_edit_the_text(tenant_client, llm, runtime):
+    drafter = await agent(tenant_client, "Drafter")
+    llm.when("You are Drafter", "rough draft")
+    wf = await workflow(
+        tenant_client,
+        [INPUT, {"id": "d", "type": "agent", "agent_id": drafter}, {"id": "h", "type": "human_approval", "approval_message": "Check the draft"}, OUTPUT],
+        [("in", "d"), ("d", "h"), ("h", "out")],
+    )
+    run_id = await start(tenant_client, wf)
+    w = worker(runtime)
+    await w.drain()
+    [ask] = (await tenant_client.get("/api/v1/builder/approvals")).json()
+    assert ask["kind"] == "human_step" and ask["payload"]["text"] == "rough draft" and ask["payload"]["message"] == "Check the draft"
+    await tenant_client.post(f"/api/v1/builder/approvals/{ask['id']}", json={"decision": "edit", "arguments": {"text": "polished draft"}})
+    await w.drain()
+    assert (await get_run(tenant_client, run_id))["output_text"] == "polished draft"
+
+
+async def test_rejected_approval_stops_the_run_even_with_skip(tenant_client, llm, runtime):
+    wf = await workflow(
+        tenant_client, [INPUT, {"id": "h", "type": "human_approval"}, OUTPUT], [("in", "h"), ("h", "out")], on_node_failure="skip",
+    )
+    run_id = await start(tenant_client, wf)
+    w = worker(runtime)
+    await w.drain()
+    [ask] = (await tenant_client.get("/api/v1/builder/approvals")).json()
+    await tenant_client.post(f"/api/v1/builder/approvals/{ask['id']}", json={"decision": "reject"})
+    await w.drain()
+    run = await get_run(tenant_client, run_id)
+    assert run["status"] == "failed" and "rejected" in run["error"]
+
+
+# ── Failure policies ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("policy,expected", [("abort", "failed"), ("skip", "succeeded")])
+async def test_failure_policy(tenant_client, demo, llm, runtime, policy, expected):
+    wf = await workflow(tenant_client, [INPUT, {"id": "t", "type": "tool", "tool_id": f"mcp:{demo.id}:fail", "label": "Check"}, OUTPUT], [("in", "t"), ("t", "out")], on_node_failure=policy)
+    run_id = await start(tenant_client, wf, "carry on")
+    await worker(runtime).drain()
+    run = await get_run(tenant_client, run_id)
+    assert run["status"] == expected
+    if expected == "failed":
+        assert 'Step "Check" failed' in run["error"] and "boom" in run["error"]
+    else:
+        assert run["output_text"] == "carry on"  # the failed step passed its input on
+
+
+async def test_retry_then_give_up(tenant_client, demo, llm, runtime):
+    wf = await workflow(tenant_client, [INPUT, {"id": "t", "type": "tool", "tool_id": f"mcp:{demo.id}:fail", "retry": {"max_attempts": 3}}, OUTPUT], [("in", "t"), ("t", "out")])
+    run_id = await start(tenant_client, wf)
+    await worker(runtime).drain()
+    run = await get_run(tenant_client, run_id)
+    assert run["status"] == "failed"
+    assert [n["attempt"] for n in nodes_by_id(run)["t"]] == [1, 2, 3]
+    assert len(run["tool_calls"]) == 3
+
+
+async def test_join_any_goes_on_without_a_failed_branch(tenant_client, demo, llm, runtime):
+    helper = await agent(tenant_client, "Helper")
+    llm.when("You are Helper", "helper result")
+    wf = await workflow(
+        tenant_client,
+        [INPUT, {"id": "x", "type": "tool", "tool_id": f"mcp:{demo.id}:fail"}, {"id": "y", "type": "agent", "agent_id": helper},
+         {"id": "j", "type": "join", "join_policy": {"mode": "any"}}, OUTPUT],
+        [("in", "x"), ("in", "y"), ("x", "j"), ("y", "j"), ("j", "out")],
+    )
+    run_id = await start(tenant_client, wf)
+    await worker(runtime).drain()
+    run = await get_run(tenant_client, run_id)
+    assert run["status"] == "succeeded" and run["output_text"] == "helper result"
+    assert nodes_by_id(run)["x"][0]["status"] == "failed"
+
+
+# ── Durability ───────────────────────────────────────────────────────────────
+
+
+async def test_crash_mid_workflow_resumes_without_redoing_finished_steps(db, tenant_client, demo, llm, runtime):
+    noter = await agent(tenant_client, "Noter", demo, ["save_note"], approvals={"read": False, "edit": False, "delete": True})
+    closer = await agent(tenant_client, "Closer")
+    llm.when("You are Noter", reply(calls=[("demo__save_note", {"text": "once"})]), "noted")
+    llm.when("You are Closer", HANG, "closed")
+    wf = await workflow(
+        tenant_client,
+        [INPUT, {"id": "n", "type": "agent", "agent_id": noter}, {"id": "c", "type": "agent", "agent_id": closer}, OUTPUT],
+        [("in", "n"), ("n", "c"), ("c", "out")],
+        # The stricter of the agent's and the workflow's approval rules applies.
+        approvals={"read": False, "edit": False, "delete": True},
+    )
+    run_id = await start(tenant_client, wf)
+    w1 = worker(runtime, "w1")
+    await w1.start(reaper=False)
+    await asyncio.wait_for(llm.hung.wait(), 30)
+    await kill(w1, db, run_id)
+
+    w2 = worker(runtime, "w2")
+    await w2.reap()
+    await w2.drain()
+    run = await get_run(tenant_client, run_id)
+    assert run["status"] == "succeeded" and run["output_text"] == "closed"
+    assert run["recoveries"] == 1
+    assert runtime["notes"].read_text() == "once\n"
+    assert len(llm.calls("You are Noter")) == 2  # its two model turns, never repeated
+    assert [n["attempt"] for n in nodes_by_id(run)["c"]] == [1]  # resumed, not restarted
+
+
+async def test_a_run_keeps_the_definition_it_started_with(tenant_client, llm, runtime):
+    wf = await workflow(tenant_client, [INPUT, {"id": "h", "type": "human_approval"}, OUTPUT], [("in", "h"), ("h", "out")])
+    run_id = await start(tenant_client, wf, "original")
+    w = worker(runtime)
+    await w.drain()
+    # Edit the workflow while the run waits: drop the output step.
+    r = await tenant_client.patch(f"{WF}/{wf['id']}", json={"nodes": [INPUT, {"id": "h", "type": "human_approval"}], "edges": [{"id": "e0", "source": "in", "target": "h"}]})
+    assert r.status_code == 200
+    [ask] = (await tenant_client.get("/api/v1/builder/approvals")).json()
+    await tenant_client.post(f"/api/v1/builder/approvals/{ask['id']}", json={"decision": "approve"})
+    await w.drain()
+    run = await get_run(tenant_client, run_id)
+    assert run["status"] == "succeeded" and run["output"]["final_node"] == "out" and run["definition_version"] == 1
+
+
+# ── Starting a run ───────────────────────────────────────────────────────────
+
+
+async def test_start_checks_connections_and_required_inputs(db, tenant_client, demo, llm, runtime, tenant_user):
+    from vendor.services import mcp_auth
+
+    helper = await agent(tenant_client, "Helper")
+    llm.when("You are Helper", "ok")
+    wf = await workflow(
+        tenant_client,
+        [{"id": "in", "type": "input", "variables": [{"name": "customer", "required": True}]}, {"id": "a", "type": "agent", "agent_id": helper}, OUTPUT],
+        [("in", "a"), ("a", "out")],
+    )
+    r = await tenant_client.post(f"{WF}/{wf['id']}/runs", json={"input": "go"})
+    assert r.status_code == 422 and r.json()["problems"][0]["code"] == "missing_variable"
+    run_id = await start(tenant_client, wf, "go", customer="Acme")
+    await worker(runtime).drain()
+    assert "customer: Acme" in llm.calls("You are Helper")[0].messages[1].content
+
+    tool_wf = await workflow(tenant_client, [INPUT, {"id": "t", "type": "tool", "tool_id": f"mcp:{demo.id}:echo"}], [("in", "t")])
+    await mcp_auth.delete_user_credential(db, server_id=demo.id, user_id=tenant_user.id)
+    await db.commit()
+    r = await tenant_client.post(f"{WF}/{tool_wf['id']}/runs", json={"input": "x"})
+    assert r.status_code == 422 and r.json()["problems"][0]["code"] == "not_connected"
+    assert (await get_run(tenant_client, run_id))["status"] == "succeeded"
+
+
+async def test_a_waiting_branch_does_not_hold_up_the_others(tenant_client, llm, runtime):
+    helper = await agent(tenant_client, "Helper")
+    llm.when("You are Helper", "helper result")
+    wf = await workflow(
+        tenant_client,
+        [INPUT, {"id": "h", "type": "human_approval"}, {"id": "a", "type": "agent", "agent_id": helper},
+         {"id": "j", "type": "join"}, OUTPUT],
+        [("in", "h"), ("in", "a"), ("h", "j"), ("a", "j"), ("j", "out")],
+    )
+    run_id = await start(tenant_client, wf, "go")
+    w = worker(runtime)
+    await w.drain()
+    run = await get_run(tenant_client, run_id)
+    assert run["status"] == "waiting"
+    assert nodes_by_id(run)["a"][0]["status"] == "succeeded"  # ran while h waited
+    [ask] = (await tenant_client.get("/api/v1/builder/approvals")).json()
+    await tenant_client.post(f"/api/v1/builder/approvals/{ask['id']}", json={"decision": "approve"})
+    await w.drain()
+    run = await get_run(tenant_client, run_id)
+    assert run["status"] == "succeeded" and "helper result" in run["output_text"]
+    assert len(llm.calls("You are Helper")) == 1  # not run again on resume
+
+
+async def test_a_chat_follow_up_is_routed_and_done_with_the_earlier_turns(tenant_client, llm, runtime):
+    """"publish this" after a message with the link: the condition and the step working on the request see the
+    chat's earlier turns; a step further down, working on an earlier step's result, doesn't."""
+    publisher, reporter, checker = [await agent(tenant_client, n) for n in ("Publisher", "Reporter", "Checker")]
+    llm.when("A workflow branches here", label("Publish"))
+    llm.when("You are Publisher", "Want a caption?", "Published.")
+    llm.when("You are Checker", "Checked: Want a caption?", "Checked: Published.")
+    wf = await workflow(
+        tenant_client,
+        [INPUT, {"id": "c", "type": "condition", "condition_config": {"mode": "ai"}},
+         {"id": "p", "type": "agent", "agent_id": publisher}, {"id": "r", "type": "agent", "agent_id": reporter},
+         {"id": "k", "type": "agent", "agent_id": checker}, OUTPUT],
+        [("in", "c"), ("c", "p", "Publish"), ("c", "r", "Report"), ("p", "k"), ("r", "out"), ("k", "out")],
+        answer_general_questions=False,
+    )
+    r = await tenant_client.post(f"{WF}/{wf['id']}/runs", json={"input": "post https://x.test/a.png", "new_conversation": True})
+    assert r.status_code == 202, r.text
+    chat_id = r.json()["conversation_id"]
+    await worker(runtime).drain()
+    r = await tenant_client.post(f"{WF}/{wf['id']}/runs", json={"input": "publish this", "conversation_id": chat_id})
+    assert r.status_code == 202, r.text
+    await worker(runtime).drain()
+    run = await get_run(tenant_client, r.json()["id"])
+    assert run["status"] == "succeeded" and run["output_text"] == "Checked: Published.", run
+
+    first_pick, second_pick = llm.calls("A workflow branches here")
+    assert "Earlier in this chat" not in first_pick.messages[-1].content
+    assert "https://x.test/a.png" in second_pick.messages[-1].content and "publish this" in second_pick.messages[-1].content
+    _, second_publish = llm.calls("You are Publisher")
+    said = [(m.role.value, m.content) for m in second_publish.messages[1:3]]
+    assert said == [("user", "post https://x.test/a.png"), ("assistant", "Checked: Want a caption?")]
+    _, second_check = llm.calls("You are Checker")
+    assert not any("x.test" in (m.content or "") for m in second_check.messages)
+
+
+async def test_a_file_sent_with_a_run_reaches_only_the_steps_after_the_input(tenant_client, llm, runtime):
+    reader, writer = await agent(tenant_client, "Reader"), await agent(tenant_client, "Writer")
+    llm.when("You are Reader", "Skills: Python, SQL").when("You are Writer", "Matched.")
+    wf = await workflow(tenant_client, [INPUT, {"id": "r", "type": "agent", "agent_id": reader},
+                                        {"id": "w", "type": "agent", "agent_id": writer}, OUTPUT],
+                        [("in", "r"), ("r", "w"), ("w", "out")], answer_general_questions=True)
+    r = await tenant_client.post("/api/v1/builder/attachments", files={"file": ("resume.txt", b"Asha - Python, SQL, 2026 batch", "text/plain")})
+    assert r.status_code == 201, r.text
+    r = await tenant_client.post(f"{WF}/{wf['id']}/runs", json={"input": "", "attachment_ids": [r.json()["id"]]})
+    assert r.status_code == 202, r.text
+    await worker(runtime).drain()
+
+    run = await get_run(tenant_client, r.json()["id"])
+    # A file is a task: the front desk doesn't answer it as small talk.
+    assert run["status"] == "succeeded" and run["output_text"] == "Matched.", run
+    (to_reader,) = llm.calls("You are Reader")
+    (to_writer,) = llm.calls("You are Writer")
+    assert "2026 batch" in to_reader.messages[-1].content and 'name="resume.txt"' in to_reader.messages[-1].content
+    assert "2026 batch" not in to_writer.messages[-1].content
+
+
+async def test_a_code_step_calls_its_own_tools_through_the_ledger(db, tenant_client, demo, llm, runtime):
+    """A code step with tool_needs calls the tools itself: a read runs at once, a send waits for a yes, and the
+    resumed step gets the read's recorded answer instead of calling again."""
+    from builder.workflows.code_steps import CodeResult, register
+
+    calls: list[str] = []
+
+    @register("test_echo_then_send")
+    async def _echo_then_send(inp):
+        assert inp.tools.has("Demo Labs", "echo") and not inp.tools.has("Demo Labs", "nope")
+        calls.append("run")
+        echoed = await inp.tools.call("Demo Labs", "echo", {"text": "hi"}, key="echo")
+        sent = await inp.tools.call("Demo Labs", "send_note", {"text": f"note: {echoed.text}"}, key="send")
+        missing = await inp.tools.call("Nowhere", "x", {}, key="x")
+        return CodeResult(output=f"{echoed.text} | {'declined' if sent.declined else sent.text} | {missing.is_error}")
+
+    demo.source_repo_url = "https://github.com/acme/demo-mcp.git"
+    await db.commit()
+    need = {"system": "Demo Labs", "match": ["acme/demo-mcp"], "tools": ["echo", "send_note"]}
+    wf = await workflow(tenant_client, [INPUT, {"id": "c", "type": "code", "code": "test_echo_then_send", "tool_needs": [need]},
+                                        OUTPUT], [("in", "c"), ("c", "out")])
+    assert wf["nodes"][1]["tool_needs"][0]["system"] == "Demo Labs"
+    run_id = await start(tenant_client, wf)
+    w = worker(runtime)
+    await w.drain()
+    assert (await get_run(tenant_client, run_id))["status"] == "waiting"
+    [ask] = (await tenant_client.get("/api/v1/builder/approvals")).json()
+    assert ask["tool_name"] == "send_note" and "hi" in ask["payload"]["arguments"]["text"]
+    await tenant_client.post(f"/api/v1/builder/approvals/{ask['id']}", json={"decision": "approve"})
+    await w.drain()
+    run = await get_run(tenant_client, run_id)
+    assert run["status"] == "succeeded", run
+    assert run["output_text"].startswith("hi | ") and run["output_text"].endswith("| True")
+    assert "note: hi" in runtime["notes"].read_text()
+    assert calls == ["run", "run"]  # ran again after the yes, with echo answered from the ledger
+
+
+def test_database_hiccups_are_told_apart_from_bugs():
+    from sqlalchemy.exc import DBAPIError
+    from sqlalchemy.exc import TimeoutError as PoolTimeout
+
+    from builder.runs.db import is_transient
+
+    class ConnectionDoesNotExistError(Exception):
+        pass
+
+    dropped = DBAPIError("SELECT 1", {}, ConnectionDoesNotExistError("connection was closed in the middle of operation"))
+    assert is_transient(dropped) and is_transient(PoolTimeout("QueuePool limit reached"))
+    assert not is_transient(DBAPIError("SELECT x", {}, Exception('column "x" does not exist')))
+    assert not is_transient(ValueError("a bug")) and not is_transient(TimeoutError("a tool was slow"))
+
+
+async def test_a_run_the_database_dropped_out_under_resumes_instead_of_failing(tenant_client, llm, runtime, monkeypatch):
+    """The connection dies mid-run: the run goes back to the queue and carries on from its checkpoint – the step
+    that had finished isn't run again – instead of failing (or hanging) the way it did on a dropped Supabase link."""
+    from sqlalchemy.exc import DBAPIError
+
+    from builder.runs import executor
+    from builder.workflows.code_steps import CodeResult, register
+
+    monkeypatch.setattr(executor, "RESUME_AFTER_SECONDS", 0)
+    ran = {"first": 0, "second": 0}
+
+    @register("test_first")
+    def _first(inp):
+        ran["first"] += 1
+        return CodeResult(output="first done")
+
+    @register("test_flaky")
+    def _flaky(inp):
+        ran["second"] += 1
+        if ran["second"] == 1:
+            raise DBAPIError("SELECT 1", {}, Exception("connection was closed in the middle of operation"))
+        return CodeResult(output=f"{inp.parts[0][1]} + second done")
+
+    wf = await workflow(tenant_client, [INPUT, {"id": "a", "type": "code", "code": "test_first"},
+                                        {"id": "b", "type": "code", "code": "test_flaky"}, OUTPUT],
+                        [("in", "a"), ("a", "b"), ("b", "out")])
+    run_id = await start(tenant_client, wf)
+    await worker(runtime).drain()
+    run = await get_run(tenant_client, run_id)
+    assert run["status"] == "succeeded", run
+    assert run["output_text"] == "first done + second done"
+    assert ran == {"first": 1, "second": 2}

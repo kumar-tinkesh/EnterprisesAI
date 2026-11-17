@@ -5,11 +5,22 @@ Includes:
 - health check
 - automatic schema migration on startup (Alembic -> head, any DATABASE_URL)
 - CORS middleware reading from the global settings
+- Vendor + User (MCP servers) routers
 """
 from __future__ import annotations
 
 import asyncio
+import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
+
+# Ensure vendor/user and this package's ``src.*`` imports resolve. This
+# MUST happen before importing ``api_router`` below, because the (re-enabled)
+# MCP router transitively imports ``vendor.models``.
+ROOT = Path(__file__).resolve().parents[3]  # EnterpriseAI/ (file is at apps/auth/src/main.py)
+for _p in (ROOT, ROOT / "apps" / "auth", ROOT / "apps" / "backend"):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,7 +30,12 @@ from src.api.v1.router import api_router
 from src.config import Settings, get_settings
 from src.core.security import get_jwks
 
+from vendor.api.v1.router import router as vendor_router  # noqa: E402
+from user.api.v1.router import router as user_router  # noqa: E402
+from apps.backend.config import get_backend_settings  # noqa: E402
+
 settings: Settings = get_settings()
+_backend_settings = get_backend_settings()
 
 
 def create_app() -> FastAPI:
@@ -42,10 +58,30 @@ def create_app() -> FastAPI:
                 await create_db_tables()
             except Exception as exc2:
                 print(f"[auth] DB init skipped: {exc2}")
+        # The first platform admin and tenant, from .env (each skipped if it exists).
+        try:
+            from src.core.bootstrap import ensure_admin, ensure_tenant
+            from src.db.session import SessionLocal
+
+            async with SessionLocal() as db:
+                outcome = await ensure_admin(db, settings)
+            if outcome == "created":
+                print(f"[auth] created the platform admin {settings.ADMIN_EMAIL.strip().lower()}", flush=True)
+            elif outcome == "exists":
+                print(f"[auth] platform admin {settings.ADMIN_EMAIL.strip().lower()} already exists; left as is", flush=True)
+            async with SessionLocal() as db:
+                outcome = await ensure_tenant(db, settings)
+            if outcome == "created":
+                print(f"[auth] created tenant {settings.TENANT_NAME.strip()!r} with admin {settings.TENANT_ADMIN_EMAIL.strip().lower()}", flush=True)
+            elif outcome == "exists":
+                print(f"[auth] tenant admin {settings.TENANT_ADMIN_EMAIL.strip().lower()} already exists; left as is", flush=True)
+        except Exception as exc:  # pragma: no cover - never block startup on this
+            print(f"[auth] admin bootstrap skipped: {exc}")
         if settings.SHOW_LOADED_ENV:
             from pprint import pprint
 
             pprint(settings.redacted_repr())
+
         yield
 
     app = FastAPI(
@@ -78,6 +114,16 @@ def create_app() -> FastAPI:
         return get_jwks()
 
     app.include_router(api_router, prefix=settings.API_V1_PREFIX)
+    app.include_router(
+        vendor_router,
+        prefix=f"{_backend_settings.BACKEND_API_V1_PREFIX}/vendor/resources",
+        tags=["vendor-resources"],
+    )
+    app.include_router(
+        user_router,
+        prefix=f"{_backend_settings.BACKEND_API_V1_PREFIX}/vendor/resources",
+        tags=["vendor-resources"],
+    )
     return app
 
 

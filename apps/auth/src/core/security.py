@@ -173,7 +173,14 @@ def create_token_pair(
 
 
 def decode_token(token: str, *, expected_type: str | None = None) -> dict:
-    """Validate an RS256 JWT and return its claims. Raises on failure."""
+    """Validate an RS256 JWT and return its claims. Raises on failure.
+
+    A configurable clock-skew tolerance (``JWT_LEEWAY_SECONDS``, default
+    300 s) is applied to the ``exp``/``nbf`` time claims so tokens minted on
+    a machine whose clock drifted slightly relative to this service still
+    validate, instead of failing with spurious "expired"/"not yet valid"
+    errors.
+    """
     settings = get_settings()
     _, public_pem = get_keypair()
     claims = jwt.decode(
@@ -182,6 +189,7 @@ def decode_token(token: str, *, expected_type: str | None = None) -> dict:
         algorithms=[settings.JWT_ALGORITHM],
         issuer=settings.JWT_ISSUER,
         audience=settings.JWT_AUDIENCE,
+        leeway=settings.JWT_LEEWAY_SECONDS,
         options={"require": ["sub", "exp", "iat", "jti"]},
     )
     if expected_type and claims.get("type") != expected_type:

@@ -12,6 +12,7 @@ from apps.llm_gateway.prompts.templates import (
     SYSTEM_GUARDRAIL_INSPECTOR,
     SYSTEM_EVALUATION_JUDGE,
     SYSTEM_DOCUMENT_EXTRACTION,
+    SYSTEM_AGENT_COMPILER,
 )
 
 __all__ = [
@@ -25,5 +26,6 @@ __all__ = [
     "SYSTEM_GUARDRAIL_INSPECTOR",
     "SYSTEM_EVALUATION_JUDGE",
     "SYSTEM_DOCUMENT_EXTRACTION",
+    "SYSTEM_AGENT_COMPILER",
 ]
 

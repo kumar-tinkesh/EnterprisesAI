@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, ApiError } from "@/lib/api";
-import { dashboardPathForRole } from "@/lib/validations";
+import { afterLoginPath } from "@/lib/after-login";
 import { useAuthStore } from "@/stores/auth-store";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
@@ -22,7 +22,7 @@ export function GoogleButton() {
         setLoading(false);
         const payload = event.data.payload;
         loginStore(payload);
-        router.push(dashboardPathForRole(payload.user.role));
+        router.push(afterLoginPath(payload.user.role));
       } else if (event.data?.type === "GOOGLE_AUTH_ERROR") {
         setLoading(false);
         setError(event.data.error || "Google authentication failed");

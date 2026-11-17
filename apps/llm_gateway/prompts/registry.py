@@ -19,6 +19,7 @@ from apps.llm_gateway.prompts.templates import (
     SYSTEM_GUARDRAIL_INSPECTOR,
     SYSTEM_EVALUATION_JUDGE,
     SYSTEM_DOCUMENT_EXTRACTION,
+    SYSTEM_AGENT_COMPILER,
 )
 
 
@@ -33,6 +34,7 @@ class PromptType(str, Enum):
     GUARDRAIL_INSPECTOR = "guardrail_inspector"
     EVALUATION_JUDGE = "evaluation_judge"
     DOCUMENT_EXTRACTION = "document_extraction"
+    AGENT_COMPILER = "agent_compiler"
 
 
 class PromptRegistry:
@@ -64,6 +66,7 @@ class PromptRegistry:
         PromptType.GUARDRAIL_INSPECTOR: SYSTEM_GUARDRAIL_INSPECTOR,
         PromptType.EVALUATION_JUDGE: SYSTEM_EVALUATION_JUDGE,
         PromptType.DOCUMENT_EXTRACTION: SYSTEM_DOCUMENT_EXTRACTION,
+        PromptType.AGENT_COMPILER: SYSTEM_AGENT_COMPILER,
     }
 
     _CUSTOM_OVERRIDES: dict[str, dict[PromptType, str]] = {}

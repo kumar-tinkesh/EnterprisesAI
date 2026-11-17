@@ -7,9 +7,9 @@ import { useForm } from "react-hook-form";
 import { UserPlus } from "lucide-react";
 
 import { api, ApiError } from "@/lib/api";
+import { afterLoginPath } from "@/lib/after-login";
 import {
   ROLES,
-  dashboardPathForRole,
   signupSchema,
   type SignupValues,
 } from "@/lib/validations";
@@ -47,7 +47,7 @@ export function SignupForm() {
       }),
     onSuccess: (payload) => {
       loginStore(payload);
-      router.push(dashboardPathForRole(payload.user.role));
+      router.push(afterLoginPath(payload.user.role));
     },
   });
 

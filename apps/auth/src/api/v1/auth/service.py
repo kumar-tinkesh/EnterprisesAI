@@ -80,29 +80,16 @@ async def signup(
     role: str,
     tenant_name: str,
 ) -> tuple[User | VendorUser, dict[str, str]]:
-    """Create an account for any of the four roles and return tokens."""
+    """Create a solo-user account and return tokens; every other role is provisioned."""
     email = email.lower()
 
+    # ── vendor_admin self-signup is disabled: the platform admin comes from
+    # ADMIN_EMAIL / ADMIN_PASSWORD, created at startup (see core/bootstrap.py) ──
     if role == Roles.VENDOR_ADMIN:
-        existing = (
-            await db.execute(select(VendorUser).where(VendorUser.email == email))
-        ).scalars().first()
-        if existing:
-            raise HTTPException(status.HTTP_409_CONFLICT, "Email already registered")
-        vendor = VendorUser(
-            email=email,
-            hashed_password=hash_password(password),
-            full_name=full_name,
-            role=Roles.VENDOR_ADMIN,
-            is_active=True,
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Vendor admin self-signup is disabled. The platform admin is set up by the operator.",
         )
-        db.add(vendor)
-        await db.flush()
-        tokens = await _issue_pair(db, vendor.id, Roles.VENDOR_ADMIN, None, None)
-        await log_audit_event(db, action="signup", user_id=vendor.id, tenant_id=None, resource="vendor_user")
-        await db.commit()
-        await db.refresh(vendor)
-        return vendor, tokens
 
     # ── Solo user: auto-create a hidden personal tenant + workspace ──
     if role == Roles.SOLO_USER:

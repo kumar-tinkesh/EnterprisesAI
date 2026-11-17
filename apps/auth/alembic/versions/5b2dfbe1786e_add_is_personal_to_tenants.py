@@ -19,7 +19,7 @@ depends_on = None
 def upgrade() -> None:
     op.add_column(
         'tenants',
-        sa.Column('is_personal', sa.Boolean(), nullable=False, server_default=sa.text('0')),
+        sa.Column('is_personal', sa.Boolean(), nullable=False, server_default=sa.false()),
     )
 
 

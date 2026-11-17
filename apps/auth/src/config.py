@@ -35,6 +35,20 @@ class Settings(BaseSettings):
     ENV: str = "development"
     SHOW_LOADED_ENV: bool = False
 
+    # ── First admin ────────────────────────────────────────────────────────
+    # The platform (vendor) admin created at startup if no account with this
+    # email exists yet; an existing one is left untouched (its password too).
+    # Both empty = no bootstrap.
+    ADMIN_EMAIL: str = ""
+    ADMIN_PASSWORD: str = ""
+    ADMIN_FULL_NAME: str = "Platform Admin"
+    # The first tenant (a company) and its tenant admin, created the same way:
+    # only if no account with TENANT_ADMIN_EMAIL exists yet.
+    TENANT_NAME: str = ""
+    TENANT_ADMIN_EMAIL: str = ""
+    TENANT_ADMIN_PASSWORD: str = ""
+    TENANT_ADMIN_FULL_NAME: str = "Tenant Admin"
+
     # --- HTTP / CORS ------------------------------------------------------
     API_V1_PREFIX: str = "/api/v1"
     BACKEND_CORS_ORIGINS: list[str] = Field(
@@ -44,6 +58,19 @@ class Settings(BaseSettings):
     # --- Database ---------------------------------------------------------
     DATABASE_URL: str = "sqlite+aiosqlite:///./auth.db"
     DB_ECHO: bool = False
+    # Connections this process keeps open / may open beyond that, and how long a session waits for one.
+    # Every process sharing a pooled database (Supabase session mode allows 15 clients in all) needs a
+    # share of that limit, or a burst of steps opens more and the pooler refuses them.
+    DB_POOL_SIZE: int = 5
+    DB_MAX_OVERFLOW: int = 10
+    DB_POOL_TIMEOUT: float = 30.0
+    # A query (or a connection attempt) that gets no answer in this long fails instead of waiting forever: a
+    # connection the network dropped without a word (a laptop resuming, a Wi-Fi change) otherwise hangs the
+    # step – and the worker's heartbeat – until someone restarts it.
+    DB_COMMAND_TIMEOUT: float = 30.0
+    DB_CONNECT_TIMEOUT: float = 15.0
+    # Connections older than this are replaced before use (the pooler drops idle ones on its own).
+    DB_POOL_RECYCLE: int = 300
 
     # --- JWT / RS256 ------------------------------------------------------
     JWT_PRIVATE_KEY: str = ""
@@ -53,6 +80,14 @@ class Settings(BaseSettings):
     JWT_AUDIENCE: str = "enterprise-ai"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     JWT_REFRESH_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
+    # Tolerated clock skew (in seconds) when validating JWT time claims
+    # (exp/nbf). Guards against small clock drift between issuing and
+    # validating services, or VM/clock resync jumps in dev environments.
+    # Override via the JWT_LEEWAY_SECONDS env var.
+    JWT_LEEWAY_SECONDS: int = 300
+    # Key material for Fernet-encrypting stored MCP credentials. Falls back
+    # to the JWT private key when unset (it is always generated/persisted).
+    MCP_CREDENTIALS_SECRET: str = ""
 
     # --- SSO / OIDC -------------------------------------------------------
     SSO_PROVIDER: str = "google"

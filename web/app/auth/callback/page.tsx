@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api, ApiError } from "@/lib/api";
-import { dashboardPathForRole } from "@/lib/validations";
+import { afterLoginPath } from "@/lib/after-login";
 import { useAuthStore } from "@/stores/auth-store";
 import { Spinner } from "@/components/ui/spinner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -60,7 +60,7 @@ function AuthCallbackContent() {
 
         // Fallback for full-page redirect
         loginStore(payload);
-        router.push(dashboardPathForRole(user.role));
+        router.push(afterLoginPath(user.role));
       } catch (err) {
         const errMsg =
           err instanceof ApiError ? err.message : "SSO Callback verification failed";
