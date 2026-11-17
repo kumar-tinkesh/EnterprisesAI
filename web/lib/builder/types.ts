@@ -194,13 +194,23 @@ export interface AgentRequirements {
 }
 
 /** An agent exported as a file (tools by server and tool name, not by id). */
-export interface AgentFile {
-  format: string;
-  format_version: number;
+/** One agent in a file, with what it refers to by name (tools by server + tool, never by id). */
+export interface AgentFileEntry {
   agent: { name: string; role: string; goal: string; instructions?: string; llm_provider?: string; llm_model?: string; config: AgentConfig };
   tools: { server: string; tool: string }[];
   knowledge_bases: string[];
   sub_agents: string[];
+}
+
+/** Version 1: one agent (an ``AgentFileEntry`` at the top level). Version 2: a team in ``agents``. */
+export type AgentFile = { format: string; format_version: number } & (Partial<AgentFileEntry> & { agents?: AgentFileEntry[] });
+
+export interface AgentImportResult {
+  /** The agent to open: a team's lead. */
+  agent: Agent;
+  /** Every agent created, sub-agents first. */
+  agents: Agent[];
+  skipped: string[];
 }
 
 export interface InputVariable {

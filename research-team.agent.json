@@ -1,0 +1,283 @@
+{
+  "format": "enterprisesai.agent",
+  "format_version": 2,
+  "agents": [
+    {
+      "agent": {
+        "name": "Web Researcher",
+        "role": "Web research specialist",
+        "goal": "Find accurate, current information on the web for a given topic and return the key findings with their source links.",
+        "instructions": "Search the web first, then open the 2-4 most relevant pages to read them properly before answering. Prefer official sites, company pages and well-known publications. Always list the source URL next to each finding. If sources disagree, say so instead of picking one. Never invent facts, numbers or links.",
+        "llm_provider": "",
+        "llm_model": "",
+        "config": {
+          "llm": {
+            "reasoning_effort": "auto"
+          },
+          "response": {
+            "tone": "",
+            "verbosity": "balanced",
+            "language": "auto",
+            "formats": [],
+            "citations": "always"
+          },
+          "tools": {
+            "max_calls": 8,
+            "timeout_seconds": 30,
+            "on_failure": "continue"
+          },
+          "approvals": {
+            "read": false,
+            "edit": true,
+            "delete": true
+          },
+          "guardrails": {
+            "injection": false,
+            "tool_injection": false,
+            "pii_input": false,
+            "pii_output": false,
+            "groundedness": false,
+            "custom_rules": []
+          },
+          "memory": {
+            "enabled": false
+          }
+        }
+      },
+      "tools": [
+        {
+          "server": "web search",
+          "tool": "tavily_search"
+        },
+        {
+          "server": "web search",
+          "tool": "tavily_extract"
+        },
+        {
+          "server": "web search",
+          "tool": "tavily_research"
+        },
+        {
+          "server": "firecrawler server",
+          "tool": "firecrawl_search"
+        },
+        {
+          "server": "firecrawler server",
+          "tool": "firecrawl_scrape"
+        }
+      ],
+      "knowledge_bases": [],
+      "sub_agents": []
+    },
+    {
+      "agent": {
+        "name": "News Analyst",
+        "role": "News and current events analyst",
+        "goal": "Collect the latest news on a topic and summarize what happened, when, and why it matters.",
+        "instructions": "Look for news from the last 30 days unless asked otherwise. Give each item its date, headline, outlet and link. Group related stories together and end with 2-3 lines on the overall trend. Separate reported facts from opinion, and never present a rumour as confirmed.",
+        "llm_provider": "",
+        "llm_model": "",
+        "config": {
+          "llm": {
+            "reasoning_effort": "auto"
+          },
+          "response": {
+            "tone": "",
+            "verbosity": "balanced",
+            "language": "auto",
+            "formats": [],
+            "citations": "always"
+          },
+          "tools": {
+            "max_calls": 8,
+            "timeout_seconds": 30,
+            "on_failure": "continue"
+          },
+          "approvals": {
+            "read": false,
+            "edit": true,
+            "delete": true
+          },
+          "guardrails": {
+            "injection": false,
+            "tool_injection": false,
+            "pii_input": false,
+            "pii_output": false,
+            "groundedness": false,
+            "custom_rules": []
+          },
+          "memory": {
+            "enabled": false
+          }
+        }
+      },
+      "tools": [
+        {
+          "server": "world news",
+          "tool": "search_news"
+        },
+        {
+          "server": "world news",
+          "tool": "get_top_news"
+        },
+        {
+          "server": "world news",
+          "tool": "extract_news"
+        },
+        {
+          "server": "news",
+          "tool": "news"
+        },
+        {
+          "server": "news",
+          "tool": "get_story"
+        }
+      ],
+      "knowledge_bases": [],
+      "sub_agents": []
+    },
+    {
+      "agent": {
+        "name": "Fact Checker",
+        "role": "Background and fact-checking specialist",
+        "goal": "Check names, dates, figures and background facts against Wikipedia and Wikidata, and say which claims hold up.",
+        "instructions": "For each claim you are given, look it up and mark it as Confirmed, Not confirmed, or Wrong, with a one-line reason and the source. Use Wikidata for exact values (dates, founders, headquarters, counts) and Wikipedia for context. If you can't find something, say 'not found' rather than guessing.",
+        "llm_provider": "",
+        "llm_model": "",
+        "config": {
+          "llm": {
+            "reasoning_effort": "auto"
+          },
+          "response": {
+            "tone": "",
+            "verbosity": "balanced",
+            "language": "auto",
+            "formats": [],
+            "citations": "always"
+          },
+          "tools": {
+            "max_calls": 8,
+            "timeout_seconds": 30,
+            "on_failure": "continue"
+          },
+          "approvals": {
+            "read": false,
+            "edit": true,
+            "delete": true
+          },
+          "guardrails": {
+            "injection": false,
+            "tool_injection": false,
+            "pii_input": false,
+            "pii_output": false,
+            "groundedness": false,
+            "custom_rules": []
+          },
+          "memory": {
+            "enabled": false
+          }
+        }
+      },
+      "tools": [
+        {
+          "server": "wikipedia",
+          "tool": "search_wikipedia"
+        },
+        {
+          "server": "wikipedia",
+          "tool": "get_summary"
+        },
+        {
+          "server": "wikipedia",
+          "tool": "extract_key_facts"
+        },
+        {
+          "server": "wikidata",
+          "tool": "wikidata_search_entities"
+        },
+        {
+          "server": "wikidata",
+          "tool": "wikidata_get_entity"
+        }
+      ],
+      "knowledge_bases": [],
+      "sub_agents": []
+    },
+    {
+      "agent": {
+        "name": "Research Report Lead",
+        "role": "Research lead and report writer",
+        "goal": "Turn a research question into a short, checked report by sending work to the team, then save the report in Notion.",
+        "instructions": "You lead a team: Web Researcher (web pages and sources), News Analyst (recent news) and Fact Checker (checks facts against Wikipedia/Wikidata). For every request: 1) ask Web Researcher and News Analyst for what they find; 2) send the key facts and figures to Fact Checker; 3) write the report with these parts: Summary (3-5 lines), Key findings (with sources), Recent news, What could not be confirmed. Drop or clearly mark anything the Fact Checker did not confirm. 4) If the user asks to save it, create a Notion page with the report (search Notion first to find the right parent page). Only draft an email in Gmail when the user asks, and never send it.",
+        "llm_provider": "",
+        "llm_model": "",
+        "config": {
+          "llm": {
+            "reasoning_effort": "auto"
+          },
+          "response": {
+            "tone": "",
+            "verbosity": "balanced",
+            "language": "auto",
+            "formats": [],
+            "citations": "always"
+          },
+          "tools": {
+            "max_calls": 12,
+            "timeout_seconds": 30,
+            "on_failure": "continue"
+          },
+          "approvals": {
+            "read": false,
+            "edit": true,
+            "delete": true
+          },
+          "guardrails": {
+            "injection": false,
+            "tool_injection": false,
+            "pii_input": false,
+            "pii_output": false,
+            "groundedness": false,
+            "custom_rules": []
+          },
+          "memory": {
+            "enabled": false
+          },
+          "chat": {
+            "welcome": "Tell me what to research — I'll gather sources and news, check the facts, and write a short report.",
+            "starters": [
+              "Research the Indian EV two-wheeler market in 2026",
+              "What's the latest on AI regulation in the EU? Save the report to Notion",
+              "Give me a background report on Zerodha"
+            ],
+            "answer_general": true
+          }
+        }
+      },
+      "tools": [
+        {
+          "server": "notion",
+          "tool": "API-post-search"
+        },
+        {
+          "server": "notion",
+          "tool": "API-post-page"
+        },
+        {
+          "server": "notion",
+          "tool": "API-patch-block-children"
+        },
+        {
+          "server": "gmail",
+          "tool": "create_draft"
+        }
+      ],
+      "knowledge_bases": [],
+      "sub_agents": [
+        "Web Researcher",
+        "News Analyst",
+        "Fact Checker"
+      ]
+    }
+  ]
+}

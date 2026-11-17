@@ -3,7 +3,8 @@
     GET  /agents/{agent_id}/requirements  servers its tools (and its team's tools) live on,
                                           and whether the caller has connected each
     GET  /agents/{agent_id}/export        the agent as a JSON file another workspace can import
-    POST /agents/import                   create an agent from such a file
+                                          (?team=true: with the agents it hands work to, one file)
+    POST /agents/import                   create the agent — or the whole team — from such a file
 
 Every agent is shared in its tenant and each person runs it as themselves, so
 the chat says up front which accounts are still to connect — with the same
@@ -15,7 +16,7 @@ reports what it couldn't match instead of failing.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import select
@@ -23,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import CurrentUser
 from src.db.session import get_db
+from src.models.tenant import uuid_str
 
 from knowledge.models import KnowledgeBase
 from vendor.models import MCPTool, VendorMCPServer
@@ -42,7 +44,7 @@ from builder.versions.service import record_version
 router = APIRouter()
 
 FILE_FORMAT = "enterprisesai.agent"
-FILE_VERSION = 1
+FILE_VERSION = 2  # 2 added team files (``agents``); 1 files still import
 
 
 # ── what it needs ───────────────────────────────────────────────────────────
@@ -100,6 +102,9 @@ async def agent_requirements(agent_id: str, user: CurrentUser = Depends(get_end_
 
 # ── export / import ─────────────────────────────────────────────────────────
 
+# The most agents one file may carry: a lead and its team (an agent has at most five sub-agents).
+MAX_TEAM = 10
+
 
 class ExportedTool(BaseModel):
     server: str = Field(max_length=255)
@@ -116,18 +121,44 @@ class ExportedAgent(BaseModel):
     config: dict = Field(default_factory=dict)
 
 
-class AgentFile(BaseModel):
-    format: str
-    format_version: int
+class AgentEntry(BaseModel):
+    """One agent in a file, with what it refers to by name."""
+
     agent: ExportedAgent
     tools: list[ExportedTool] = Field(default_factory=list, max_length=50)
     knowledge_bases: list[str] = Field(default_factory=list, max_length=10)
+    # Agents it hands work to: another agent in the same file, or one already in the workspace.
     sub_agents: list[str] = Field(default_factory=list, max_length=5)
 
 
+class AgentFile(BaseModel):
+    """Version 1 is one agent: ``agent`` with its references beside it.
+    Version 2 is a team: ``agents``, each with its own references. Sub-agents
+    named from the same file are created with it, so a whole team imports
+    at once and the order inside the file doesn't matter."""
+
+    format: str
+    format_version: int
+    agent: ExportedAgent | None = None
+    tools: list[ExportedTool] = Field(default_factory=list, max_length=50)
+    knowledge_bases: list[str] = Field(default_factory=list, max_length=10)
+    sub_agents: list[str] = Field(default_factory=list, max_length=5)
+    agents: list[AgentEntry] = Field(default_factory=list, max_length=MAX_TEAM)
+
+    def entries(self) -> list[AgentEntry]:
+        if self.agents:
+            return self.agents
+        if self.agent:
+            return [AgentEntry(agent=self.agent, tools=self.tools, knowledge_bases=self.knowledge_bases, sub_agents=self.sub_agents)]
+        return []
+
+
 class ImportOut(BaseModel):
+    # The agent to open: for a team, its lead (the one no other agent in the file hands work to).
     agent: AgentOut
-    # What the file referred to that this workspace doesn't have (left out of the new agent).
+    # Every agent created, sub-agents before the agents that use them.
+    agents: list[AgentOut]
+    # What the file referred to that this workspace doesn't have (left out of the new agents).
     skipped: list[str]
 
 
@@ -135,9 +166,12 @@ class ImportOut(BaseModel):
 _BY_ID = ("tool_ids", "knowledge_base_ids", "sub_agent_ids")
 
 
-@router.get("/agents/{agent_id}/export")
-async def export_agent(agent_id: str, user: CurrentUser = Depends(get_end_user), db: AsyncSession = Depends(get_db)):
-    agent = await get_agent(db, agent_id, user)
+def _slug(name: str) -> str:
+    return "".join(c if c.isalnum() else "-" for c in name.lower()).strip("-") or "agent"
+
+
+async def _entry(db: AsyncSession, user: CurrentUser, agent: BuilderAgent) -> AgentEntry:
+    """One saved agent as a file entry: its references by name instead of id."""
     config = AgentConfig.model_validate(agent.config or {})
     refs = [p for p in (parse_tool_id(t) for t in config.tool_ids) if p]
     servers = {
@@ -150,9 +184,7 @@ async def export_agent(agent_id: str, user: CurrentUser = Depends(get_end_user),
     subs = (
         await db.execute(select(BuilderAgent.name).where(BuilderAgent.id.in_(config.sub_agent_ids), BuilderAgent.tenant_id == user.tenant_id))
     ).scalars().all() if config.sub_agent_ids else []
-    body = AgentFile(
-        format=FILE_FORMAT,
-        format_version=FILE_VERSION,
+    return AgentEntry(
         agent=ExportedAgent(
             name=agent.name, role=agent.role, goal=agent.goal, instructions=agent.instructions or "",
             llm_provider=agent.llm_provider or "", llm_model=agent.llm_model or "",
@@ -162,23 +194,67 @@ async def export_agent(agent_id: str, user: CurrentUser = Depends(get_end_user),
         knowledge_bases=list(kbs),
         sub_agents=list(subs),
     )
-    slug = "".join(c if c.isalnum() else "-" for c in agent.name.lower()).strip("-") or "agent"
+
+
+@router.get("/agents/{agent_id}/export")
+async def export_agent(
+    agent_id: str,
+    team: bool = Query(default=False, description="Also put the agents it hands work to in the file (a version 2 team file)."),
+    user: CurrentUser = Depends(get_end_user),
+    db: AsyncSession = Depends(get_db),
+):
+    agent = await get_agent(db, agent_id, user)
+    lead = await _entry(db, user, agent)
+    members: list[BuilderAgent] = []
+    if team:
+        ids = AgentConfig.model_validate(agent.config or {}).sub_agent_ids
+        rows = {
+            a.id: a
+            for a in (await db.execute(select(BuilderAgent).where(BuilderAgent.id.in_(ids), BuilderAgent.tenant_id == user.tenant_id))).scalars()
+        } if ids else {}
+        members = [rows[i] for i in ids if i in rows and i != agent.id]
+    if members:
+        entries = [await _entry(db, user, m) for m in members] + [lead]
+        body = {"format": FILE_FORMAT, "format_version": 2, "agents": [e.model_dump() for e in entries]}
+        filename = f"{_slug(agent.name)}-team.agent.json"
+    else:
+        # A single agent stays a version 1 file, so older installs can still import it.
+        body = {"format": FILE_FORMAT, "format_version": 1, **lead.model_dump()}
+        filename = f"{_slug(agent.name)}.agent.json"
     return JSONResponse(
-        content={**body.model_dump(), "exported_at": utcnow().isoformat()},
-        headers={"Content-Disposition": f'attachment; filename="{slug}.agent.json"'},
+        content={**body, "exported_at": utcnow().isoformat()},
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
-@router.post("/agents/import", response_model=ImportOut, status_code=201)
-async def import_agent(payload: AgentFile, user: CurrentUser = Depends(get_end_user), db: AsyncSession = Depends(get_db)):
-    if payload.format != FILE_FORMAT:
-        raise HTTPException(status_code=422, detail="This isn't an agent file exported from here.")
-    if payload.format_version > FILE_VERSION:
-        raise HTTPException(status_code=422, detail="This file comes from a newer version; update before importing it.")
-    skipped: list[str] = []
+def _team_order(entries: list[AgentEntry], in_file: dict[str, int]) -> list[int]:
+    """Entry indexes with every sub-agent from the file before the agent that uses it."""
+    order: list[int] = []
+    state: dict[int, str] = {}  # "busy" while its sub-agents are being placed, then "done"
 
+    def visit(i: int, path: list[str]) -> None:
+        if state.get(i) == "done":
+            return
+        name = entries[i].agent.name.strip()
+        if state.get(i) == "busy":
+            raise HTTPException(status_code=422, detail="The agents in this file hand work to each other in a loop: " + " → ".join([*path, name]) + ".")
+        state[i] = "busy"
+        for sub in entries[i].sub_agents:
+            j = in_file.get(sub.strip().lower())
+            if j is not None:
+                visit(j, [*path, name])
+        state[i] = "done"
+        order.append(i)
+
+    for i in range(len(entries)):
+        visit(i, [])
+    return order
+
+
+async def _match_tools(db: AsyncSession, user: CurrentUser, tools: list[ExportedTool]) -> tuple[list[str], list[str]]:
+    skipped: list[str] = []
     tool_ids: list[str] = []
-    wanted = {t.server for t in payload.tools}
+    wanted = {t.server for t in tools}
     candidates = list((await db.execute(select(VendorMCPServer).where(VendorMCPServer.name.in_(wanted)))).scalars()) if wanted else []
     visible: dict[str, VendorMCPServer] = {}
     for s in candidates:
@@ -190,7 +266,7 @@ async def import_agent(payload: AgentFile, user: CurrentUser = Depends(get_end_u
             await db.execute(select(MCPTool.mcp_server_id, MCPTool.name).where(MCPTool.mcp_server_id.in_([s.id for s in visible.values()])))
         ).all()
     } if visible else set()
-    for t in payload.tools:
+    for t in tools:
         server = visible.get(t.server)
         if server is None:
             skipped.append(f"Tool {t.server}.{t.tool}: no server named \"{t.server}\" is available to you.")
@@ -198,41 +274,82 @@ async def import_agent(payload: AgentFile, user: CurrentUser = Depends(get_end_u
             skipped.append(f"Tool {t.server}.{t.tool}: {t.server} has no tool by that name.")
         else:
             tool_ids.append(f"mcp:{server.id}:{t.tool}")
+    return tool_ids, skipped
 
-    kb_ids: list[str] = []
-    for name in payload.knowledge_bases:
-        kb = (await db.execute(select(KnowledgeBase.id).where(KnowledgeBase.tenant_id == user.tenant_id, KnowledgeBase.name == name))).scalars().first()
-        if kb:
-            kb_ids.append(kb)
-        else:
-            skipped.append(f"Knowledge base \"{name}\": there is none by that name here.")
 
-    sub_ids: list[str] = []
-    for name in payload.sub_agents:
-        sub = (
-            await db.execute(select(BuilderAgent.id).where(
-                BuilderAgent.tenant_id == user.tenant_id, BuilderAgent.workflow_id.is_(None), BuilderAgent.name == name,
-            ))
-        ).scalars().first()
-        if sub:
-            sub_ids.append(sub)
-        else:
-            skipped.append(f"Sub-agent \"{name}\": there is no agent by that name here.")
+@router.post("/agents/import", response_model=ImportOut, status_code=201)
+async def import_agent(payload: AgentFile, user: CurrentUser = Depends(get_end_user), db: AsyncSession = Depends(get_db)):
+    if payload.format != FILE_FORMAT:
+        raise HTTPException(status_code=422, detail="This isn't an agent file exported from here.")
+    if payload.format_version > FILE_VERSION:
+        raise HTTPException(status_code=422, detail="This file comes from a newer version; update before importing it.")
+    entries = payload.entries()
+    if not entries:
+        raise HTTPException(status_code=422, detail="This file has no agent in it.")
+    names = [e.agent.name.strip() for e in entries]
+    in_file: dict[str, int] = {}
+    for i, name in enumerate(names):
+        if name.lower() in in_file:
+            raise HTTPException(status_code=422, detail=f'Two agents in this file are called "{name}"; each needs its own name.')
+        in_file[name.lower()] = i
+    order = _team_order(entries, in_file)
+    ids = [uuid_str() for _ in entries]
+    team = len(entries) > 1
 
-    raw = {k: v for k, v in payload.agent.config.items() if k not in _BY_ID}
-    try:
-        config = AgentConfig.model_validate({**raw, "tool_ids": tool_ids, "knowledge_base_ids": kb_ids, "sub_agent_ids": sub_ids})
-    except ValidationError as exc:
-        raise HTTPException(status_code=422, detail="The file's settings aren't valid: " + "; ".join(config_errors(exc))) from exc
+    # Everything is worked out and checked before anything is saved: a team arrives whole or not at all.
+    skipped: list[str] = []
+    agents: dict[int, BuilderAgent] = {}
+    for i in order:
+        e, a = entries[i], entries[i].agent
+        mine: list[str] = []
+        tool_ids, missing = await _match_tools(db, user, e.tools)
+        mine += missing
 
-    a = payload.agent
-    agent = BuilderAgent(
-        tenant_id=user.tenant_id, owner_id=user.id, name=a.name.strip(), role=a.role.strip(), goal=a.goal.strip(),
-        instructions=a.instructions.strip(), llm_provider=a.llm_provider.strip(), llm_model=a.llm_model.strip(),
-        config=config.model_dump(),
-    )
-    db.add(agent)
-    await record_version(db, "agent", agent, author_id=user.id, note="Imported")
+        kb_ids: list[str] = []
+        for name in e.knowledge_bases:
+            kb = (await db.execute(select(KnowledgeBase.id).where(KnowledgeBase.tenant_id == user.tenant_id, KnowledgeBase.name == name))).scalars().first()
+            if kb:
+                kb_ids.append(kb)
+            else:
+                mine.append(f"Knowledge base \"{name}\": there is none by that name here.")
+
+        sub_ids: list[str] = []
+        for name in e.sub_agents:
+            j = in_file.get(name.strip().lower())
+            if j is not None:
+                sub_ids.append(ids[j])  # a teammate from this file
+                continue
+            sub = (
+                await db.execute(select(BuilderAgent.id).where(
+                    BuilderAgent.tenant_id == user.tenant_id, BuilderAgent.workflow_id.is_(None), BuilderAgent.name == name,
+                ))
+            ).scalars().first()
+            if sub:
+                sub_ids.append(sub)
+            else:
+                mine.append(f"Sub-agent \"{name}\": there is no agent by that name here or in the file.")
+
+        raw = {k: v for k, v in a.config.items() if k not in _BY_ID}
+        try:
+            config = AgentConfig.model_validate({**raw, "tool_ids": tool_ids, "knowledge_base_ids": kb_ids, "sub_agent_ids": sub_ids})
+        except ValidationError as exc:
+            where = f' of "{names[i]}"' if team else ""
+            raise HTTPException(status_code=422, detail=f"The settings{where} in the file aren't valid: " + "; ".join(config_errors(exc))) from exc
+        skipped += [f"{names[i]} — {s}" for s in mine] if team else mine
+        agents[i] = BuilderAgent(
+            id=ids[i], tenant_id=user.tenant_id, owner_id=user.id, name=names[i], role=a.role.strip(), goal=a.goal.strip(),
+            instructions=a.instructions.strip(), llm_provider=a.llm_provider.strip(), llm_model=a.llm_model.strip(),
+            config=config.model_dump(),
+        )
+
+    for i in order:
+        db.add(agents[i])
+        await record_version(db, "agent", agents[i], author_id=user.id, note="Imported")
     await db.commit()
-    await db.refresh(agent)
-    return ImportOut(agent=agent_out(agent, user), skipped=skipped)
+    for agent in agents.values():
+        await db.refresh(agent)
+
+    used = {in_file[s.strip().lower()] for e in entries for s in e.sub_agents if s.strip().lower() in in_file}
+    leads = [i for i in order if i not in used]
+    lead = leads[-1] if leads else order[-1]
+    return ImportOut(agent=agent_out(agents[lead], user), agents=[agent_out(agents[i], user) for i in order], skipped=skipped)
