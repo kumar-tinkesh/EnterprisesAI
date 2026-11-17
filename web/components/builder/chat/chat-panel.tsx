@@ -12,6 +12,7 @@ import { ApprovalCard } from "@/components/builder/approval-card";
 import { AnswerMessage, Avatar, AvatarKind, FileChip, GuardrailNotes, UserMessage } from "@/components/builder/chat/chat-message";
 import { ChatHistory } from "@/components/builder/chat/chat-history";
 import { MarkdownView } from "@/components/builder/chat/markdown-view";
+import { AnswerView } from "@/components/builder/run-output";
 import { coerce } from "@/components/builder/playground";
 import { ConnectButton } from "@/components/connections/connect-button";
 import { ApiError } from "@/lib/api";
@@ -28,8 +29,8 @@ export type ChatTarget = { kind: "agent" | "workflow"; id: string };
 
 const TONE_DOT = { info: "text-zinc-400", ok: "text-emerald-500", warn: "text-amber-500", error: "text-red-500" } as const;
 // What the attach button offers: what the backend can read (builder/api/v1/attachments.py).
-const ACCEPT = ".pdf,.docx,.xlsx,.csv,.md,.txt,.png,.jpg,.jpeg";
-const MAX_FILES = 5;
+export const ACCEPT = ".pdf,.docx,.xlsx,.csv,.md,.txt,.png,.jpg,.jpeg";
+export const MAX_FILES = 5;
 
 const DEPTHS: { id: AnswerDepth; label: string; hint: string }[] = [
   { id: "short", label: "Short", hint: "a line or two" },
@@ -67,7 +68,7 @@ function LiveAnswer({
   const doing =
     view.status === "waiting"
       ? "Waiting for your decision"
-      : view.live?.text
+      : view.live?.text && !view.live.paused
         ? "Writing…"
         : last
         ? `${last.nodeId ? `${stepName(last.nodeId)} ` : ""}${last.text}`
@@ -92,10 +93,13 @@ function LiveAnswer({
           </div>
         )}
         {view.output ? (
-          <div className="mt-2"><MarkdownView text={view.output} /></div>
+          <div className="mt-2"><AnswerView text={view.output} /></div>
         ) : view.live?.text ? (
-          // The answer as it's being written; the finished one replaces it.
-          <div className="mt-2"><MarkdownView text={view.live.text + " ▍"} /></div>
+          // The answer as it's being written; the finished one replaces it. A turn that went
+          // on to use tools stays in view, dimmed, until the next one starts writing.
+          <div className={cn("mt-2 transition-opacity", view.live.paused && "opacity-50")}>
+            <MarkdownView text={view.live.paused ? view.live.text : view.live.text + " ▍"} />
+          </div>
         ) : (
           <div className="mt-2.5 space-y-2" aria-hidden>
             <div className="h-2 w-[80%] animate-pulse rounded-full bg-zinc-100" />
@@ -208,6 +212,8 @@ export function ChatPanel({
   // ── The run being answered now ──
   const [liveRunId, setLiveRunId] = useState<string | null>(null);
   const [pendingText, setPendingText] = useState<string | null>(null);
+  // When the message went: the clock under it runs from here, before the run exists.
+  const [sentAt, setSentAt] = useState<string | null>(null);
   const { view } = useRunStream(liveRunId, token);
   const liveRun = thread.find((r) => r.id === liveRunId);
 
@@ -217,14 +223,38 @@ export function ChatPanel({
     if (!liveRunId && last && !isFinished(last.status)) setLiveRunId(last.id);
   }, [thread, liveRunId]);
 
-  // Finished: fetch the full run (tool calls, timings) into the thread, then stop following it.
+  // Finished: put what the live view already has (status, answer) into the thread at once, so
+  // the answer never blinks out while the full run (tool calls, timings) is fetched; then stop following it.
   useEffect(() => {
     if (!liveRunId || !isFinished(view.status) || view.runId !== liveRunId) return;
+    const status = view.status!;
+    queryClient.setQueryData<Run[]>(["builder-chat-runs", chatId], (list) =>
+      list?.map((r) =>
+        r.id !== liveRunId || isFinished(r.status)
+          ? r
+          : {
+              ...r,
+              status,
+              error: view.error ?? r.error,
+              output_text: view.output ?? r.output_text,
+              output: {
+                ...(r.output ?? {}),
+                text: view.output ?? r.output?.text,
+                sources: view.sources.length ? view.sources : r.output?.sources,
+                guardrails: view.guardrails.length ? view.guardrails : r.output?.guardrails,
+              },
+            },
+      ),
+    );
     let stale = false;
     void Promise.all([
       queryClient.invalidateQueries({ queryKey: ["builder-chat-runs", chatId] }),
       queryClient.invalidateQueries({ queryKey: chatsKey }),
-    ]).then(() => !stale && setLiveRunId(null));
+    ]).then(() => {
+      if (stale) return;
+      setLiveRunId(null);
+      setSentAt(null);
+    });
     return () => {
       stale = true;
     };
@@ -238,6 +268,7 @@ export function ChatPanel({
   const [showInputs, setShowInputs] = useState(false);
   const [problems, setProblems] = useState<Problem[]>([]);
   const missingRequired = fields.filter((f) => f.required && !(values[f.name] ?? "").trim());
+  const filledCount = fields.filter((f) => (values[f.name] ?? "").trim()).length;
   const inputsOpen = showInputs || missingRequired.length > 0;
 
   // ── Files for the next message (agents only) ──
@@ -272,9 +303,12 @@ export function ChatPanel({
         const v = coerce(f, values[f.name] ?? "");
         if (v !== undefined) variables[f.name] = v;
       }
-      return builderApi.startWorkflowRun(token, id, text, variables, depth, ref, streamOn);
+      return builderApi.startWorkflowRun(token, id, text, variables, depth, ref, streamOn, files.map((f) => f.id));
     },
-    onMutate: (text) => setPendingText(text),
+    onMutate: (text) => {
+      setPendingText(text);
+      setSentAt(new Date().toISOString());
+    },
     onSuccess: async (run) => {
       setFiles([]);
       setLiveRunId(run.id);
@@ -296,7 +330,7 @@ export function ChatPanel({
   const stop = useMutation({ mutationFn: () => builderApi.cancelRun(token, liveRunId!) });
 
   const busy = send.isPending || (!!liveRunId && !isFinished(view.status));
-  const canSend = !busy && uploading === 0 && !!token && (input.trim().length > 0 || (kind === "workflow" && fields.length > 0)) && missingRequired.length === 0;
+  const canSend = !busy && uploading === 0 && !!token && (input.trim().length > 0 || (kind === "workflow" && (fields.length > 0 || files.length > 0))) && missingRequired.length === 0;
   const submit = (text = input) => {
     if (busy || uploading > 0 || (!text.trim() && kind === "agent")) return;
     if (missingRequired.length) {
@@ -310,12 +344,14 @@ export function ChatPanel({
   const newChat = () => {
     setPicked(null);
     setLiveRunId(null);
+    setSentAt(null);
     setProblems([]);
     composer.current?.focus();
   };
   const openChat = (cid: string) => {
     setPicked(cid);
     setLiveRunId(null);
+    setSentAt(null);
     setProblems([]);
   };
   const removeChat = async (cid: string) => {
@@ -363,15 +399,18 @@ export function ChatPanel({
           {!embedded && <p className="truncate text-sm font-semibold text-zinc-900">{name}</p>}
           <p className={cn("truncate", embedded ? "text-sm font-medium text-zinc-900" : "text-xs text-zinc-500")}>{chat ? chat.title : "New chat"}</p>
         </div>
-        <button
-          type="button"
-          onClick={newChat}
-          aria-label="New chat"
-          title="New chat — this one stays in your history"
-          className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-sm text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer"
-        >
-          <Plus className="h-4 w-4" /> <span className="hidden sm:inline">New chat</span>
-        </button>
+        {/* Already in a new, empty chat: nothing for "New chat" to do. */}
+        {(chatId || pendingText !== null) && (
+          <button
+            type="button"
+            onClick={newChat}
+            aria-label="New chat"
+            title="New chat — this one stays in your history"
+            className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-sm text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer"
+          >
+            <Plus className="h-4 w-4" /> <span className="hidden sm:inline">New chat</span>
+          </button>
+        )}
         <ChatHistory
           chats={chats.data ?? []}
           loading={chats.isLoading}
@@ -467,7 +506,8 @@ export function ChatPanel({
             {thread.map((run, i) => {
               const prev = thread[i - 1];
               const showDay = !prev || new Date(prev.created_at).toDateString() !== new Date(run.created_at).toDateString();
-              const following = run.id === liveRunId && !isFinished(view.runId === run.id ? view.status : run.status);
+              // Followed until the thread itself has the finished run (patched in at once when it ends).
+              const following = run.id === liveRunId && !isFinished(run.status);
               return (
                 <div key={run.id} className="flex flex-col gap-4">
                   {showDay && (
@@ -482,7 +522,7 @@ export function ChatPanel({
                     } : undefined}
                   />
                   {following ? (
-                    <LiveAnswer name={name} view={view} since={run.started_at ?? run.created_at} token={token} stepName={stepName} />
+                    <LiveAnswer name={name} view={view} since={sentAt ?? run.started_at ?? run.created_at} token={token} stepName={stepName} />
                   ) : (
                     <AnswerMessage
                       run={run}
@@ -501,7 +541,7 @@ export function ChatPanel({
             {pendingText !== null && !liveRun && (
               <div className="flex flex-col gap-4">
                 <UserMessage text={pendingText || "(ran with its inputs)"} files={files} />
-                <LiveAnswer name={name} view={{ ...view, timeline: [], approvals: [], output: null, guardrails: [], status: null }} since={null} token={token} stepName={stepName} />
+                <LiveAnswer name={name} view={{ ...view, timeline: [], approvals: [], output: null, guardrails: [], status: null, live: null }} since={sentAt} token={token} stepName={stepName} />
               </div>
             )}
             <div ref={end} />
@@ -551,7 +591,11 @@ export function ChatPanel({
               >
                 <SlidersHorizontal className="h-4 w-4 text-zinc-500" /> Inputs
                 <span className={cn("text-xs font-normal", missingRequired.length ? "text-amber-700" : "text-zinc-500")}>
-                  {missingRequired.length ? `${missingRequired.length} required` : `${fields.length} filled in`}
+                  {missingRequired.length
+                    ? `${missingRequired.length} required`
+                    : filledCount
+                      ? `${filledCount} of ${fields.length} filled in`
+                      : `${fields.length} optional field${fields.length === 1 ? "" : "s"}`}
                 </span>
                 <ChevronDown className={cn("ml-auto h-4 w-4 text-zinc-500 transition-transform", inputsOpen && "rotate-180")} />
               </button>
@@ -586,7 +630,7 @@ export function ChatPanel({
             }}
             className="rounded-2xl border border-[var(--border-strong)] bg-[var(--surface)] px-3 pb-2 pt-3 transition focus-within:border-[var(--accent-hover)]"
           >
-            {kind === "agent" && (files.length > 0 || uploading > 0 || fileError) && (
+            {(files.length > 0 || uploading > 0 || fileError) && (
               <div className="mb-2 flex flex-wrap items-center gap-1.5">
                 {files.map((f) => (
                   <FileChip key={f.id} file={f} onRemove={() => setFiles((cur) => cur.filter((x) => x.id !== f.id))} />
@@ -611,31 +655,27 @@ export function ChatPanel({
               className="block max-h-40 min-h-[36px] w-full resize-none bg-transparent px-1 py-1 text-sm text-zinc-900 outline-none placeholder:text-zinc-500"
             />
             <div className="mt-1 flex items-center gap-1">
-              {kind === "agent" && (
-                <>
-                  <input
-                    ref={picker}
-                    type="file"
-                    multiple
-                    accept={ACCEPT}
-                    className="hidden"
-                    onChange={(e) => {
-                      void attach(e.target.files);
-                      e.target.value = "";
-                    }}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => picker.current?.click()}
-                    disabled={busy || files.length >= MAX_FILES}
-                    aria-label="Attach files"
-                    title="Attach a document (PDF, Word, Excel, CSV, text) or an image (JPG, PNG)"
-                    className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-40 cursor-pointer"
-                  >
-                    <Paperclip className="h-4 w-4" />
-                  </button>
-                </>
-              )}
+              <input
+                ref={picker}
+                type="file"
+                multiple
+                accept={ACCEPT}
+                className="hidden"
+                onChange={(e) => {
+                  void attach(e.target.files);
+                  e.target.value = "";
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => picker.current?.click()}
+                disabled={busy || files.length >= MAX_FILES}
+                aria-label="Attach files"
+                title="Attach a document (PDF, Word, Excel, CSV, text) or an image (JPG, PNG)"
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-40 cursor-pointer"
+              >
+                <Paperclip className="h-4 w-4" />
+              </button>
               <Menu
                 label="Answer settings"
                 trigger={<>Length: {DEPTHS.find((d) => d.id === depth)?.label} <ChevronDown className="h-3.5 w-3.5" /></>}
@@ -645,6 +685,12 @@ export function ChatPanel({
                   { label: "Show the answer as it's written", checked: streamOn, divided: true, onClick: () => setStreamOn(!streamOn) },
                 ]}
               />
+              {/* Why it can't send yet, right where the dimmed send button is. */}
+              {!busy && missingRequired.length > 0 && (
+                <span className="min-w-0 flex-1 truncate text-right text-xs text-amber-700" role="status">
+                  Fill in {missingRequired.map((f) => f.label || f.name).join(", ")} first
+                </span>
+              )}
               {busy && liveRunId ? (
                 <button
                   type="button"

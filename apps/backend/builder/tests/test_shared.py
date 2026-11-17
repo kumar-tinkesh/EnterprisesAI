@@ -414,3 +414,85 @@ async def test_a_workflows_outline_is_its_steps_in_order_with_side_by_side_ones_
     steps = r.json()["steps"]
     assert [(s["title"], s["level"]) for s in steps] == [("Input", 0), ("Searcher", 1), ("Reader", 1), ("Answer", 2)]
     assert steps[1]["apps"] == ["demo"] and steps[1]["hint"] == "Search the web"
+
+
+async def test_a_visitor_sends_their_own_file_and_a_publisher_link_refuses_one(db, tenant_client, make_user_client, demo, gateway, runtime):
+    await visitor_account(db)
+    agent = await make_agent(tenant_client, demo, [])
+    visitor = await make_user_client(outsider())
+    r = await visitor.post(f"{B}/attachments", files={"file": ("resume.txt", b"Ravi - Java, 2025 batch", "text/plain")})
+    assert r.status_code == 201, r.text
+    doc = r.json()["id"]
+
+    theirs = await publish(tenant_client, "agents", agent["id"], share=True, tool_mode="visitor")
+    gw = gateway([reply("Java developer, 2025.")])
+    # A file alone is enough to start it.
+    r = await visitor.post(f"{S}/{theirs['share_slug']}/runs", json={"input": "", "attachment_ids": [doc], "wait_seconds": 0})
+    assert r.status_code == 202, r.text
+    await worker(runtime).drain()
+    row = await db.get(BuilderRun, r.json()["run_id"])
+    await db.refresh(row)
+    assert row.status == "succeeded", (row.status, row.error)
+    assert "2025 batch" in gw.requests[0].messages[-1].content
+    assert (await db.get(BuilderRun, r.json()["run_id"])).input["attachments"][0]["filename"] == "resume.txt"
+
+    mine = await publish(tenant_client, "agents", agent["id"], share=True)
+    r = await visitor.post(f"{S}/{mine['share_slug']}/runs", json={"input": "x", "attachment_ids": [doc]})
+    assert r.status_code == 422 and "your own apps" in r.json()["detail"]
+
+
+async def test_a_visitor_sees_their_own_runs_step_notes(db, tenant_client, make_user_client, gateway, runtime):
+    await visitor_account(db)
+    body = {
+        "name": "Finder",
+        "nodes": [
+            {"id": "in", "type": "input"},
+            {"id": "a", "type": "agent", "draft_agent": {"name": "Searcher", "role": "r", "goal": "Search"}},
+            {"id": "out", "type": "output"},
+        ],
+        "edges": [{"id": "e1", "source": "in", "target": "a"}, {"id": "e2", "source": "a", "target": "out"}],
+    }
+    wf = (await tenant_client.post(f"{B}/workflows", json=body)).json()
+    visitor = await make_user_client(outsider())
+
+    theirs = await publish(tenant_client, "workflows", wf["id"], share=True, tool_mode="visitor")
+    gateway([reply("| Job |\n|---|\n| A |\n▸ 1 job found on Naukri\n▸ Tip: put Python first")])
+    r = await visitor.post(f"{S}/{theirs['share_slug']}/runs", json={"input": "go", "wait_seconds": 0})
+    await worker(runtime).drain()
+    done = (await visitor.get(f"{S}/{theirs['share_slug']}/runs/{r.json()['run_id']}")).json()
+    assert done["steps"] == [{"id": "a", "title": "Searcher", "kind": "agent", "status": "succeeded",
+                              "notes": ["1 job found on Naukri", "Tip: put Python first"]}]
+
+    # A run with the publisher's apps is theirs: its steps say only where it is.
+    mine = await publish(tenant_client, "workflows", wf["id"], share=True)
+    gateway([reply("▸ secret")])
+    r = await visitor.post(f"{S}/{mine['share_slug']}/runs", json={"input": "go", "wait_seconds": 0})
+    await worker(runtime).drain()
+    done = (await visitor.get(f"{S}/{mine['share_slug']}/runs/{r.json()['run_id']}")).json()
+    assert "notes" not in done["steps"][0]
+
+
+async def test_a_line_a_later_step_repeats_is_shown_once(db, tenant_client, make_user_client, gateway, runtime):
+    await visitor_account(db)
+    body = {
+        "name": "Finder",
+        "nodes": [
+            {"id": "in", "type": "input"},
+            {"id": "a", "type": "agent", "draft_agent": {"name": "Searcher", "role": "r", "goal": "Search"}},
+            {"id": "b", "type": "agent", "draft_agent": {"name": "Ranker", "role": "r", "goal": "Rank"}},
+            {"id": "out", "type": "output"},
+        ],
+        "edges": [
+            {"id": "e1", "source": "in", "target": "a"},
+            {"id": "e2", "source": "a", "target": "b"},
+            {"id": "e3", "source": "b", "target": "out"},
+        ],
+    }
+    wf = (await tenant_client.post(f"{B}/workflows", json=body)).json()
+    visitor = await make_user_client(outsider())
+    link = await publish(tenant_client, "workflows", wf["id"], share=True, tool_mode="visitor")
+    gateway([reply("▸ 60 jobs on Indeed"), reply("▸ 60 jobs on Indeed\n▸ 5 matches")])
+    r = await visitor.post(f"{S}/{link['share_slug']}/runs", json={"input": "go", "wait_seconds": 0})
+    await worker(runtime).drain()
+    done = (await visitor.get(f"{S}/{link['share_slug']}/runs/{r.json()['run_id']}")).json()
+    assert [s["notes"] for s in done["steps"]] == [["60 jobs on Indeed"], ["5 matches"]]

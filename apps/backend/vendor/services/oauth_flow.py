@@ -69,6 +69,8 @@ class _PendingAuthorization:
     user_id: Optional[str] = None
     # PKCE (RFC 7636): sent with the code, proves this backend started the sign-in.
     code_verifier: Optional[str] = None
+    # "instagram": Meta's Unified Login (vendor.services.mcp_auth.instagram), not a standard token endpoint.
+    provider: Optional[str] = None
     created_at: float = field(default_factory=time.monotonic)
 
 
@@ -285,6 +287,32 @@ def build_authorize_url(
     return f"{authorization_endpoint}?{urlencode(params)}", state
 
 
+async def start_instagram(
+    db: AsyncSession,
+    *,
+    server: VendorMCPServer,
+    backend_public_url: str,
+    tenant_id: Optional[str],
+    user_id: Optional[str],
+) -> tuple[str, str]:
+    """"Connect with Instagram": ``(authorization_url, state)`` for Meta's Unified Login dialog."""
+    from vendor.services.mcp_auth import instagram
+
+    setup = instagram.sign_in_setup(server)
+    stored = await mcp_auth.load_server_credentials(db, server_id=server.id, tenant_id=None)
+    app_id, app_secret, config_id = setup.get("app_id"), stored.get(instagram.APP_SECRET), setup.get("config_id")
+    if not (app_id and app_secret and config_id):
+        raise OAuthFlowError("Instagram sign-in isn't set up yet: an admin needs to add the Meta app first.")
+    _purge_expired()
+    state = secrets.token_urlsafe(32)
+    redirect_uri = callback_redirect_uri(backend_public_url)
+    _pending[state] = _PendingAuthorization(
+        server_id=server.id, tenant_id=tenant_id, client_id=app_id, client_secret=app_secret,
+        redirect_uri=redirect_uri, user_id=user_id, provider="instagram",
+    )
+    return instagram.authorize_url(app_id=app_id, config_id=config_id, redirect_uri=redirect_uri, state=state), state
+
+
 def _match_declared_field(param_name: str, declared_field_names: list[str]) -> Optional[str]:
     """Fold away case/underscores and match a provider's own callback param
     name (e.g. Intuit's camelCase ``realmId``) against this server's
@@ -328,6 +356,23 @@ async def complete_authorization(
     server = await get_mcp_server(db, server_id=pending.server_id)
     if server is None:
         raise OAuthFlowError("The MCP server for this authorization no longer exists.")
+
+    if pending.provider == "instagram":
+        from vendor.services.mcp_auth import instagram
+
+        try:
+            credentials = await instagram.complete(
+                app_id=pending.client_id, app_secret=pending.client_secret, code=code, redirect_uri=pending.redirect_uri
+            )
+        except mcp_auth.McpAuthError as exc:
+            raise OAuthFlowError(str(exc)) from exc
+        except httpx.HTTPError as exc:
+            raise OAuthFlowError(f"Could not reach Meta: {exc}") from exc
+        if pending.user_id is None:
+            # The admin's own sign-in replaces the shared row: keep the Meta app on it.
+            shared = await mcp_auth.load_server_credentials(db, server_id=server.id, tenant_id=None)
+            credentials = {**{k: v for k, v in shared.items() if k in (instagram.APP_ID, instagram.APP_SECRET)}, **credentials}
+        return server, credentials, pending.tenant_id, pending.user_id
 
     oauth = (server.auth_config or {}).get("oauth") or {}
     if not oauth.get("token_endpoint"):
@@ -377,4 +422,5 @@ __all__ = [
     "resolve_app_credentials",
     "build_authorize_url",
     "complete_authorization",
+    "start_instagram",
 ]

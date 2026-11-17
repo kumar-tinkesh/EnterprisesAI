@@ -1,16 +1,20 @@
 "use client";
 
 import Link from "next/link";
-import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, CheckCircle2, Circle, Clock, Loader2, MessageSquare, Network, Plus, ShieldAlert, XCircle } from "lucide-react";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowRight, CheckCircle2, ChevronDown, ChevronRight, Circle, Clock, Loader2, MessageSquare, Network, Plus, ShieldAlert, XCircle } from "lucide-react";
 
 import ProtectedDashboard from "@/components/protected-dashboard";
 import { ApprovalCard } from "@/components/builder/approval-card";
 import { DailyBars } from "@/components/charts/daily-bars";
+import { SpendAlert, SpendPanel, useSpend } from "@/components/builder/spend-panel";
 import { Stat, Stats, type Delta } from "@/components/ui/stats";
+import { Menu } from "@/components/ui/menu";
 import { builderApi } from "@/lib/builder/api";
 import { vendorApi } from "@/lib/api";
-import type { InsightsWindow, Run, RunStatus } from "@/lib/builder/types";
+import type { Approval, InsightsWindow, Run, RunStatus } from "@/lib/builder/types";
 import { useAuthStore } from "@/stores/auth-store";
 import { cn } from "@/lib/utils";
 
@@ -24,6 +28,44 @@ function runHref(run: Run): string {
   const id = run.kind === "workflow" ? run.workflow_id : run.agent_id;
   return id ? chatHref(run.kind, id) : "/user/executions";
 }
+
+/** What a run was asked: its text, else its file, else that it ran on its inputs. */
+function asked(run: Run): string {
+  if (run.input?.text?.trim()) return run.input.text;
+  const file = run.input?.attachments?.[0]?.filename;
+  if (file) return `📎 ${file}`;
+  return run.kind === "workflow" ? "Ran with its inputs" : "—";
+}
+
+/** Waiting longer than this: almost surely forgotten — folded away, with a way to cancel it. */
+const OLD_WAIT_DAYS = 7;
+
+/** Pending decisions, one line per agent/workflow (its runs and decisions counted), newest first. */
+type WaitGroup = { key: string; name: string; href: string | null; approvals: Approval[]; runIds: string[]; newest: string };
+
+function groupWaits(pending: Approval[]): WaitGroup[] {
+  const groups = new Map<string, WaitGroup>();
+  for (const a of pending) {
+    // Someone's request through a share link isn't in a chat of yours: it's decided right here.
+    const target = a.run && !a.caller ? (a.run.kind === "workflow" ? a.run.workflow_id : a.run.agent_id) : null;
+    const key = a.run && target ? `${a.run.kind}:${target}` : `run:${a.run_id}`;
+    const g = groups.get(key) ?? {
+      key,
+      name: a.run?.name || "A run",
+      href: a.run && target ? chatHref(a.run.kind, target) : null,
+      approvals: [],
+      runIds: [],
+      newest: a.created_at,
+    };
+    g.approvals.push(a);
+    if (!g.runIds.includes(a.run_id)) g.runIds.push(a.run_id);
+    if (a.created_at > g.newest) g.newest = a.created_at;
+    groups.set(key, g);
+  }
+  return [...groups.values()].sort((x, y) => y.newest.localeCompare(x.newest));
+}
+
+const isOld = (iso: string) => Date.now() - new Date(iso).getTime() > OLD_WAIT_DAYS * 86400000;
 
 function greeting(): string {
   const h = new Date().getHours();
@@ -48,11 +90,11 @@ function duration(run: Run): string | null {
 }
 
 const STATUS: Record<RunStatus, { label: string; Icon: typeof CheckCircle2; className: string }> = {
-  succeeded: { label: "Succeeded", Icon: CheckCircle2, className: "text-emerald-700" },
-  failed: { label: "Failed", Icon: XCircle, className: "text-red-600" },
-  running: { label: "Running", Icon: Loader2, className: "text-indigo-600 animate-spin" },
+  succeeded: { label: "Succeeded", Icon: CheckCircle2, className: "text-emerald-400" },
+  failed: { label: "Failed", Icon: XCircle, className: "text-red-400" },
+  running: { label: "Running", Icon: Loader2, className: "text-indigo-400 animate-spin" },
   queued: { label: "Queued", Icon: Clock, className: "text-zinc-400" },
-  waiting: { label: "Waiting", Icon: ShieldAlert, className: "text-amber-700" },
+  waiting: { label: "Waiting", Icon: ShieldAlert, className: "text-amber-400" },
   cancelled: { label: "Cancelled", Icon: XCircle, className: "text-zinc-400" },
 };
 
@@ -78,6 +120,7 @@ export default function UserDashboard() {
 }
 
 function Dashboard() {
+  const router = useRouter();
   const token = useAuthStore((s) => s.accessToken) || "";
   const user = useAuthStore((s) => s.user);
   const firstName = (user?.full_name || "").split(" ")[0] || "there";
@@ -88,6 +131,8 @@ function Dashboard() {
   const runs = useQuery({ queryKey: ["dashboard-runs"], queryFn: () => builderApi.listRuns(token, { limit: 50 }), enabled: !!token, refetchInterval: 15000 });
   const approvals = useQuery({ queryKey: ["builder-approvals"], queryFn: () => builderApi.listApprovals(token), enabled: !!token, refetchInterval: 15000 });
   const catalog = useQuery({ queryKey: ["catalog", token, ""], queryFn: () => vendorApi.getCatalog(token), enabled: !!token });
+  const spend = useSpend(token);
+  const spendAlert = !!spend.data && spend.data.status !== "ok";
 
   const ins = insights.data;
   const agentList = agents.data ?? [];
@@ -96,6 +141,9 @@ function Dashboard() {
   const servers = catalog.data?.servers ?? [];
   const connected = servers.filter((s) => s.connected).length;
   const pending = approvals.data ?? [];
+  const waits = groupWaits(pending);
+  const fresh = waits.filter((g) => !isOld(g.newest));
+  const stale = waits.filter((g) => isOld(g.newest));
   const failedRecently = runList.filter((r) => r.status === "failed" && Date.now() - new Date(r.created_at).getTime() < 86400000).slice(0, 3);
 
   const projects = [
@@ -110,6 +158,8 @@ function Dashboard() {
     { done: (ins?.all_time.runs ?? 0) > 0, title: "Run it", desc: "Chat with it and watch every tool it uses.", href: "/user/executions", cta: "Open" },
   ];
   const setupLeft = setupLoaded && steps.some((s) => !s.done);
+  // Never run anything: numbers, a chart and lists would all be empty — Get started says it all.
+  const noRuns = !!ins && ins.all_time.runs === 0 && runs.isSuccess && runList.length === 0;
 
   const cur = ins?.current;
   const prev = ins?.previous;
@@ -127,10 +177,32 @@ function Dashboard() {
             {new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}
           </p>
         </div>
-        <div className="flex shrink-0 gap-2">
-          <Link href="/user/executions" className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border-strong)] px-3 text-sm font-medium text-zinc-900 hover:bg-zinc-50">
-            <MessageSquare className="h-4 w-4" /> Chat
-          </Link>
+        <div className="flex shrink-0 items-center gap-2">
+          {projects.length > 0 ? (
+            <Menu
+              label="Chat with an agent"
+              trigger={
+                <>
+                  <MessageSquare className="h-4 w-4" /> Chat <ChevronDown className="h-3.5 w-3.5 opacity-60" />
+                </>
+              }
+              triggerClassName="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border-strong)] px-3 text-sm font-medium text-zinc-900 hover:bg-zinc-50 cursor-pointer"
+              items={[
+                ...projects.slice(0, 6).map((p) => ({
+                  label: `💬 ${p.name}`,
+                  onClick: () => router.push(chatHref(p.kind, p.id)),
+                })),
+                {
+                  label: "Browse all in Executions…",
+                  onClick: () => router.push("/user/executions?view=inspector"),
+                },
+              ]}
+            />
+          ) : (
+            <Link href="/user/executions" className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border-strong)] px-3 text-sm font-medium text-zinc-900 hover:bg-zinc-50">
+              <MessageSquare className="h-4 w-4" /> Chat
+            </Link>
+          )}
           <Link href="/user/agents" className="inline-flex h-9 items-center gap-2 rounded-md bg-[var(--accent)] px-3 text-sm font-medium text-white hover:bg-[var(--accent-hover)]">
             <Plus className="h-4 w-4" /> New agent
           </Link>
@@ -159,54 +231,68 @@ function Dashboard() {
         </Panel>
       )}
 
-      {/* Needs attention */}
-      {(pending.length > 0 || failedRecently.length > 0) && (
-        <Panel title="Needs your attention" aside={pending.length > 4 ? `+ ${pending.length - 4} more waiting` : undefined}>
+      {/* Needs attention: one line per agent/workflow; the long-forgotten ones folded away */}
+      {(fresh.length > 0 || stale.length > 0 || failedRecently.length > 0 || spendAlert) && (
+        <Panel title="Needs your attention" aside={fresh.length > 4 ? `+ ${fresh.length - 4} more waiting` : undefined}>
           <ul className="divide-y divide-zinc-100">
-            {pending.slice(0, 4).map((a) => {
-              const run = runList.find((r) => r.id === a.run_id);
-              // Not in recent run history (a share-link / API run, or an old one): no chat to send them to, so decide here.
-              if (!run) {
-                return (
+            {spendAlert && spend.data && (
+              <li>
+                <SpendAlert spend={spend.data} />
+              </li>
+            )}
+            {fresh.slice(0, 4).map((g) => {
+              // Not one of theirs to chat with (a share-link / API run): decide here.
+              if (!g.href) {
+                return g.approvals.map((a) => (
                   <li key={a.id} className="p-3">
                     <ApprovalCard approval={a} token={token} onDone={() => void approvals.refetch()} />
                   </li>
-                );
+                ));
               }
+              const a = g.approvals[0];
+              const more = g.approvals.length > 1 ? ` · ${g.approvals.length} decisions${g.runIds.length > 1 ? ` in ${g.runIds.length} runs` : ""}` : "";
               return (
-                <li key={a.id}>
-                  <Link href={runHref(run)} className="flex items-center gap-3 px-4 py-3 hover:bg-zinc-50">
-                    <ShieldAlert className="h-4 w-4 shrink-0 text-amber-700" />
+                <li key={g.key}>
+                  <Link href={g.href} className="group flex items-center gap-3 px-4 py-3 transition-colors hover:bg-white/[0.04]">
+                    <ShieldAlert className="h-4 w-4 shrink-0 text-amber-400" />
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium text-zinc-900">{run.name ? `${run.name} is waiting for you` : "A run is waiting for you"}</span>
-                      <span className="block truncate text-xs text-zinc-500">
-                        {a.payload.message || (a.tool_name ? `Approve “${a.payload.tool_name || a.tool_name}”` : "Approve or answer to continue")}
+                      <span className="block truncate text-sm font-medium text-zinc-100 group-hover:text-white">{g.name} is waiting for you</span>
+                      <span className="block truncate text-xs text-zinc-400 group-hover:text-zinc-300">
+                        {(a.payload.message || (a.tool_name ? `Approve “${a.payload.tool_name || a.tool_name}”` : "Approve or answer to continue")) + more}
                       </span>
                     </span>
-                    <span className="shrink-0 text-sm font-medium text-zinc-700">Review</span>
+                    <span className="hidden shrink-0 text-xs text-zinc-400 sm:block">{ago(g.newest)}</span>
+                    <span className="shrink-0 text-sm font-medium text-zinc-300 group-hover:text-white">Review</span>
                   </Link>
                 </li>
               );
             })}
             {failedRecently.map((r) => (
               <li key={r.id}>
-                <Link href={runHref(r)} className="flex items-center gap-3 px-4 py-3 hover:bg-zinc-50">
-                  <XCircle className="h-4 w-4 shrink-0 text-red-600" />
+                <Link href={runHref(r)} className="group flex items-center gap-3 px-4 py-3 transition-colors hover:bg-white/[0.04]">
+                  <XCircle className="h-4 w-4 shrink-0 text-red-400" />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium text-zinc-900">{r.name || "A run"} failed {ago(r.created_at)}</span>
-                    <span className="block truncate text-xs text-zinc-500">{r.error || r.input?.text || "Open the chat to see what happened."}</span>
+                    <span className="block truncate text-sm font-medium text-zinc-100 group-hover:text-white">{r.name || "A run"} failed {ago(r.created_at)}</span>
+                    <span className="block truncate text-xs text-zinc-400 group-hover:text-zinc-300">{r.error || r.input?.text || "Open the chat to see what happened."}</span>
                   </span>
-                  <span className="shrink-0 text-sm font-medium text-zinc-700">Open</span>
+                  <span className="shrink-0 text-sm font-medium text-zinc-300 group-hover:text-white">Open</span>
                 </Link>
               </li>
             ))}
+            {stale.length > 0 && (
+              <li>
+                <OldWaits groups={stale} token={token} />
+              </li>
+            )}
           </ul>
         </Panel>
       )}
 
+      {!noRuns && (
+      <>
       {/* KPIs: this week vs the one before */}
       <Stats>
-        <Stat label="Runs" loading={!ins} value={cur ? String(cur.runs) : ""} delta={cur && prev ? pctDelta(cur.runs, prev.runs, true) : null} sub={`last ${WINDOW} days`} />
+        <Stat label="Runs" loading={!ins} value={cur ? String(cur.runs) : ""} delta={cur && prev ? pctDelta(cur.runs, prev.runs, true) : null} sub={`last ${WINDOW} days, vs the ${WINDOW} before`} />
         <Stat
           label="Success rate"
           loading={!ins}
@@ -215,18 +301,18 @@ function Dashboard() {
           sub={cur?.runs ? `${cur.succeeded} of ${cur.succeeded + cur.failed} finished` : "no runs yet"}
         />
         <Stat
-          label="Avg time"
+          label="Typical time"
           loading={!ins}
-          value={cur ? (cur.avg_latency_ms ? ms(cur.avg_latency_ms) : "—") : ""}
-          delta={cur && prev && cur.avg_latency_ms ? pctDelta(cur.avg_latency_ms, prev.avg_latency_ms, false) : null}
-          sub="start to answer"
+          value={cur ? (cur.median_latency_ms ? ms(cur.median_latency_ms) : "—") : ""}
+          delta={cur && prev && cur.median_latency_ms ? pctDelta(cur.median_latency_ms, prev.median_latency_ms, false) : null}
+          sub="a usual run, start to answer"
         />
         <Stat
-          label="Active agents"
+          label="In use"
           loading={!ins || agents.isLoading || workflows.isLoading}
           value={cur ? String(cur.active) : ""}
           suffix={projects.length ? ` / ${projects.length}` : ""}
-          sub={`ran in the last ${WINDOW} days`}
+          sub={`agents & workflows run in ${WINDOW} days`}
           href="/user/executions"
         />
       </Stats>
@@ -243,7 +329,7 @@ function Dashboard() {
           />
         </div>
 
-        <Panel title="Most used">
+        <Panel title="Most used" aside={`last ${WINDOW * 2} days`}>
           {!ins ? (
             <SkeletonRows />
           ) : ins.busiest.length === 0 ? (
@@ -280,6 +366,8 @@ function Dashboard() {
         </Panel>
       </div>
 
+      <SpendPanel token={token} />
+
       {/* Recent runs */}
       <Panel
         title="Recent runs"
@@ -301,14 +389,16 @@ function Dashboard() {
               const name = r.name || (r.kind === "workflow" ? "Workflow" : "Agent");
               return (
                 <li key={r.id}>
-                  <Link href={runHref(r)} className="flex items-center gap-3 px-4 py-3 hover:bg-zinc-50">
+                  <Link href={runHref(r)} className="group flex items-center gap-3 px-4 py-3 transition-colors hover:bg-white/[0.04]">
                     <st.Icon className={cn("h-4 w-4 shrink-0", st.className)} aria-label={st.label} />
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm text-zinc-900">{r.input?.text || "—"}</span>
-                      <span className="block truncate text-xs text-zinc-500">{name} · {st.label}</span>
+                      <span className={cn("block truncate text-sm", r.input?.text?.trim() ? "text-zinc-100 group-hover:text-white" : "text-zinc-400")}>{asked(r)}</span>
+                      <span className="block truncate text-xs text-zinc-400 group-hover:text-zinc-300">
+                        {name} · <span className={r.status === "failed" ? "text-red-400" : r.status === "waiting" ? "text-amber-400" : undefined}>{st.label}</span>
+                      </span>
                     </span>
-                    <span className="hidden w-14 shrink-0 text-right text-xs tabular-nums text-zinc-500 md:block">{took ?? "—"}</span>
-                    <span className="w-24 shrink-0 text-right text-xs text-zinc-500">{ago(r.created_at)}</span>
+                    <span className="hidden w-14 shrink-0 text-right text-xs tabular-nums text-zinc-400 group-hover:text-zinc-200 md:block">{took ?? "—"}</span>
+                    <span className="w-24 shrink-0 text-right text-xs text-zinc-400 group-hover:text-zinc-200">{ago(r.created_at)}</span>
                   </Link>
                 </li>
               );
@@ -316,7 +406,97 @@ function Dashboard() {
           </ul>
         )}
       </Panel>
+      </>
+      )}
     </section>
+  );
+}
+
+/** Decisions nobody made for over a week: folded, each with a way to stop its runs for good. */
+function OldWaits({ groups, token }: { groups: WaitGroup[]; token: string }) {
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [asking, setAsking] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const cancel = async (g: WaitGroup) => {
+    setBusy(g.key);
+    setError(null);
+    try {
+      for (const id of g.runIds) await builderApi.cancelRun(token, id);
+      await Promise.all(
+        [["builder-approvals"], ["dashboard-runs"], ["insights"], ["builder-overview"]].map((queryKey) => queryClient.invalidateQueries({ queryKey })),
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't cancel it. Try again.");
+    } finally {
+      setBusy(null);
+      setAsking(null);
+    }
+  };
+  const cancelAll = async () => {
+    setBusy("all");
+    setError(null);
+    try {
+      for (const g of groups) {
+        for (const id of g.runIds) await builderApi.cancelRun(token, id);
+      }
+      await Promise.all(
+        [["builder-approvals"], ["dashboard-runs"], ["insights"], ["builder-overview"]].map((queryKey) => queryClient.invalidateQueries({ queryKey })),
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't cancel all.");
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <div>
+      <div className="flex items-center justify-between px-4 py-2.5">
+        <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="flex items-center gap-2 text-left text-xs text-zinc-500 hover:text-zinc-900 cursor-pointer">
+          <ChevronRight className={cn("h-3.5 w-3.5 transition-transform", open && "rotate-90")} />
+          <span>{groups.length} older one{groups.length === 1 ? "" : "s"}, waiting over {OLD_WAIT_DAYS} days</span>
+        </button>
+        <button
+          type="button"
+          disabled={busy !== null}
+          onClick={() => void cancelAll()}
+          className="rounded-md border border-zinc-200 px-2 py-0.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50 cursor-pointer"
+          title="Stop all stale runs"
+        >
+          {busy === "all" ? "Stopping all…" : "Cancel all older"}
+        </button>
+      </div>
+      {open && (
+        <ul className="divide-y divide-zinc-100 border-t border-zinc-100">
+          {groups.map((g) => (
+            <li key={g.key} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 pl-9">
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm text-zinc-700">{g.name}</span>
+                <span className="block truncate text-xs text-zinc-500">
+                  waiting since {ago(g.newest)}{g.runIds.length > 1 ? ` · ${g.runIds.length} runs` : ""}
+                </span>
+              </span>
+              {asking === g.key ? (
+                <span className="flex shrink-0 items-center gap-2 text-xs">
+                  <span className="text-zinc-500">Stop {g.runIds.length === 1 ? "this run" : "these runs"}?</span>
+                  <button type="button" disabled={busy === g.key} onClick={() => void cancel(g)} className="rounded-md px-2 py-1 font-medium text-red-600 hover:bg-zinc-100 disabled:opacity-50 cursor-pointer">
+                    {busy === g.key ? "Stopping…" : "Yes, stop"}
+                  </button>
+                  <button type="button" onClick={() => setAsking(null)} className="rounded-md px-2 py-1 text-zinc-500 hover:bg-zinc-100 cursor-pointer">No</button>
+                </span>
+              ) : (
+                <span className="flex shrink-0 items-center gap-1 text-xs">
+                  {g.href && <Link href={g.href} className="rounded-md px-2 py-1 font-medium text-zinc-700 hover:bg-zinc-100">Review</Link>}
+                  <button type="button" onClick={() => setAsking(g.key)} className="rounded-md px-2 py-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer">Cancel</button>
+                </span>
+              )}
+            </li>
+          ))}
+          {error && <li className="px-4 py-2 pl-9 text-xs text-red-600">{error}</li>}
+        </ul>
+      )}
+    </div>
   );
 }
 

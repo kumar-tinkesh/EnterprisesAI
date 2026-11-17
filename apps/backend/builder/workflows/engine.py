@@ -32,7 +32,7 @@ from builder.graph.schema import TRIGGER_TYPES, WorkflowConfig
 from builder.models import BuilderNodeRun, BuilderRun
 from builder.pricing import add_cost
 from builder.runs import lease, states
-from builder.runs.db import session_factory, utcnow
+from builder.runs.db import is_transient, session_factory, utcnow
 from builder.runs.events import emit
 from builder.runs.tool_calls import Paused
 from builder.workflows import front_desk
@@ -41,7 +41,8 @@ from builder.workflows.nodes import RUNNERS, NodeOutcome, StepContext, run_trigg
 
 logger = logging.getLogger("builder.workflows.engine")
 
-PARALLEL_STEPS = 8
+# 8 search lanes of a job search, plus a step beside them.
+PARALLEL_STEPS = 12
 
 
 class LostLease(Exception):
@@ -115,10 +116,11 @@ def _step_summary(state: dict, graph: S.Graph, agents: dict) -> str:
 
 def _asks_front_desk(run: BuilderRun, config: WorkflowConfig, variables: dict) -> bool:
     """Only a message someone typed (app chat, a share link) — never a schedule,
-    a webhook, a test, or a run given its inputs as fields."""
+    a webhook, a test, or a run given its inputs as fields or files."""
     return (
         config.answer_general_questions and run.purpose in ("run", "public")
         and not run.schedule_id and not run.webhook_id and not variables
+        and not (run.input or {}).get("attachments")
     )
 
 
@@ -176,8 +178,13 @@ async def execute_workflow(run: BuilderRun, user: CurrentUser, worker_id: str, *
         memory=run.purpose in ("run", "test") and not run.webhook_id,
         knowledge_tenant_id=run.definition.get("home_tenant_id"),
         tool_owners=tool_owners or {},
+        # A chat's earlier turns: "publish this" after a message with the link is about that link.
+        history=list((run.input or {}).get("history") or []),
     )
     stream = (run.input or {}).get("stream", True) and not dry_run
+    # Files sent with the run go to the steps its input feeds (a resume to the step that reads it), not to every step.
+    attachment_ids = [a["id"] for a in (run.input or {}).get("attachments") or [] if a.get("id")]
+    after_input = {e["target"] for e in graph.edges.values() if graph.nodes.get(e["source"], {}).get("type") in TRIGGER_TYPES}
 
     async def run_step(node_id: str, node_run_id: str, attempt: int) -> NodeOutcome:
         node = graph.nodes[node_id]
@@ -195,6 +202,7 @@ async def execute_workflow(run: BuilderRun, user: CurrentUser, worker_id: str, *
             emit=emit_event, **step_extras, depth=depth if node_id in feeds_output else "auto",
             # Only a step whose answer is the run's answer is worth watching being written.
             stream=stream and node_id in feeds_output,
+            attachment_ids=attachment_ids if node_id in after_input else [],
         )
         return await RUNNERS[node["type"]](ctx)
 
@@ -260,6 +268,10 @@ async def execute_workflow(run: BuilderRun, user: CurrentUser, worker_id: str, *
                     await emit(run.id, "node_status", node_id=node_id, status="waiting")
                     continue
                 except Exception as exc:  # noqa: BLE001 — a bug in one step fails that step, not the worker
+                    if is_transient(exc):
+                        # The database dropped out, not the step: the whole run resumes from its checkpoint
+                        # (builder.runs.executor), instead of the step using up its tries.
+                        raise
                     logger.exception("workflow step crashed run=%s node=%s", run.id, node_id)
                     outcome = NodeOutcome(ok=False, error=f"Unexpected error: {exc}")
 
@@ -273,7 +285,7 @@ async def execute_workflow(run: BuilderRun, user: CurrentUser, worker_id: str, *
                     state["sources"] = list(dict.fromkeys(state["sources"] + outcome.sources))
                     if outcome.final:
                         state["final"] = {"text": outcome.output, "node_id": node_id}
-                    S.complete(state, graph, node_id, outcome.output, take=outcome.take)
+                    S.complete(state, graph, node_id, outcome.output, take=outcome.take, routed=outcome.routed)
                     await emit(run.id, "node_status", node_id=node_id, status="succeeded", preview=outcome.output[:300])
                     continue
 
@@ -296,6 +308,11 @@ async def execute_workflow(run: BuilderRun, user: CurrentUser, worker_id: str, *
     except (LostLease, asyncio.CancelledError):
         await stop_all()
         raise asyncio.CancelledError()
+    except Exception as exc:
+        if is_transient(exc):
+            # The other steps stop too; what they recorded stays for the resume.
+            await stop_all()
+        raise
 
     state["active_seconds"] = active_before + (time.monotonic() - session_started)
     await _save(run.id, worker_id, state)

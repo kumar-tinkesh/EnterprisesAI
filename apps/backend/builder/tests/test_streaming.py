@@ -76,6 +76,7 @@ async def test_live_view_sends_only_text_and_state():
     events = [(c.split("\n")[0], json.loads(c.split("data: ", 1)[1])) for c in out if c.startswith("event:")]
     assert events == [
         ("event: run", {"status": "running", "output": None}),
+        ("event: doing", {"what": "tool"}),  # that a tool is in use, never which
         ("event: delta", {"turn": 1, "at": 0, "text": "Hi"}),
         ("event: run", {"status": "succeeded", "output": "Hi!"}),
     ]

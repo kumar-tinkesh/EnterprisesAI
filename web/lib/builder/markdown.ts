@@ -175,3 +175,14 @@ export function plainText(blocks: Block[]): string {
     })
     .join("\n\n");
 }
+
+/** A bare link, shortened for reading ("cutshort.io/job/AI-Engineer-Chen…"); the link itself is unchanged. */
+export function shortUrl(href: string, max = 36): string {
+  try {
+    const u = new URL(href);
+    const text = (u.hostname.replace(/^www\./, "") + (u.pathname + u.search).replace(/\/$/, "")) || href;
+    return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+  } catch {
+    return href;
+  }
+}

@@ -131,15 +131,15 @@ export default function KnowledgeBasesPage() {
                     aria-current={kb.id === selectedId ? "true" : undefined}
                     className={cn(
                       "flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors cursor-pointer",
-                      kb.id === selectedId ? "bg-zinc-100 text-zinc-900" : "text-zinc-500 hover:bg-zinc-50 hover:text-zinc-900",
+                      kb.id === selectedId ? "bg-white/[0.08] text-white font-medium" : "text-zinc-400 hover:bg-white/[0.04] hover:text-zinc-200",
                     )}
                   >
                     <span className="truncate font-medium">{kb.name}</span>
-                    <span className="shrink-0 text-xs tabular-nums text-zinc-500">{kb.document_count}</span>
+                    <span className="shrink-0 text-xs tabular-nums text-zinc-400">{kb.document_count}</span>
                   </button>
                 </li>
               ))}
-              {visible.length === 0 && <li className="px-3 py-4 text-sm text-zinc-500">No match.</li>}
+              {visible.length === 0 && <li className="px-3 py-4 text-sm text-zinc-400">No match.</li>}
             </ul>
           </aside>
 
@@ -294,6 +294,7 @@ function KnowledgeBaseDetail({
 function DocumentsPanel({ kb, token, onChanged }: { kb: KnowledgeBase; token: string; onChanged: () => void }) {
   const queryClient = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
+  const [isDragging, setIsDragging] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   // null = closed; { id: null } = new text; { id } = editing that document.
   const [editor, setEditor] = useState<{ id: string | null; title: string; content: string } | null>(null);
@@ -372,15 +373,53 @@ function DocumentsPanel({ kb, token, onChanged }: { kb: KnowledgeBase; token: st
           addFiles(files);
         }}
       />
-      <div className="flex flex-wrap items-center gap-2">
-        <Button disabled={upload.isPending} onClick={() => fileRef.current?.click()}>
-          {upload.isPending ? <Spinner className="h-4 w-4" /> : <Upload />} Upload files
-        </Button>
-        <Button variant="outline" onClick={() => setEditor({ id: null, title: "", content: "" })}>
-          <Plus /> Add text
+
+      {/* Drag & Drop Upload Zone */}
+      <div
+        onDragOver={(e) => {
+          e.preventDefault();
+          setIsDragging(true);
+        }}
+        onDragLeave={() => setIsDragging(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setIsDragging(false);
+          const files = Array.from(e.dataTransfer.files || []);
+          addFiles(files);
+        }}
+        className={cn(
+          "flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-6 text-center transition-colors",
+          isDragging ? "border-indigo-500/60 bg-indigo-500/10" : "border-white/10 hover:border-white/20 bg-white/[0.02] hover:bg-white/[0.04]"
+        )}
+      >
+        <Upload className={cn("h-7 w-7", isDragging ? "text-indigo-400" : "text-zinc-400")} />
+        <p className="mt-2 text-xs font-medium text-zinc-200">
+          Drag & drop files here, or{" "}
+          <button
+            type="button"
+            disabled={upload.isPending}
+            onClick={() => fileRef.current?.click()}
+            className="text-indigo-400 underline underline-offset-2 hover:text-indigo-300 cursor-pointer"
+          >
+            browse to upload
+          </button>
+        </p>
+        <p className="mt-1 text-[11px] text-zinc-400">PDF, DOCX, XLSX, CSV, Markdown, text, JPG, PNG · up to 25 MB</p>
+        {upload.isPending && (
+          <div className="mt-3 flex items-center gap-2 text-xs text-indigo-400 font-medium">
+            <Spinner className="h-4 w-4" /> Uploading & indexing documents…
+          </div>
+        )}
+      </div>
+
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold text-zinc-200">
+          Documents {docs.length > 0 && <span className="font-normal text-zinc-400">({docs.length})</span>}
+        </span>
+        <Button size="sm" variant="outline" onClick={() => setEditor({ id: null, title: "", content: "" })}>
+          <Plus /> Paste text
         </Button>
       </div>
-      <p className="text-xs text-zinc-500">PDF, DOCX, XLSX, CSV, Markdown, text, JPG or PNG · up to 25 MB each</p>
       {uploadError && <p className="text-sm text-red-600">{uploadError}</p>}
 
       {editor && (
@@ -421,23 +460,25 @@ function DocumentsPanel({ kb, token, onChanged }: { kb: KnowledgeBase; token: st
 
       {docsQuery.isLoading ? (
         <div className="flex justify-center py-8">
-          <Spinner className="h-5 w-5 text-zinc-500" />
+          <Spinner className="h-5 w-5 text-zinc-400" />
         </div>
       ) : docs.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-zinc-300 px-4 py-10 text-center text-sm text-zinc-500">No documents yet. Upload a file or add some text.</p>
+        <p className="rounded-lg border border-dashed border-white/10 bg-white/[0.01] px-4 py-10 text-center text-sm text-zinc-400">
+          No documents yet. Upload a file or add some text.
+        </p>
       ) : (
-        <ul className="divide-y divide-zinc-100 rounded-lg border border-zinc-200">
+        <ul className="divide-y divide-white/5 overflow-hidden rounded-lg border border-white/10 bg-[var(--surface)]">
           {docs.map((doc) => (
-            <li key={doc.id} className="flex items-start gap-3 px-4 py-3">
-              <FileText className="mt-0.5 h-4 w-4 shrink-0 text-zinc-500" />
+            <li key={doc.id} className="group flex items-start gap-3 px-4 py-3 transition-colors hover:bg-white/[0.04]">
+              <FileText className="mt-0.5 h-4 w-4 shrink-0 text-zinc-400" />
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-zinc-900">{doc.filename}</p>
-                <p className="mt-0.5 flex flex-wrap items-center gap-x-3 text-xs text-zinc-500">
+                <p className="truncate text-sm font-medium text-zinc-100 group-hover:text-white">{doc.filename}</p>
+                <p className="mt-0.5 flex flex-wrap items-center gap-x-3 text-xs text-zinc-400">
                   <Status doc={doc} />
                   {doc.status === "ready" && <span>{doc.chunk_count} chunk{doc.chunk_count === 1 ? "" : "s"}</span>}
                 </p>
                 {doc.error_message && (
-                  <p className={cn("mt-1 text-xs", doc.status === "error" ? "text-red-600" : "text-amber-700")}>{doc.error_message}</p>
+                  <p className={cn("mt-1 text-xs", doc.status === "error" ? "text-red-400" : "text-amber-400")}>{doc.error_message}</p>
                 )}
               </div>
               <Menu
@@ -459,15 +500,15 @@ function DocumentsPanel({ kb, token, onChanged }: { kb: KnowledgeBase; token: st
 function Status({ doc }: { doc: KnowledgeDocument }) {
   if (doc.status === "processing") {
     return (
-      <span className="inline-flex items-center gap-1.5 text-zinc-700">
-        <Spinner className="h-3 w-3" /> Indexing
+      <span className="inline-flex items-center gap-1.5 text-zinc-300">
+        <Spinner className="h-3 w-3 text-indigo-400" /> Indexing
       </span>
     );
   }
   const failed = doc.status === "error";
   return (
-    <span className={cn("inline-flex items-center gap-1.5", failed ? "text-red-600" : "text-zinc-700")}>
-      <span className={cn("h-1.5 w-1.5 rounded-full", failed ? "bg-[var(--danger)]" : "bg-[var(--success)]")} aria-hidden />
+    <span className={cn("inline-flex items-center gap-1.5", failed ? "text-red-400" : "text-zinc-300")}>
+      <span className={cn("h-1.5 w-1.5 rounded-full", failed ? "bg-red-400" : "bg-emerald-400")} aria-hidden />
       {failed ? "Failed" : "Ready"}
     </span>
   );
@@ -505,17 +546,23 @@ function SearchPanel({ kb, token }: { kb: KnowledgeBase; token: string }) {
           </p>
         ) : (
           <ol className="space-y-3">
-            {search.data.results.map((hit, i) => (
-              <li key={hit.id} className="rounded-lg border border-zinc-200 p-4">
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500">
-                  <span className="font-medium text-zinc-900">#{i + 1}</span>
-                  <span className="min-w-0 truncate">{hit.filename}</span>
-                  <span>{hit.retrieval_method}</span>
-                  <span className="ml-auto tabular-nums">score {hit.score.toFixed(3)}</span>
-                </div>
-                <p className="mt-2 whitespace-pre-wrap break-words text-sm text-zinc-700">{hit.content}</p>
-              </li>
-            ))}
+            {search.data.results.map((hit, i) => {
+              const pct = Math.round(hit.score * 100);
+              const high = hit.score >= 0.7;
+              return (
+                <li key={hit.id} className="rounded-lg border border-white/10 bg-[var(--surface)] p-4 transition-colors hover:border-white/20">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-400">
+                    <span className="font-medium text-zinc-100">#{i + 1}</span>
+                    <span className="min-w-0 truncate font-medium text-zinc-200">{hit.filename}</span>
+                    <span className="rounded bg-white/[0.05] px-1.5 py-0.5 text-[10px] text-zinc-400">{hit.retrieval_method}</span>
+                    <span className={cn("ml-auto rounded-full px-2 py-0.5 text-[11px] font-medium tabular-nums border", high ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-400" : "border-amber-500/20 bg-amber-500/10 text-amber-300")}>
+                      {pct}% match ({hit.score.toFixed(3)})
+                    </span>
+                  </div>
+                  <p className="mt-2.5 whitespace-pre-wrap break-words rounded bg-white/[0.02] p-3 font-mono text-xs text-zinc-300 border border-white/10">{hit.content}</p>
+                </li>
+              );
+            })}
           </ol>
         ))}
     </div>

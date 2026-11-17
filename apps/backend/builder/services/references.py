@@ -171,7 +171,7 @@ async def agent_config_problems(
     problems = await tool_problems(db, user, config.tool_ids, node_id=node_id, check_connection=check_connection)
     if check_connection:
         # Saving never waits for a system to be connected; running does.
-        problems += need_problems(await resolve_needs(db, user, config.tool_needs), node_id=node_id)
+        problems += need_problems(await resolve_needs(db, user, config.tool_needs), node_id=node_id, optional=config.runs_without_needs)
     problems += await knowledge_problems(db, user.tenant_id, config.knowledge_base_ids, node_id=node_id)
     problems += await sub_agent_problems(
         db, user, config.sub_agent_ids, node_id=node_id, check_connection=check_connection, self_id=self_id,

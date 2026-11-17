@@ -26,6 +26,7 @@ import uuid
 
 from builder.config import get_builder_settings
 from builder.runs import executor, lease
+from builder.runs.db import fresh_connections, is_transient
 from builder.runs.queue import RunQueue, get_run_queue
 
 logger = logging.getLogger("builder.runs.worker")
@@ -97,8 +98,9 @@ class Worker:
         interval = get_builder_settings().RUN_REAPER_INTERVAL_SECONDS
         while not self._stopping:
             await asyncio.sleep(interval)
+            # Bounded, so one connection the network dropped can't stop the reaper for good.
             with contextlib.suppress(Exception):
-                await self.reap()
+                await asyncio.wait_for(self.reap(), timeout=max(interval, 30))
             with contextlib.suppress(Exception):
                 from builder.quality.suite import sweep
 
@@ -159,9 +161,14 @@ class Worker:
         while not execution.done():
             await asyncio.sleep(every)
             try:
-                still_mine = await lease.heartbeat(run_id, self.worker_id)
-            except Exception:  # noqa: BLE001 — DB hiccup: keep going, the lease has slack
+                # Bounded: a heartbeat stuck on a dropped connection would otherwise never come back.
+                still_mine = await asyncio.wait_for(lease.heartbeat(run_id, self.worker_id), timeout=every)
+            except Exception as exc:  # noqa: BLE001 — DB hiccup: keep going, the lease has slack
                 logger.warning("heartbeat failed run=%s", run_id, exc_info=True)
+                if isinstance(exc, TimeoutError) or is_transient(exc):
+                    # A dropped connection: start the next heartbeat (and everything else) on fresh ones.
+                    with contextlib.suppress(Exception):
+                        await fresh_connections()
                 continue
             if not still_mine:
                 logger.info("lost lease on run %s; stopping its execution", run_id)

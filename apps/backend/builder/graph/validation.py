@@ -206,6 +206,20 @@ def validate_graph(nodes: list[WorkflowNode], edges: list[WorkflowEdge]) -> list
                 problems.append(GraphProblem("join_policy", f'Join step {_name(n)}: "count" needs how many branches to wait for.', n.id))
             if policy is not None and policy.min_required is not None and policy.min_required > len(ins):
                 problems.append(GraphProblem("join_policy", f"Join step {_name(n)} waits for {policy.min_required} branches but only {len(ins)} lead into it.", n.id))
+        elif n.type == "code":
+            from builder.workflows.code_steps import code_step
+
+            if code_step(n.code) is None:
+                problems.append(GraphProblem("code_missing", f"Step {_name(n)} runs code that doesn't exist: {n.code or '(none)'}.", n.id))
+            for need in n.tool_needs or []:
+                from pydantic import ValidationError
+
+                from builder.agents.config import ToolNeed
+
+                try:
+                    ToolNeed.model_validate(need)
+                except ValidationError:
+                    problems.append(GraphProblem("code_tool_need", f"Step {_name(n)} names a system it can't use: {need}.", n.id))
         elif n.type == "output":
             problem = config_problem(n.output_config)
             if problem:

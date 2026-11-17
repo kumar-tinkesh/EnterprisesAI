@@ -152,6 +152,31 @@ async def start_mcp_oauth_authorize_as_user(
     return OAuthAuthorizeResponse(authorization_url=url, state=state)
 
 
+@router.post("/mcp/{server_id}/instagram/authorize", response_model=OAuthAuthorizeResponse)
+async def start_instagram_sign_in(
+    server_id: str,
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """"Connect with Instagram": this user's own Meta sign-in (vendor.services.mcp_auth.instagram).
+    The callback stores their token and Instagram account as their own credential row."""
+    from vendor.services.mcp_auth import instagram
+
+    server = await get_mcp_server(db, server_id=server_id)
+    if server is None or not await is_server_visible_to_user(db, user=user, server=server):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found")
+    if not instagram.is_instagram(server):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="This isn't the Instagram server.")
+    try:
+        url, state = await oauth_flow.start_instagram(
+            db, server=server, backend_public_url=get_backend_settings().BACKEND_PUBLIC_URL,
+            tenant_id=user.tenant_id, user_id=user.id,
+        )
+    except oauth_flow.OAuthFlowError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    return OAuthAuthorizeResponse(authorization_url=url, state=state)
+
+
 @router.post("/mcp/{server_id}/disconnect-as-user", status_code=status.HTTP_204_NO_CONTENT)
 async def disconnect_mcp_server_as_user_endpoint(
     server_id: str,

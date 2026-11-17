@@ -7,16 +7,20 @@ template never depends on server ids and is picked up as systems get connected.
 """
 from __future__ import annotations
 
+from builder.templates.instagram_manager import TEMPLATE as INSTAGRAM_MANAGER
+from builder.templates.job_finder import TEMPLATE as JOB_FINDER
 from builder.templates.lead_research import TEMPLATE as LEAD_RESEARCH
 
-TEMPLATES: dict[str, dict] = {t["key"]: t for t in (LEAD_RESEARCH,)}
+TEMPLATES: dict[str, dict] = {t["key"]: t for t in (LEAD_RESEARCH, JOB_FINDER, INSTAGRAM_MANAGER)}
 
 
 def template_needs(body: dict) -> list[dict]:
     """Every system the template's steps use, once each (required if any step requires it)."""
     out: dict[str, dict] = {}
     for node in body["nodes"]:
-        for need in ((node.get("draft_agent") or {}).get("config") or {}).get("tool_needs") or []:
+        # An agent step's needs, or a code step's own (one that calls its tools itself).
+        needs = ((node.get("draft_agent") or {}).get("config") or {}).get("tool_needs") or node.get("tool_needs") or []
+        for need in needs:
             seen = out.get(need["system"])
             if seen is None:
                 out[need["system"]] = {**need, "tools": list(need.get("tools") or [])}

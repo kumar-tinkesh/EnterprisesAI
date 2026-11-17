@@ -9,6 +9,7 @@ import {
   CalendarClock,
   CheckCircle2,
   CircleDot,
+  Code2,
   GitBranch,
   Hand,
   Loader2,
@@ -58,6 +59,7 @@ const ICONS: Record<StepKind, typeof Bot> = {
   join: Merge,
   human_approval: Hand,
   output: Send,
+  code: Code2,
 };
 
 // Literal class names so Tailwind keeps them.
@@ -74,6 +76,7 @@ const TONES: Record<StepKind, string> = {
   join: "bg-violet-50 text-violet-700",
   human_approval: "bg-rose-50 text-rose-700",
   output: "bg-zinc-100 text-zinc-700",
+  code: "bg-zinc-100 text-zinc-700",
 };
 
 const STATE_RING: Record<StepState, string> = {

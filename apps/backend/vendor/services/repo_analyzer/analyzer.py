@@ -102,8 +102,9 @@ async def analyze_repo_normalized(repo_url: str) -> NormalizedMCPConfig:
 
     # Known servers whose README-detected credentials are wrong (LinkedIn: li_at, not PROXY_*).
     from vendor.services import known_servers
-    from vendor.services.mcp_auth import linkedin
+    from vendor.services.mcp_auth import instagram, linkedin
     linkedin.apply_to_analysis(repo_url, result)
+    instagram.apply_to_analysis(repo_url, result)
     known_servers.apply_to_analysis(repo_url, result)
 
     _ANALYSIS_CACHE[repo_url] = (time.monotonic(), copy.deepcopy(result))

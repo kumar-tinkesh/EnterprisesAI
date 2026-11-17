@@ -42,19 +42,19 @@ const TABS: { id: DetailTab; label: string; Icon: typeof Eye }[] = [
 ];
 
 const HEALTH_STATUS: Record<Health["status"], { label: string; dot: string; text: string }> = {
-  production_ready: { label: "Production ready", dot: "bg-emerald-500", text: "text-emerald-700" },
-  testing: { label: "Testing", dot: "bg-amber-500", text: "text-amber-700" },
-  needs_attention: { label: "Needs attention", dot: "bg-amber-500", text: "text-amber-700" },
-  not_tested: { label: "Not tested", dot: "bg-zinc-400", text: "text-zinc-500" },
+  production_ready: { label: "Production ready", dot: "bg-emerald-500", text: "text-emerald-400" },
+  testing: { label: "In testing", dot: "bg-sky-400/80", text: "text-zinc-400" },
+  needs_attention: { label: "Needs attention", dot: "bg-amber-400/90", text: "text-zinc-300" },
+  not_tested: { label: "Not tested", dot: "bg-zinc-500", text: "text-zinc-500" },
 };
 
 const RUN_STATUS: Record<RunStatus, { label: string; Icon: typeof CheckCircle2; pill: string }> = {
-  succeeded: { label: "Succeeded", Icon: CheckCircle2, pill: "bg-emerald-50 text-emerald-700" },
-  failed: { label: "Failed", Icon: XCircle, pill: "bg-red-50 text-red-700" },
-  running: { label: "Running", Icon: Loader2, pill: "bg-sky-50 text-sky-700" },
-  queued: { label: "Queued", Icon: Clock, pill: "bg-zinc-100 text-zinc-600" },
-  waiting: { label: "Waiting", Icon: ShieldAlert, pill: "bg-amber-50 text-amber-700" },
-  cancelled: { label: "Cancelled", Icon: XCircle, pill: "bg-zinc-100 text-zinc-600" },
+  succeeded: { label: "Succeeded", Icon: CheckCircle2, pill: "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" },
+  failed: { label: "Failed", Icon: XCircle, pill: "bg-red-500/10 text-red-400 border border-red-500/20" },
+  running: { label: "Running", Icon: Loader2, pill: "bg-sky-500/10 text-sky-400 border border-sky-500/20" },
+  queued: { label: "Queued", Icon: Clock, pill: "bg-white/[0.05] text-zinc-400 border border-white/10" },
+  waiting: { label: "Waiting", Icon: ShieldAlert, pill: "bg-amber-500/10 text-amber-300 border border-amber-500/20" },
+  cancelled: { label: "Cancelled", Icon: XCircle, pill: "bg-white/[0.05] text-zinc-400 border border-white/10" },
 };
 
 function ago(iso: string): string {

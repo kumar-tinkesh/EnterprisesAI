@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { useAuthStore } from "@/stores/auth-store";
-import { roleForDashboard } from "@/lib/validations";
+import { dashboardPathForRole, roleForDashboard, type Role } from "@/lib/validations";
 import { api } from "@/lib/api";
 import { Spinner } from "@/components/ui/spinner";
 import { UserShell } from "@/components/user-shell";
@@ -125,8 +125,11 @@ export default function ProtectedDashboard({
   if (!allowed) {
     return (
       <Centered>
-        <h1 className="text-2xl font-semibold">Access denied</h1>
-        <p className="text-zinc-500">Your role does not grant access to this dashboard.</p>
+        <h1 className="text-2xl font-semibold">This page isn&apos;t for your account</h1>
+        <p className="text-zinc-500">It belongs to another kind of admin. Your own dashboard is a click away.</p>
+        <a href={dashboardPathForRole(user.role as Role)} className="mt-4 inline-flex h-9 items-center rounded-md bg-[var(--accent)] px-4 text-sm font-medium text-white hover:bg-[var(--accent-hover)]">
+          Go to my dashboard
+        </a>
         <button
           onClick={() => {
             logout();
@@ -140,10 +143,10 @@ export default function ProtectedDashboard({
     );
   }
 
-  // The user's pages share the sidebar frame; it holds sign-out too.
-  if (path === "/user") {
+  // Every signed-in page shares the sidebar frame (its menu by role); it holds sign-out too.
+  if (path === "/user" || path === "/vendor" || path === "/tenant") {
     return (
-      <UserShell fullBleed={fullBleed}>
+      <UserShell fullBleed={fullBleed} shell={path === "/user" ? "user" : path === "/vendor" ? "vendor" : "tenant"}>
         {fullBleed ? children : (
           <div className="mx-auto max-w-6xl px-4 py-6 sm:px-8 sm:py-8">
             <header className="flex flex-wrap items-end justify-between gap-4">

@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from vendor.models import MCPTool, VendorMCPServer
 
+from vendor.services.tool_access import tool_is_on
 from builder.graph.schema import parse_tool_id
 
 KNOWLEDGE_TOOL = "search_knowledge"
@@ -110,7 +111,7 @@ async def resolve_agent_tools(db: AsyncSession, tool_ids: list[str], labels: dic
     taken: set[str] = {KNOWLEDGE_TOOL}
     for server_id, tool_name in refs:
         server, tool = servers.get(server_id), tools.get((server_id, tool_name))
-        if server is None or tool is None:
+        if server is None or tool is None or not tool_is_on(server, tool_name):
             continue
         server_name = (labels or {}).get(server_id) or server.name
         base = f"{_slug(server_name)}__{_slug(tool_name)}"[:_MAX_NAME]

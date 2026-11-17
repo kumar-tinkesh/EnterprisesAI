@@ -18,6 +18,7 @@ The result is a draft — the person sees it on the canvas and saves it.
 from __future__ import annotations
 
 import copy
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -25,9 +26,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import CurrentUser
 
+from user.services.catalog_engine import get_authorized_vendor_catalog
+
 from builder.assist.drafts import agent_spec
 from builder.assist.llm import Usage
-from builder.assist.tools import pick_agent_tools, pick_tool
+from builder.assist.tools import pick_tool, suggest_agent_tools
 from builder.graph.schema import NODE_TYPES, TRIGGER_TYPES, WorkflowConfig
 from builder.schedules.cron import ScheduleError, describe
 from builder.schedules.cron import validate as validate_cron
@@ -48,12 +51,58 @@ def _s(value: Any) -> str:
     return str(value).strip() if value is not None else ""
 
 
+# Keys the model sometimes wraps a step's fields in ({"op":"add_node","type":"agent","agent":{"name":..}})
+# instead of putting them on the op itself.
+_WRAPPERS = ("agent", "draft_agent", "fields", "node", "tool", "data", "config_fields")
+
+
+def normalize_ops(ops: list) -> list:
+    """Hoist fields the model nested under a wrapper key onto the op itself.
+
+    Without this an agent step's name/role/goal are never read and every new
+    agent falls back to the placeholder name "Assistant"."""
+    out = []
+    for op in ops:
+        if isinstance(op, dict) and op.get("op") in ("add_node", "replace_agent", "set_tool", "update_node"):
+            flat = dict(op)
+            for key in _WRAPPERS:
+                inner = flat.get(key)
+                if isinstance(inner, dict):
+                    del flat[key]
+                    for k, v in inner.items():
+                        if k not in ("op", "id") and (k not in flat or flat[k] in (None, "")):
+                            flat[k] = v
+            # "label" is the step's title: a fair name for an agent step that has none.
+            if flat.get("type") == "agent" and not _s(flat.get("name")) and _s(flat.get("label")):
+                flat["name"] = flat["label"]
+            op = flat
+        out.append(op)
+    return out
+
+
 @dataclass
 class Resolved:
     """What pass 1 worked out, by op index."""
 
     tools: dict[int, dict | None] = field(default_factory=dict)  # tool candidate dict, or None = nothing fits
     agents: dict[int, dict] = field(default_factory=dict)  # draft_agent dicts
+    # Per agent op whose tools were (re)picked: {"need", "tools": [picked], "related": [rest of the shortlist]}.
+    agent_tools: dict[int, dict] = field(default_factory=dict)
+
+
+# Words in an MCP server's name that say nothing about which app it is.
+_GENERIC = {"server", "servers", "mcp", "tool", "tools", "system", "systems", "official", "api", "the", "and", "with",
+            "from", "local", "remote", "client", "service", "services", "connector", "integration", "agent", "agents"}
+
+
+def _words(text: str) -> set[str]:
+    return {w[:-1] if w.endswith("s") and len(w) > 4 else w for w in re.findall(r"[a-z0-9]+", text.lower())}
+
+
+def app_hint(agent_text: str, server_names: list[str]) -> bool:
+    """Does an agent's name/role/goal name one of the user's apps ("Notion Save Agent", "File Agent")?"""
+    words = _words(agent_text)
+    return any(w in words for name in server_names for w in _words(name) if len(w) >= 4 and w not in _GENERIC)
 
 
 async def resolve(
@@ -61,6 +110,7 @@ async def resolve(
 ) -> Resolved:
     out = Resolved()
     by_id = {n["id"]: n for n in nodes}
+    server_names: list[str] | None = None  # the user's apps, loaded the first time an agent needs them
     for index, op in enumerate(ops):
         if not isinstance(op, dict):
             continue
@@ -79,8 +129,21 @@ async def resolve(
             needs = spec["needs"]
             tool_ids = list((base.get("config") or {}).get("tool_ids") or [])
             if needs or not tool_ids:
-                chosen = await pick_agent_tools(db, user, f"{spec['role']}: {spec['goal']}\nNeeds: {needs or '(none)'}", needs, usage) if needs else []
+                if not needs and kind == "add_node":
+                    # The model left "needs" empty, but an agent named after one of the user's apps
+                    # ("Notion Save Agent") does work there: search by what it is instead.
+                    if server_names is None:
+                        server_names = [s.name for s in await get_authorized_vendor_catalog(db, user=user)]
+                    if app_hint(f"{spec['name']} {spec['role']} {spec['goal']}", server_names):
+                        needs = f"{spec['name']}: {spec['goal']}"
+                chosen, related = (
+                    await suggest_agent_tools(db, user, f"{spec['role']}: {spec['goal']}\nNeeds: {needs or '(none)'}", needs, usage)
+                    if needs else ([], [])
+                )
                 tool_ids = [c.tool_id for c in chosen]
+                out.agent_tools[index] = {
+                    "need": needs, "tools": [c.as_dict() for c in chosen], "related": [c.as_dict() for c in related[:6]],
+                }
             out.agents[index] = {
                 "name": spec["name"], "role": spec["role"], "goal": spec["goal"], "instructions": spec["instructions"],
                 "llm_provider": base.get("llm_provider", ""), "llm_model": base.get("llm_model", ""),
@@ -103,8 +166,26 @@ class Editor:
         self.changes: list[str] = []
         self.warnings: list[str] = []
         self.new_tools: dict[str, dict] = {}
+        # Agent steps whose tools this edit picked, by node id: what was picked, the rest of the
+        # shortlist (its apps can be added whole in Configure), and the need it was picked for.
+        self.agent_tools: dict[str, dict] = {}
 
     # ── helpers ──
+
+    def _report_agent(self, index: int, node: dict) -> None:
+        report = self.resolved.agent_tools.get(index)
+        if report is None:
+            return
+        name = node["draft_agent"]["name"]
+        self.agent_tools[node["id"]] = {"agent": name, **report}
+        if report["need"] and not report["tools"]:
+            self.warnings.append(
+                f'Agent "{name}" needs to "{report["need"]}", but none of the apps you can use can do that — '
+                "ask your admin to add one, then pick its tools in Configure → Tools and MCP."
+            )
+        offline = sorted({t["server_name"] for t in report["tools"] if not t["connected"]})
+        if offline:
+            self.warnings.append(f'Agent "{name}" uses {", ".join(offline)} — connect {"it" if len(offline) == 1 else "them"} so its tools can run.')
 
     def _mint(self, prefix: str) -> str:
         n = 1
@@ -204,6 +285,8 @@ class Editor:
             if key != "label" and op[key] is not None:
                 node[key] = op[key]
         self.nodes.append({k: v for k, v in node.items() if v is not None})
+        if ntype == "agent":
+            self._report_agent(index, self.nodes[-1])
         after = self.node(op["after"]) if _s(op.get("after")) else None
         before = self.node(op["before"]) if _s(op.get("before")) else None
         where = self._place(self.nodes[-1], after, before, _s(op.get("condition")) or None)
@@ -251,6 +334,7 @@ class Editor:
             raise EditError(f"Step {node['id']} isn't an agent step.")
         node["draft_agent"] = self.resolved.agents[index]
         node["label"] = node["draft_agent"]["name"]
+        self._report_agent(index, node)
         self.changes.append(f"Rewrote {self.label(node)}")
 
     def set_tool(self, index: int, op: dict) -> None:
@@ -371,4 +455,4 @@ class Editor:
             handlers[op["op"]](index, op)
 
 
-__all__ = ["EditError", "Editor", "Resolved", "resolve"]
+__all__ = ["EditError", "Editor", "Resolved", "normalize_ops", "resolve"]
