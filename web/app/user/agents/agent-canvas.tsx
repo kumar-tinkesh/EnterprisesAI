@@ -125,19 +125,48 @@ export default function BuilderHome({
     builder.createWithAi.mutate({ mode, description: q }, { onSuccess: () => setText("") });
   };
 
-  const isWriting = text.trim().length > 0;
+  const isActive = isFocused || text.trim().length > 0;
+
+  const cancel = () => {
+    setText("");
+    setIsFocused(false);
+    box.current?.blur();
+  };
 
   return (
     <div
       className={cn(
-        "w-full transition-all duration-300 ease-in-out",
-        isWriting
-          ? "mx-auto flex min-h-[62dvh] max-w-2xl flex-col justify-center py-6"
-          : "space-y-6 pt-1 pb-10"
+        "mx-auto flex h-full w-full max-w-6xl flex-col px-4 py-6 transition-all duration-300 sm:px-8 sm:py-8",
+        isActive ? "items-center justify-center" : "justify-start"
       )}
     >
-      {!hasAnyConnectedServer && !isWriting && (
-        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-xs text-zinc-300">
+      {/* Header: Centered in active mode, top-aligned in idle mode */}
+      <header
+        className={cn(
+          "transition-all duration-300",
+          isActive
+            ? "mb-6 w-full max-w-2xl text-center"
+            : "mb-5 flex w-full flex-wrap items-end justify-between gap-4"
+        )}
+      >
+        <div className="min-w-0">
+          <h1
+            className={cn(
+              "font-semibold text-zinc-100 transition-all",
+              isActive ? "text-2xl sm:text-3xl" : "text-xl"
+            )}
+          >
+            Agents & Workflows
+          </h1>
+          <p className="mt-1 text-sm text-zinc-400">
+            Build, manage, and run your AI agents and automated workflows.
+          </p>
+        </div>
+      </header>
+
+      {/* Connectors Banner (only when idle) */}
+      {!hasAnyConnectedServer && !isActive && (
+        <div className="mb-4 flex w-full flex-wrap items-center gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-xs text-zinc-300">
           <Plug className="h-4 w-4 shrink-0 text-amber-400" />
           <p className="min-w-0 flex-1">Connect an app first — agents and workflows work through them.</p>
           <Link
@@ -149,20 +178,13 @@ export default function BuilderHome({
         </div>
       )}
 
-      {/* Focused Mode Header (appears only while writing) */}
-      {isWriting && (
-        <div className="mb-4 text-center transition-all duration-300">
-          <h2 className="text-xl font-semibold text-zinc-100">Describe your {mode}</h2>
-          <p className="mt-1 text-xs text-zinc-400">
-            {mode === "agent"
-              ? "AI will configure its identity, tools, and abilities step-by-step"
-              : "AI will design the multi-step canvas and connect tools"}
-          </p>
-        </div>
-      )}
-
-      {/* AI Command Bar: Centered when writing, at top when idle */}
-      <section className={cn("relative transition-all duration-300", !isWriting && "w-full")}>
+      {/* AI Command Bar: Centered in active mode, at top in idle mode */}
+      <section
+        className={cn(
+          "relative transition-all duration-300",
+          isActive ? "w-full max-w-2xl" : "mb-5 w-full"
+        )}
+      >
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -170,8 +192,8 @@ export default function BuilderHome({
           }}
           className={cn(
             "rounded-2xl border border-[var(--border-strong)] bg-[var(--surface)] p-3.5 shadow-xs transition-all duration-200",
-            isFocused || text.length > 0
-              ? "border-[var(--accent-hover)] shadow-[0_0_28px_rgba(99,102,241,0.18)]"
+            isActive
+              ? "border-[var(--accent-hover)] shadow-[0_0_32px_rgba(99,102,241,0.22)]"
               : "hover:border-white/20"
           )}
         >
@@ -251,12 +273,14 @@ export default function BuilderHome({
               disabled={busy}
               placeholder={current.placeholder}
               onFocus={() => setIsFocused(true)}
-              onBlur={() => setIsFocused(false)}
+              onBlur={() => {
+                if (!text.trim()) setIsFocused(false);
+              }}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Escape") {
                   e.preventDefault();
-                  setText("");
+                  cancel();
                 } else if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault();
                   submit();
@@ -279,12 +303,12 @@ export default function BuilderHome({
             </p>
 
             <div className="flex shrink-0 items-center gap-2">
-              {isWriting && (
+              {isActive && (
                 <button
                   type="button"
-                  onClick={() => setText("")}
+                  onClick={cancel}
                   className="inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-xs text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-200 cursor-pointer transition-colors"
-                  title="Clear and return to dashboard (Esc)"
+                  title="Cancel and return to dashboard (Esc)"
                 >
                   <X className="h-3.5 w-3.5" />
                   <span>Cancel</span>
@@ -331,8 +355,12 @@ export default function BuilderHome({
         )}
       </section>
 
-      {/* Main Workspace Dashboard: Unified Library & Templates (Hidden while writing) */}
-      {!isWriting && <AgentLibrary onOpen={onOpen} />}
+      {/* Main Workspace Dashboard: Unified Library & Templates (Hidden when active) */}
+      {!isActive && (
+        <div className="min-h-0 flex-1 overflow-hidden">
+          <AgentLibrary onOpen={onOpen} />
+        </div>
+      )}
     </div>
   );
 }

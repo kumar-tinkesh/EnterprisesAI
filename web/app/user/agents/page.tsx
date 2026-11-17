@@ -69,7 +69,12 @@ export default function UserAgentsPage() {
   }
 
   return (
-    <ProtectedDashboard path="/user" title="Agents & Workflows" description="Build, manage, and run your AI agents and automated workflows.">
+    <ProtectedDashboard
+      path="/user"
+      title="Agents & Workflows"
+      description="Build, manage, and run your AI agents and automated workflows."
+      fullBleed
+    >
       <BuilderHome hasAnyConnectedServer={hasAnyConnectedServer} onOpen={openEditor} />
       <AgentWizardHost onOpen={openEditor} />
     </ProtectedDashboard>
