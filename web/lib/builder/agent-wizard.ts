@@ -103,6 +103,17 @@ export function serverCandidates(st: ServerTools): ToolCandidate[] {
   }));
 }
 
+/** The apps behind some tools, in the order first seen, with how many of the tools each has. */
+export function appsOf(tools: ToolCandidate[]): { serverId: string; serverName: string; connected: boolean; count: number }[] {
+  const apps = new Map<string, { serverId: string; serverName: string; connected: boolean; count: number }>();
+  for (const t of tools) {
+    const app = apps.get(t.server_id) ?? { serverId: t.server_id, serverName: t.server_name, connected: t.connected, count: 0 };
+    app.count += 1;
+    apps.set(t.server_id, app);
+  }
+  return Array.from(apps.values());
+}
+
 /** ``toolIds`` plus every one of ``ids`` it doesn't have yet, kept beside that server's other tools. */
 export function addServerTools(toolIds: string[], serverId: string, ids: string[]): string[] {
   const mine = toolIds.filter((id) => serverIdOf(id) === serverId);

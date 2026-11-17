@@ -677,6 +677,17 @@ export interface WorkflowEditResult {
   changes: string[];
   warnings: string[];
   problems: Problem[];
+  /** Agent steps this edit picked tools for, by node id. */
+  agent_tools?: Record<string, AgentToolReport>;
+}
+
+/** What an AI edit picked for one agent step: its tools, and the rest of the shortlist to suggest. */
+export interface AgentToolReport {
+  agent: string;
+  /** What it does in an app ("" = a thinking-only agent). */
+  need: string;
+  tools: ToolCandidate[];
+  related: ToolCandidate[];
 }
 
 export type RunStatus = "queued" | "running" | "waiting" | "succeeded" | "failed" | "cancelled";

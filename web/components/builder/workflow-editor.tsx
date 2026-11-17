@@ -26,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Menu } from "@/components/ui/menu";
 import { Spinner } from "@/components/ui/spinner";
+import { AgentToolsNotice } from "@/components/builder/agent-tools-notice";
 import { ApprovalCard } from "@/components/builder/approval-card";
 import { flowEdgeTypes, type FlowEdgeType } from "@/components/builder/flow-edge";
 import { CanvasContext, NODE_LOOK, flowNodeTypes, type CanvasCtx, type FlowNodeType } from "@/components/builder/flow-node";
@@ -47,7 +48,7 @@ import { builderApi } from "@/lib/builder/api";
 import { arrange } from "@/lib/builder/arrange";
 import { connect, draftKey, duplicateStep, forSave, inputFields, insertAfter, newNode, problemsByStep, removeSteps, stepTitle, unsavedKey, updateStep } from "@/lib/builder/graph";
 import { emptyRunView, isFinished, type RunView } from "@/lib/builder/run-state";
-import type { Agent, AnswerDepth, NodeType, Problem, RunNode, WorkflowConfig, WorkflowEdge, WorkflowNode } from "@/lib/builder/types";
+import type { Agent, AgentToolReport, AnswerDepth, NodeType, Problem, RunNode, WorkflowConfig, WorkflowEdge, WorkflowNode } from "@/lib/builder/types";
 import type { BuildTarget } from "@/lib/builder/use-builder-actions";
 import { useRunStream } from "@/lib/builder/use-run-stream";
 import { useStreamPref } from "@/lib/builder/stream-pref";
@@ -74,7 +75,7 @@ type Selection =
   | { kind: "schedule" }
   | { kind: "usage" }
   | null;
-type Notice = { tone: "ok" | "warn" | "error"; text: string; detail?: string[]; reload?: boolean } | null;
+type Notice = { tone: "ok" | "warn" | "error"; text: string; detail?: string[]; reload?: boolean; agents?: [string, AgentToolReport][] } | null;
 
 /** Everything "Add Step" offers, in Marketplace's order. */
 const ADDABLE: NodeType[] = ["input", "manual_trigger", "schedule_trigger", "agent", "condition", "output", "tool", "human_approval", "join"];
@@ -385,6 +386,7 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
         tone: res.warnings.length ? "warn" : "ok",
         text: res.answer ?? res.summary ?? (res.changes.length ? "Changed." : "Nothing to change."),
         detail: [...res.changes, ...res.warnings],
+        agents: res.changes.length ? Object.entries(res.agent_tools ?? {}) : undefined,
       });
     },
     onError: (err) => setNotice({ tone: "error", text: err instanceof Error ? err.message : "The AI couldn't make that change." }),
@@ -825,6 +827,7 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
             <div className="flex-1">
               <p className="font-medium">{notice.text}</p>
               {notice.detail?.map((d, i) => <p key={i}>• {d}</p>)}
+              {notice.agents && <AgentToolsNotice token={token} reports={notice.agents} onOpen={(nodeId) => setSelection({ kind: "node", id: nodeId, open: true })} />}
             </div>
             {notice.reload && <button type="button" className="font-medium underline cursor-pointer" onClick={() => window.location.reload()}>Reload</button>}
             <button type="button" aria-label="Dismiss" className="cursor-pointer" onClick={() => setNotice(null)}>×</button>

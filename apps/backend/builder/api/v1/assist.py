@@ -195,6 +195,8 @@ async def assist_workflow_edit(payload: EditRequest, user: CurrentUser = Depends
         "warnings": editor.warnings,
         "problems": [p.as_dict() for p in problems],
         "tools": editor.new_tools,
+        # Only steps still in the graph (a later op may have removed one).
+        "agent_tools": {k: v for k, v in editor.agent_tools.items() if any(n["id"] == k for n in editor.nodes)},
         "usage": {"prompt_tokens": usage.prompt_tokens, "completion_tokens": usage.completion_tokens},
     }
 

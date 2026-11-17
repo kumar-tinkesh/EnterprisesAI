@@ -4,6 +4,7 @@ import {
   WIZARD_STEPS,
   accessOf,
   addServerTools,
+  appsOf,
   applyProfile,
   askFirstFor,
   blankAgent,
@@ -95,6 +96,16 @@ describe("agent wizard: tools per server", () => {
     expect(addServerTools(ids, "b", ["mcp:b:1", "mcp:b:2", "mcp:b:3"])).toEqual(["mcp:a:1", "mcp:b:1", "mcp:b:2", "mcp:b:3", "mcp:c:1"]);
     expect(addServerTools(ids, "d", ["mcp:d:1", "mcp:d:2"])).toEqual([...ids, "mcp:d:1", "mcp:d:2"]);
     expect(addServerTools(ids, "a", ["mcp:a:1"])).toEqual(ids);
+  });
+
+  it("groups tools by their app, counting each app's tools", () => {
+    const t = (server: string, name: string, connected: boolean) => ({
+      tool_id: `mcp:${server}:${name}`, server_id: server, server_name: server.toUpperCase(), tool_name: name, description: "", risk: "read" as Risk, connected,
+    });
+    expect(appsOf([t("n", "a", false), t("s", "b", true), t("n", "c", false)])).toEqual([
+      { serverId: "n", serverName: "N", connected: false, count: 2 },
+      { serverId: "s", serverName: "S", connected: true, count: 1 },
+    ]);
   });
 
   it("turns a server's tool list into picker candidates, delete tools included", () => {

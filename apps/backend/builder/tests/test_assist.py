@@ -330,6 +330,58 @@ async def test_edit_reads_an_agent_the_model_nested_under_a_key(tenant_client, l
     assert new["draft_agent"]["goal"] == "Summarize the draft" and new["draft_agent"]["instructions"] == "Be brief."
 
 
+def _add_agent(name: str, needs: str, goal: str = "Do its job") -> dict:
+    return {"summary": f"Added {name}.", "answer": None,
+            "ops": [{"op": "add_node", "id": "new1", "type": "agent", "after": "a", "name": name, "role": name,
+                     "goal": goal, "instructions": "Be careful.", "needs": needs}]}
+
+
+async def _edit(client, wf, instruction: str = "add it") -> dict:
+    r = await client.post("/api/v1/builder/assist/workflow-edit", json={"instruction": instruction, **{k: wf[k] for k in ("name", "nodes", "edges", "config")}})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+async def test_an_added_agent_named_after_an_app_gets_its_tools_even_without_needs(tenant_client, llm, catalog):
+    wf, _ = await _saved_flow(tenant_client)
+    llm.on("You are editing an EXISTING AI workflow", _add_agent("Notion Save Agent", "", "Save the summary in Notion"))
+    llm.on("Pick the tools this agent", picker("Notion.create_page"))
+    out = await _edit(tenant_client, wf)
+    new = next(n for n in out["nodes"] if n["id"] not in {"in", "a", "out"})
+    assert new["draft_agent"]["config"]["tool_ids"] == [f"mcp:{catalog['Notion'].id}:create_page"]
+    report = out["agent_tools"][new["id"]]
+    assert report["agent"] == "Notion Save Agent" and [t["tool_name"] for t in report["tools"]] == ["create_page"]
+    assert all(t["tool_id"] != report["tools"][0]["tool_id"] for t in report["related"])
+
+
+async def test_a_thinking_only_agent_gets_no_tool_search(tenant_client, llm, catalog):
+    wf, _ = await _saved_flow(tenant_client)
+    llm.on("You are editing an EXISTING AI workflow", _add_agent("Summarizer", "", "Summarize the draft"))
+    out = await _edit(tenant_client, wf)
+    new = next(n for n in out["nodes"] if n["id"] not in {"in", "a", "out"})
+    assert new["draft_agent"]["config"]["tool_ids"] == [] and llm.seen("Pick the tools") == []
+    assert out["warnings"] == []
+
+
+async def test_an_added_agent_no_app_can_serve_is_flagged(tenant_client, llm, catalog):
+    wf, _ = await _saved_flow(tenant_client)
+    llm.on("You are editing an EXISTING AI workflow", _add_agent("Fax Sender", "send the summary by fax"))
+    llm.on("Pick the tools this agent", picker())
+    out = await _edit(tenant_client, wf)
+    new = next(n for n in out["nodes"] if n["id"] not in {"in", "a", "out"})
+    assert out["agent_tools"][new["id"]]["tools"] == []
+    assert any('"Fax Sender" needs to "send the summary by fax"' in w for w in out["warnings"])
+
+
+def test_app_hint_matches_app_names_not_generic_words():
+    from builder.assist.edit import app_hint
+
+    assert app_hint("File Agent: read the files", ["file system server"])
+    assert app_hint("Notion Save Agent", ["Notion"])
+    assert not app_hint("Summarizer: summarize the text", ["file system server", "Notion"])
+    assert not app_hint("Server helper agent", ["My MCP Server"])
+
+
 async def test_a_failed_edit_is_repaired_once(tenant_client, llm, catalog):
     wf, _ = await _saved_flow(tenant_client)
     llm.on("Your operations failed", {"summary": "Renamed.", "answer": None, "ops": [{"op": "rename_workflow", "name": "Better"}]})

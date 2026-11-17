@@ -9,13 +9,13 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { BoolParam, Field, OverrideParams, Pair, Param, Section, Select, Textarea, Toggle } from "@/components/builder/fields";
 import { GuardrailFields } from "@/components/builder/guardrail-fields";
-import { ToolPicker } from "@/components/builder/tool-picker";
+import { AppRows, ToolPicker, useServerToolLists } from "@/components/builder/tool-picker";
 import { NeedsSection } from "@/components/builder/tool-needs";
 import { knowledgeApi } from "@/lib/api";
 import { addServerTools } from "@/lib/builder/agent-wizard";
 import { builderApi } from "@/lib/builder/api";
 import { toolName } from "@/lib/builder/graph";
-import type { AgentConfig, ApprovalPolicy, DraftAgent } from "@/lib/builder/types";
+import type { AgentConfig, ApprovalPolicy, DraftAgent, ToolCandidate } from "@/lib/builder/types";
 import { cn } from "@/lib/utils";
 
 const DEFAULT_APPROVALS: ApprovalPolicy = { read: false, edit: true, delete: true };
@@ -63,6 +63,42 @@ function ListInput({ value, max, onChange }: { value: string[]; max: number; onC
         setText(null);
       }}
     />
+  );
+}
+
+/** The apps that match what this agent does (its name, role and goal), each addable whole and connectable in
+ *  place — so an agent the AI just added can be finished here. Nothing shows for an agent no app matches. */
+function SuggestedApps({
+  token,
+  query,
+  toolIds,
+  onPickMany,
+}: {
+  token: string;
+  query: string;
+  toolIds: string[];
+  onPickMany: (tools: ToolCandidate[]) => void;
+}) {
+  const q = query.trim().slice(0, 400);
+  const search = useQuery({
+    queryKey: ["builder-tool-search", q],
+    queryFn: () => builderApi.searchTools(token, q, 8),
+    enabled: !!token && q.length >= 3,
+    staleTime: 60_000,
+  });
+  const serverIds = Array.from(new Set((search.data ?? []).map((t) => t.server_id))).slice(0, 3);
+  const servers = useServerToolLists(token, serverIds);
+  if (servers.length === 0) return null;
+  return (
+    <div className="mt-3 space-y-1">
+      <p className="text-xs font-semibold text-zinc-700">Suggested apps for this agent</p>
+      <p className="text-xs text-zinc-500">
+        {toolIds.length === 0
+          ? "It has no tools yet. If it should act in one of these apps, connect it and add its tools."
+          : "Apps that match what it does. Add one whole, or pick single tools with Add."}
+      </p>
+      <AppRows token={token} servers={servers} exclude={toolIds} onPickMany={onPickMany} />
+    </div>
   );
 }
 
@@ -307,6 +343,14 @@ export function AgentFields({
             </div>
           )
         ))}
+        {!readOnly && editable("tool_ids") && (
+          <SuggestedApps
+            token={token}
+            query={[value.name, value.role, value.goal].filter(Boolean).join(": ")}
+            toolIds={toolIds}
+            onPickMany={(tools) => setConfig({ tool_ids: addServerTools(toolIds, tools[0].server_id, tools.map((t) => t.tool_id)) })}
+          />
+        )}
         {adding && (
           <ToolPicker
             token={token}

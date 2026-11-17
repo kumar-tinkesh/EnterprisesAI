@@ -176,6 +176,9 @@ EDIT_OPS_DOC = """Operations (each an object with an "op" key):
     Put the fields directly on the op object, never nested (no "agent": {...} wrapper), e.g.
     {"op":"add_node","id":"new1","type":"agent","name":"Email Writer","role":"Email writer","goal":..,"instructions":..,"needs":"","after":"a"}
     agent: "name","role","goal","instructions" (all four) and "needs" (one sentence, "" if none)
+      "needs" says what it does IN AN APP OR SYSTEM ("save the summary as a page in Notion", "read and write
+      files on the file system") — its tools are found from it. "" ONLY for an agent that just thinks or
+      writes text from what it is given (a summarizer, a writer).
     tool: "label" and "need" (the ONE action it performs)    human_approval: "approval_message"
     join: "join_policy" {"mode":"all"|"any"|"count","min_required":<n>}
     Placement (optional): "after":<id> puts it right after that step (that step's outgoing lines move to it);
