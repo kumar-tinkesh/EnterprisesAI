@@ -213,6 +213,7 @@ async def execute_workflow(run: BuilderRun, user: CurrentUser, worker_id: str, *
             # Only a step whose answer is the run's answer is worth watching being written.
             stream=stream and node_id in feeds_output,
             attachment_ids=attachment_ids if node_id in after_input else [],
+            attachment_owner_id=run.caller_user_id,
         )
         return await RUNNERS[node["type"]](ctx)
 

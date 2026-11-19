@@ -193,9 +193,7 @@ async def start(
     visitor = key.tool_mode in ("visitor", "mixed")
     if visitor and not user.tenant_id:
         raise HTTPException(status_code=403, detail=NEEDS_WORKSPACE)
-    # A run as the publisher reads only the publisher's files, so a caller's file can't go with it.
-    if payload.attachment_ids and not visitor:
-        raise HTTPException(status_code=422, detail="Files can be sent only on a link that runs with your own apps.")
+    # The caller's own files go with it on any link; a run as the publisher reads them as the caller's (run.caller_user_id).
     attachments = await attachments_for_run(db, user, payload.attachment_ids)
     try:
         run = await start_public_run(

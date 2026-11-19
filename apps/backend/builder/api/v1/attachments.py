@@ -19,10 +19,9 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import CurrentUser
+from src.api.deps import CurrentUser, get_current_user
 from src.db.session import get_db
 
-from builder.api.v1.deps import get_end_user
 from builder.models import BuilderAttachment
 
 router = APIRouter()
@@ -63,7 +62,8 @@ def _out(a: BuilderAttachment) -> AttachmentOut:
 
 
 @router.post("/attachments", response_model=AttachmentOut, status_code=201)
-async def upload(file: UploadFile = File(...), user: CurrentUser = Depends(get_end_user), db: AsyncSession = Depends(get_db)):
+async def upload(file: UploadFile = File(...), user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    # Any signed-in person: a share link that runs as its publisher is open to people without a workspace too.
     from knowledge.services.document_safety import DocumentUploadError
 
     filename = (file.filename or "").strip()[:255]
@@ -77,7 +77,7 @@ async def upload(file: UploadFile = File(...), user: CurrentUser = Depends(get_e
     except Exception as exc:  # noqa: BLE001 — a parser failing on one odd file is the file's problem
         raise HTTPException(status_code=422, detail=f"Couldn't read {filename}: {exc}") from exc
     attachment = BuilderAttachment(
-        tenant_id=user.tenant_id, owner_id=user.id, filename=filename, kind=kind, content_type=content_type,
+        tenant_id=user.tenant_id or "", owner_id=user.id, filename=filename, kind=kind, content_type=content_type,
         size=len(data), text=text if kind == "document" else None, data=data if kind == "image" else None,
     )
     db.add(attachment)
@@ -87,7 +87,7 @@ async def upload(file: UploadFile = File(...), user: CurrentUser = Depends(get_e
 
 
 @router.delete("/attachments/{attachment_id}", status_code=204)
-async def remove(attachment_id: str, user: CurrentUser = Depends(get_end_user), db: AsyncSession = Depends(get_db)):
+async def remove(attachment_id: str, user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     attachment = (
         await db.execute(select(BuilderAttachment).where(BuilderAttachment.id == attachment_id, BuilderAttachment.owner_id == user.id))
     ).scalars().first()

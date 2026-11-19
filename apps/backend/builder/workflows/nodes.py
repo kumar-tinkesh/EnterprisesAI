@@ -108,6 +108,8 @@ class StepContext:
     stream: bool = False
     # Files sent with the run (builder_attachments ids): only the steps right after its input get them.
     attachment_ids: list[str] = field(default_factory=list)
+    # Whose those files are, when not the run user's: a share-link visitor's.
+    attachment_owner_id: str | None = None
 
     @property
     def node_id(self) -> str:
@@ -185,7 +187,7 @@ async def run_agent_step(ctx: StepContext) -> NodeOutcome:
         user=ctx.user, agent=agent, config=config, input_text=task, approvals=approvals, emit=ctx.emit,
         dry_run=ctx.dry_run, depth=ctx.depth, sub_agents=ctx.sub_agents, memory=ctx.memory,
         knowledge_tenant_id=ctx.knowledge_tenant_id, tool_owners=ctx.tool_owners, stream=ctx.stream,
-        attachment_ids=ctx.attachment_ids, history=ctx.history if ctx.works_on_request() else [],
+        attachment_ids=ctx.attachment_ids, attachment_owner_id=ctx.attachment_owner_id, history=ctx.history if ctx.works_on_request() else [],
     )
     try:
         result = await run_agent(agent_ctx)

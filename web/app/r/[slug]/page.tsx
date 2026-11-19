@@ -79,7 +79,7 @@ function errorText(err: unknown): string {
 
 /** Whose accounts it runs with, in one sentence (the details live under How it works). */
 function accountsNote(mode: ToolMode): string {
-  if (mode === "publisher") return "It runs with the sharer's accounts; anything that would change data waits for their OK.";
+  if (mode === "publisher") return "It runs with the sharer's accounts; anything that would change data waits for their OK. What you send, files included, is in their run.";
   if (mode === "mixed") return "It runs as you, with your accounts — except a few apps that stay the sharer's. It asks before changing anything.";
   return "It runs as you, with your own accounts, and asks you before it changes anything. Whoever shared it sees that you used it, not what was in it.";
 }
@@ -377,7 +377,7 @@ function Runner({
     return out;
   };
 
-  // Files go with the run only on a link that runs with the visitor's own apps (the run is theirs).
+  // Files go with the run on any link; one run with the sharer's apps reads them as the visitor's.
   const attach = async (list: FileList | null) => {
     setFileError(null);
     setFieldsChoice(null); // a file usually answers the fields: fold them away
@@ -599,30 +599,25 @@ function Runner({
                 className="block max-h-40 min-h-[36px] w-full resize-none bg-transparent px-1 py-1 text-sm text-zinc-900 outline-none placeholder:text-zinc-500"
               />
               <div className="mt-1 flex items-center gap-2">
-                {own && (
-                  <input
-                    ref={picker}
-                    type="file"
-                    multiple
-                    accept={ACCEPT}
-                    className="hidden"
-                    onChange={(e) => {
-                      void attach(e.target.files);
-                      e.target.value = "";
-                    }}
-                  />
-                )}
-                {/* On a link that runs with the sharer's apps the run can't read your file: say so instead of hiding the button. */}
+                <input
+                  ref={picker}
+                  type="file"
+                  multiple
+                  accept={ACCEPT}
+                  className="hidden"
+                  onChange={(e) => {
+                    void attach(e.target.files);
+                    e.target.value = "";
+                  }}
+                />
+                {/* Files work on every link: even a run with the sharer's apps reads the file as yours. */}
                 <button
                   type="button"
-                  onClick={() => (own ? picker.current?.click() : setFileError("Files can't be added here: this link runs with the sharer's apps, which can't read your files."))}
-                  disabled={own && (busy || running || files.length >= MAX_FILES)}
+                  onClick={() => picker.current?.click()}
+                  disabled={busy || running || files.length >= MAX_FILES}
                   aria-label="Attach files"
-                  title={own ? "Attach a document (PDF, Word, Excel, CSV, text) or an image (JPG, PNG)" : "Files work only on links that run with your own apps"}
-                  className={cn(
-                    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-40 cursor-pointer",
-                    !own && "opacity-40",
-                  )}
+                  title={own ? "Attach a document (PDF, Word, Excel, CSV, text) or an image (JPG, PNG)" : "Attach a document or an image. It's read in the sharer's run, so they can see it."}
+                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-40 cursor-pointer"
                 >
                   <Paperclip className="h-4 w-4" />
                 </button>
