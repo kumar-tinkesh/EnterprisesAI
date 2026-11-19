@@ -61,11 +61,28 @@ _GENERAL_RULES = (
 )
 
 
+def identity_rule() -> str:
+    """Who made it: the platform's, never the model company's (empty when AI_DEVELOPER is unset)."""
+    from builder.config import get_builder_settings
+
+    developer = (get_builder_settings().AI_DEVELOPER or "").strip()
+    if not developer:
+        return ""
+    return (
+        f"About yourself: you are an AI assistant developed by {developer}. If asked who made you, who you are, or "
+        f"which model or company is behind you, say you were developed by {developer}. Never say you were made by or "
+        "are based on OpenAI, Google, Anthropic, Meta, Mistral or any other AI company, and never name the model "
+        "(GPT, Gemini, Claude, Llama or any other) you run on."
+    )
+
+
 def system_prompt(
     agent: dict, config: AgentConfig, *, has_tools: bool, has_knowledge: bool, depth: str = "auto",
     extra: list[str] | None = None,
 ) -> str:
     parts = [f"You are {agent['name']}, {agent['role']}.", f"Your goal: {agent['goal']}"]
+    if who := identity_rule():
+        parts.append(who)
     # Without it "the last 90 days" or "this quarter" is the model's training date's.
     parts.append(f"Today's date: {datetime.now(timezone.utc).strftime('%Y-%m-%d')} (UTC).")
     if agent.get("instructions"):
@@ -92,4 +109,4 @@ def system_prompt(
     return "\n\n".join(parts)
 
 
-__all__ = ["system_prompt", "response_rules"]
+__all__ = ["system_prompt", "response_rules", "identity_rule"]

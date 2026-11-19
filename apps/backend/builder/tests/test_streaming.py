@@ -51,6 +51,63 @@ async def test_an_answer_a_guardrail_checks_is_never_streamed(tenant_client, dem
     assert "a@b.io" not in ((await tenant_client.get(f"{B}/runs/{run_id}")).json()["output_text"] or "")
 
 
+def _thinking(text: str, thought: str, calls=None):
+    r = reply(text, calls)
+    r.reasoning = thought
+    return r
+
+
+async def test_the_models_thinking_streams_and_stays_on_the_run(tenant_client, demo, gateway, runtime):
+    agent = await make_agent(tenant_client, demo, ["echo"])
+    gateway([_thinking("", "I should echo first.", [("demo__echo", {"text": "x"})]), _thinking("Done.", "Now I can answer.")])
+    run_id, events = await _run_collecting(runtime, tenant_client, agent)
+    thought = [e for e in events if e["type"] == "reasoning_delta"]
+    assert [(e["turn"], e["at"]) for e in thought] == [(1, 0), (2, 0)]
+    assert [e["text"] for e in thought] == ["I should echo first.", "Now I can answer."]
+    # Sent before that turn's answer text.
+    kinds = [e["type"] for e in events if e["type"] in ("reasoning_delta", "output_delta")]
+    assert kinds[-2:] == ["reasoning_delta", "output_delta"]
+    run = (await tenant_client.get(f"{B}/runs/{run_id}")).json()
+    assert run["output"]["reasoning"] == "I should echo first.\n\nNow I can answer."
+    assert run["output_text"] == "Done."
+
+
+async def test_no_thinking_no_field_and_none_when_a_guardrail_checks_the_answer(tenant_client, demo, gateway, runtime):
+    agent = await make_agent(tenant_client, demo, [])
+    gateway([reply("Plain.")])
+    run_id, events = await _run_collecting(runtime, tenant_client, agent)
+    assert not [e for e in events if e["type"] == "reasoning_delta"]
+    assert "reasoning" not in ((await tenant_client.get(f"{B}/runs/{run_id}")).json()["output"] or {})
+
+    guarded = await make_agent(tenant_client, demo, [], guardrails={"pii_output": True})
+    gateway([_thinking("Fine.", "Their mail is a@b.io")])
+    run_id, events = await _run_collecting(runtime, tenant_client, guarded)
+    assert not [e for e in events if e["type"] == "reasoning_delta"]
+    assert "reasoning" not in ((await tenant_client.get(f"{B}/runs/{run_id}")).json()["output"] or {})
+
+
+async def test_callers_never_see_the_thinking():
+    bus = LocalEventBus()
+    set_event_bus(bus)
+    try:
+        states = iter([{"status": "running", "output": None}, {"status": "succeeded", "output": "Hi"}])
+
+        async def view() -> dict:
+            return next(states)
+
+        async def produce():
+            await asyncio.sleep(0.05)
+            await bus.publish("r1", {"type": "reasoning_delta", "turn": 1, "at": 0, "text": "secret plan", "node_id": "agent"})
+            await bus.publish("r1", {"type": "run_status", "status": "succeeded"})
+
+        task = asyncio.create_task(produce())
+        out = "".join([chunk async for chunk in caller_events("r1", view, idle_seconds=1)])
+        await task
+    finally:
+        set_event_bus(None)
+    assert "secret plan" not in out
+
+
 async def test_live_view_sends_only_text_and_state():
     bus = LocalEventBus()
     set_event_bus(bus)

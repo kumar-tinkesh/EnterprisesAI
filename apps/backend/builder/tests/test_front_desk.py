@@ -95,3 +95,19 @@ def test_agents_answer_general_questions_unless_turned_off():
     off = system_prompt(agent_def, AgentConfig.model_validate({"chat": {"answer_general": False}}), has_tools=False, has_knowledge=False)
     assert "general question your goal isn't for" in on and "what you can help with" in on
     assert "general question" not in off
+
+
+def test_agents_and_the_front_desk_say_who_made_them(monkeypatch):
+    from builder.config import get_builder_settings
+    from builder.workflows.front_desk import _prompt
+
+    agent_def = {"name": "Helper", "role": "assistant", "goal": "Help"}
+    prompt = system_prompt(agent_def, AgentConfig(), has_tools=False, has_knowledge=False)
+    assert "developed by Abhishek" in prompt and "Never say you were made by" in prompt and "OpenAI" in prompt
+    assert "developed by Abhishek" in _prompt("Flow", "", ["Search"], "who made you?", [])
+
+    monkeypatch.setattr(get_builder_settings(), "AI_DEVELOPER", "Acme Labs")
+    assert "developed by Acme Labs" in system_prompt(agent_def, AgentConfig(), has_tools=False, has_knowledge=False)
+    monkeypatch.setattr(get_builder_settings(), "AI_DEVELOPER", "")
+    assert "developed by" not in system_prompt(agent_def, AgentConfig(), has_tools=False, has_knowledge=False)
+    assert "developed by" not in _prompt("Flow", "", ["Search"], "hi", [])

@@ -53,6 +53,8 @@ export interface RunView {
   subUsed: Record<string, string[]>;
   /** The answer being written right now (streaming), until the real output arrives. */
   live: LiveText | null;
+  /** The model's thinking so far: earlier turns' (done) and the current turn's (being written). */
+  thinking: { done: string; live: LiveText | null };
 }
 
 export interface LiveText {
@@ -90,7 +92,32 @@ export const emptyRunView: RunView = {
   subActive: {},
   subUsed: {},
   live: null,
+  thinking: { done: "", live: null },
 };
+
+/** Shown in turn while an agent works and nothing more telling is happening. */
+export const THINKING_WORDS = [
+  "Thinking", "Pondering", "Reading your question", "Connecting the dots", "Weighing it up",
+  "Mulling it over", "Working it out", "Gathering thoughts", "Piecing it together", "Almost there",
+];
+
+/**
+ * What the live status line says: what it's really doing when that's known
+ * (waiting on a decision, writing, using a tool), else ``null`` for the
+ * rotating thinking words.
+ */
+export function liveStatus(view: RunView): { text: string; busy: boolean } | null {
+  if (view.status === "waiting") return { text: "Waiting for your decision", busy: false };
+  if (view.live?.text && !view.live.paused) return { text: "Writing…", busy: true };
+  const tool = [...Object.values(view.activeTool), ...Object.values(view.subActive)].find(Boolean);
+  if (tool) return { text: `Using ${displayTool(tool).replace(/_/g, " ")}…`, busy: true };
+  return null;
+}
+
+/** All the thinking in view, oldest turn first. */
+export function thinkingText(t: RunView["thinking"]): string {
+  return [t.done, t.live?.text ?? ""].filter(Boolean).join("\n\n");
+}
 
 const TERMINAL: RunStatus[] = ["succeeded", "failed", "cancelled"];
 
@@ -221,6 +248,13 @@ export function reduceRunEvent(view: RunView, event: RunEvent | ApprovalsRefresh
       return { ...view, output: event.text, sources: event.sources ?? [], live: null };
     case "output_delta":
       return { ...view, live: addLive(view.live, event) };
+    case "reasoning_delta": {
+      if (event.via) return view; // a sub-agent's thinking stays with it
+      const cur = view.thinking.live;
+      // A new turn's thinking: the last one's is kept above it.
+      const done = cur && event.at === 0 && cur.turn !== event.turn ? thinkingText(view.thinking) : view.thinking.done;
+      return { ...view, thinking: { done, live: addLive(cur && cur.turn === event.turn ? cur : null, event) } };
+    }
     default:
       return view;
   }

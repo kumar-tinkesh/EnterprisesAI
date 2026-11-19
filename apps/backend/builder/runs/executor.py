@@ -213,6 +213,8 @@ async def _execute_agent(run: BuilderRun, user: CurrentUser, worker_id: str, too
         await _finish(run.id, worker_id, states.FAILED, error=f"Unexpected error: {exc}")
     else:
         output = {"text": result.text, "sources": result.sources, "tool_calls": result.tool_calls, "guardrails": result.guardrails}
+        if result.reasoning:
+            output["reasoning"] = result.reasoning
         await _set_node(node_run.id, status=states.SUCCEEDED, output_text=result.text, output=output, finished_at=utcnow())
         # Before the final status: listeners stop at a terminal run_status.
         await emit(run.id, "output", text=result.text, sources=result.sources)

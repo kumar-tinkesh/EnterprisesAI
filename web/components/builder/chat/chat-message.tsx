@@ -1,8 +1,8 @@
 "use client";
 
-import { createContext, memo, useContext, useState, type ReactNode } from "react";
+import { createContext, memo, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Check, CheckCircle2, ChevronDown, ChevronRight, Copy, FileText, Image as ImageIcon, Info, Loader2, Pencil, RotateCw, ShieldAlert, Wand2, Wrench, XCircle } from "lucide-react";
+import { AlertTriangle, Brain, Check, CheckCircle2, ChevronDown, ChevronRight, Copy, FileText, Image as ImageIcon, Info, Loader2, Pencil, RotateCw, ShieldAlert, Wand2, Wrench, XCircle } from "lucide-react";
 
 import { MarkdownView } from "@/components/builder/chat/markdown-view";
 import { AnswerView } from "@/components/builder/run-output";
@@ -166,6 +166,43 @@ export function RunTrail({ run, stepName, ms }: { run: Run; stepName?: (nodeId: 
   );
 }
 
+/**
+ * The model's thinking behind an answer, folded away under its answer. While
+ * it's still thinking (``live``) it opens by itself and follows the newest
+ * lines; a person who folds or unfolds it is left in charge of that.
+ */
+export function ThinkingBlock({ text, live = false }: { text: string; live?: boolean }) {
+  const [open, setOpen] = useState<boolean | null>(null);
+  const shown = open ?? live;
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (live && shown && box.current) box.current.scrollTop = box.current.scrollHeight;
+  }, [text, live, shown]);
+  if (!text.trim()) return null;
+  return (
+    <div className="mt-2">
+      <button
+        type="button"
+        onClick={() => setOpen(!shown)}
+        aria-expanded={shown}
+        className="inline-flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-900 cursor-pointer"
+      >
+        <ChevronRight className={cn("h-3.5 w-3.5 transition-transform", shown && "rotate-90")} />
+        <Brain className={cn("h-3.5 w-3.5", live && "animate-pulse")} />
+        {live ? "Live thinking" : "Thought process"}
+      </button>
+      {shown && (
+        <div
+          ref={box}
+          className="mt-1.5 max-h-64 overflow-y-auto whitespace-pre-wrap break-words border-l-2 border-zinc-200 pl-3 text-xs italic leading-relaxed text-zinc-500"
+        >
+          {text}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function GuardrailNotes({ flags }: { flags: GuardrailFlag[] }) {
   const shown = flags.filter((f) => f.severity !== "low");
   if (!shown.length) return null;
@@ -260,6 +297,7 @@ export const AnswerMessage = memo(function AnswerMessage({
       <div className="min-w-0 flex-1 pt-0.5">
         <RunTrail run={run} stepName={stepName} ms={ms} />
         <GuardrailNotes flags={run.output?.guardrails ?? []} />
+        {run.output?.reasoning && <div className="mb-2"><ThinkingBlock text={run.output.reasoning} /></div>}
         {run.status === "failed" ? (
           <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
             <p className="flex items-center gap-1.5 font-medium"><AlertTriangle className="h-4 w-4" /> It couldn&apos;t finish</p>

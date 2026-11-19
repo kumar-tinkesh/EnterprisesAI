@@ -834,7 +834,8 @@ export interface Run {
   name: string | null;
   input: { text: string; variables: Record<string, unknown>; attachments?: Pick<Attachment, "id" | "filename" | "kind">[] };
   output_text: string | null;
-  output: { text?: string | null; sources?: string[]; guardrails?: GuardrailFlag[] } | null;
+  /** ``reasoning``: the model's thinking (agent runs, when the model shares it). */
+  output: { text?: string | null; sources?: string[]; guardrails?: GuardrailFlag[]; reasoning?: string | null } | null;
   error: string | null;
   prompt_tokens: number | null;
   completion_tokens: number | null;
@@ -875,7 +876,9 @@ export type RunEvent =
   | { type: "approval_resolved"; approval_id: string; status: string }
   | { type: "output"; text: string; sources?: string[] }
   /** The answer as it's written: ``text`` starts at ``at`` in that turn's answer. */
-  | { type: "output_delta"; node_id: string; turn: number; at: number; text: string };
+  | { type: "output_delta"; node_id: string; turn: number; at: number; text: string }
+  /** The model's thinking as it's written, sent like ``output_delta``. */
+  | { type: "reasoning_delta"; node_id: string; turn: number; at: number; text: string; via?: string };
 
 /** What your runs cost this month (estimates), and your own monthly limit. */
 export interface Spend {

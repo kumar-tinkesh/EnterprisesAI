@@ -167,3 +167,21 @@ h1, h2, h3 { letter-spacing: -0.01em; line-height: 1.25; }
    showing a scrollbar; swiping and the trackpad still scroll it. */
 .no-scrollbar { scrollbar-width: none; overflow-y: hidden; }
 .no-scrollbar::-webkit-scrollbar { display: none; }
+
+/* "Thinking…" while an agent works: a light sweeps across the words, and each
+   new word slides in. Still text for people who turn motion off. */
+.thinking-shimmer {
+  background: linear-gradient(90deg, var(--text-subtle) 0%, var(--text-subtle) 40%, var(--text) 50%, var(--text-subtle) 60%, var(--text-subtle) 100%);
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: thinking-shimmer 2.2s linear infinite;
+}
+.thinking-word { display: inline-block; animation: thinking-word 0.35s ease-out; }
+@keyframes thinking-shimmer { from { background-position: 100% 0; } to { background-position: -150% 0; } }
+@keyframes thinking-word { from { opacity: 0; transform: translateY(0.35em); filter: blur(2px); } to { opacity: 1; transform: none; filter: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .thinking-shimmer { animation: none; color: var(--text-muted); background: none; }
+  .thinking-word { animation: none; }
+}

@@ -75,6 +75,8 @@ logger = logging.getLogger("builder.agents.runtime")
 
 # What the model sees of one tool result (the ledger keeps the full capped output).
 MAX_TOOL_TEXT_FOR_MODEL = 20_000
+# The model's thinking kept on a run (all turns together); the rest is cut.
+MAX_REASONING_CHARS = 20_000
 # What the model sees of one attached document.
 MAX_ATTACHMENT_TEXT = 30_000
 _RETRYABLE = {
@@ -149,6 +151,9 @@ class AgentResult:
     guardrails: list[dict] = field(default_factory=list)
     # None when no model it used has a known price.
     cost_usd: float | None = None
+    # The model's thinking, turn by turn, when it shares it and the answer could
+    # be streamed (see _streams): what's said in it isn't checked by guardrails.
+    reasoning: str | None = None
 
 
 def _gateway():
@@ -232,12 +237,16 @@ class _Live:
 
     BATCH_CHARS, BATCH_SECONDS = 48, 0.12
 
-    def __init__(self, ctx: AgentContext, turn: int):
-        self.ctx, self.turn = ctx, turn
+    def __init__(self, ctx: AgentContext, turn: int, event: str = "output_delta"):
+        self.ctx, self.turn, self.event = ctx, turn, event
         self.sent, self.pending, self.last = 0, "", time.monotonic()
+        # The model's thinking for this turn ("reasoning_delta"), sent the same way.
+        self.thinking: _Live | None = _Live(ctx, turn, "reasoning_delta") if event == "output_delta" else None
 
     def restart(self) -> None:
         self.sent, self.pending = 0, ""
+        if self.thinking is not None:
+            self.thinking.restart()
 
     async def __call__(self, text: str) -> None:
         self.pending += text
@@ -248,8 +257,13 @@ class _Live:
         if not self.pending:
             return
         text, self.pending, self.last = self.pending, "", time.monotonic()
-        await self.ctx.emit("output_delta", node_id=self.ctx.node_id, turn=self.turn, at=self.sent, text=text)
+        await self.ctx.emit(self.event, node_id=self.ctx.node_id, turn=self.turn, at=self.sent, text=text)
         self.sent += len(text)
+
+    async def flush_all(self) -> None:
+        if self.thinking is not None:
+            await self.thinking.flush()
+        await self.flush()
 
 
 async def _complete(ctx: AgentContext, messages: list[dict], tool_defs: list[dict] | None, live: _Live | None = None):
@@ -283,7 +297,7 @@ async def _complete(ctx: AgentContext, messages: list[dict], tool_defs: list[dic
                     _stream_complete(request, ctx.agent.get("llm_provider") or None, live),
                     timeout=rel.request_timeout_seconds or 300,
                 )
-                await live.flush()
+                await live.flush_all()
                 return response
             except asyncio.CancelledError:
                 raise
@@ -302,10 +316,12 @@ async def _stream_complete(request, provider: str | None, live: _Live):
     gateway = _gateway()
     if not hasattr(gateway, "complete_streamed"):  # a gateway that can't stream: the whole answer at once
         response = await gateway.complete(request, provider=provider)
+        if getattr(response, "reasoning", None) and live.thinking is not None:
+            await live.thinking(response.reasoning)
         if response.content:
             await live(response.content)
         return response
-    return await gateway.complete_streamed(request, provider=provider, on_text=live)
+    return await gateway.complete_streamed(request, provider=provider, on_text=live, on_reasoning=live.thinking)
 
 
 async def _checkpoint(ctx: AgentContext, state: dict) -> None:
@@ -703,6 +719,7 @@ async def run_agent(ctx: AgentContext) -> AgentResult:
                 sources=list(dict.fromkeys(sources)),
                 guardrails=list(state.get("guardrails") or []),
                 cost_usd=state.get("cost_usd"),
+                reasoning="\n\n".join(state.get("reasoning") or []) or None,
             )
 
         budget = ctx.config.tools.time_budget_seconds
@@ -715,6 +732,12 @@ async def run_agent(ctx: AgentContext) -> AgentResult:
         live = _Live(ctx, state["turn"] + 1) if _streams(ctx) else None
         response = await _complete(ctx, messages, None if out_of_budget else (tool_defs or None), live)
         state["turn"] += 1
+        thought = (getattr(response, "reasoning", None) or "").strip()
+        if thought and live is not None:  # only what could be shown live (no guardrail has to check it)
+            kept = state.setdefault("reasoning", [])
+            room = MAX_REASONING_CHARS - sum(len(t) for t in kept)
+            if room > 0:
+                kept.append(thought if len(thought) <= room else thought[:room] + " …")
         state["prompt_tokens"] += response.usage.prompt_tokens or 0
         state["completion_tokens"] += response.usage.completion_tokens or 0
         _price(ctx, state, getattr(response, "model", None), response.usage.prompt_tokens or 0, response.usage.completion_tokens or 0)

@@ -9,7 +9,7 @@ import { Menu } from "@/components/ui/menu";
 import { Spinner } from "@/components/ui/spinner";
 import { Field, Select } from "@/components/builder/fields";
 import { ApprovalCard } from "@/components/builder/approval-card";
-import { AnswerMessage, Avatar, AvatarKind, FileChip, GuardrailNotes, UserMessage } from "@/components/builder/chat/chat-message";
+import { AnswerMessage, Avatar, AvatarKind, FileChip, GuardrailNotes, ThinkingBlock, UserMessage } from "@/components/builder/chat/chat-message";
 import { ChatHistory } from "@/components/builder/chat/chat-history";
 import { MarkdownView } from "@/components/builder/chat/markdown-view";
 import { AnswerView } from "@/components/builder/run-output";
@@ -19,7 +19,7 @@ import { ApiError } from "@/lib/api";
 import { builderApi } from "@/lib/builder/api";
 import { dayLabel, startersFor } from "@/lib/builder/chat";
 import { inputFields, stepTitle } from "@/lib/builder/graph";
-import { isFinished, type RunView } from "@/lib/builder/run-state";
+import { THINKING_WORDS, emptyRunView, isFinished, liveStatus, thinkingText, type RunView } from "@/lib/builder/run-state";
 import type { Agent, AnswerDepth, Attachment, ChatRef, Problem, Run, Workflow } from "@/lib/builder/types";
 import { useRunStream } from "@/lib/builder/use-run-stream";
 import { useStreamPref } from "@/lib/builder/stream-pref";
@@ -48,6 +48,22 @@ function useElapsed(since: string | null | undefined, running: boolean): number 
   return since ? Math.max(0, now - new Date(since).getTime()) : 0;
 }
 
+/** "Thinking… → Pondering… → …": a new word every couple of seconds, light sweeping across it. */
+function ThinkingWords() {
+  const [i, setI] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setI((n) => n + 1), 2200);
+    return () => clearInterval(t);
+  }, []);
+  // The first word is always "Thinking"; after it they come round in order.
+  const word = THINKING_WORDS[i % THINKING_WORDS.length];
+  return (
+    <span key={word} className="thinking-word">
+      <span className="thinking-shimmer font-medium">{word}…</span>
+    </span>
+  );
+}
+
 /** The turn being answered right now: what it's doing, decisions it waits on, its answer as it lands. */
 function LiveAnswer({
   name,
@@ -64,27 +80,29 @@ function LiveAnswer({
 }) {
   const elapsed = useElapsed(since, true);
   const pending = view.approvals.filter((a) => a.status === "pending");
-  const last = view.timeline[view.timeline.length - 1];
-  const doing =
-    view.status === "waiting"
-      ? "Waiting for your decision"
-      : view.live?.text && !view.live.paused
-        ? "Writing…"
-        : last
-        ? `${last.nodeId ? `${stepName(last.nodeId)} ` : ""}${last.text}`
-        : view.status === "queued" || view.status === null
-          ? "Starting…"
-          : "Thinking…";
+  const status = liveStatus(view);
+  const thought = thinkingText(view.thinking);
   return (
     <div className="flex gap-3">
       <Avatar name={name} live />
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2 text-xs text-zinc-500" role="status" aria-live="polite">
-          <Spinner className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
-          <span className="min-w-0 truncate"><span className="font-medium text-zinc-700">{doing}</span></span>
-          <span className="ml-auto shrink-0 tabular-nums text-zinc-500">{(elapsed / 1000).toFixed(1)}s</span>
+        <div className="flex items-center gap-2 text-sm text-zinc-500">
+          {/* Screen readers hear what changes for real, not every passing word. */}
+          <span className="sr-only" role="status" aria-live="polite">{status?.text ?? "Thinking…"}</span>
+          <span className="min-w-0 truncate" aria-hidden>
+            {!status ? (
+              <ThinkingWords />
+            ) : (
+              <span key={status.text} className="thinking-word">
+                <span className={cn("font-medium", status.busy ? "thinking-shimmer" : "text-zinc-700")}>{status.text}</span>
+              </span>
+            )}
+          </span>
+          <span className="ml-auto shrink-0 text-xs tabular-nums text-zinc-500">{(elapsed / 1000).toFixed(1)}s</span>
         </div>
         <GuardrailNotes flags={view.guardrails} />
+        {/* Live until the answer starts being written; then it folds away above it. */}
+        <ThinkingBlock text={thought} live={!view.output && !(view.live?.text && !view.live.paused)} />
         {pending.length > 0 && (
           <div className="mt-2 space-y-2">
             {pending.map((a) => (
@@ -100,14 +118,10 @@ function LiveAnswer({
           <div className={cn("mt-2 transition-opacity", view.live.paused && "opacity-50")}>
             <MarkdownView text={view.live.paused ? view.live.text : view.live.text + " ▍"} />
           </div>
-        ) : (
-          <div className="mt-2.5 space-y-2" aria-hidden>
-            <div className="h-2 w-[80%] animate-pulse rounded-full bg-zinc-100" />
-            <div className="h-2 w-[55%] animate-pulse rounded-full bg-zinc-100" />
-          </div>
-        )}
+        ) : null}
+        {/* Its steps, open while they're all there is to see (a model that doesn't share its thinking). */}
         {view.timeline.length > 0 && (
-          <details className="group/live mt-2">
+          <details className="group/live mt-2" open={!thought && !view.output && !view.live?.text}>
             <summary className="inline-flex cursor-pointer list-none items-center gap-1 text-xs text-zinc-500 hover:text-zinc-900 [&::-webkit-details-marker]:hidden">
               <ChevronRight className="h-3.5 w-3.5 transition-transform group-open/live:rotate-90" /> What it&apos;s doing
               <span>· {view.timeline.length} step{view.timeline.length === 1 ? "" : "s"}</span>
@@ -242,6 +256,7 @@ export function ChatPanel({
                 text: view.output ?? r.output?.text,
                 sources: view.sources.length ? view.sources : r.output?.sources,
                 guardrails: view.guardrails.length ? view.guardrails : r.output?.guardrails,
+                reasoning: r.output?.reasoning ?? (thinkingText(view.thinking) || null),
               },
             },
       ),
@@ -541,7 +556,7 @@ export function ChatPanel({
             {pendingText !== null && !liveRun && (
               <div className="flex flex-col gap-4">
                 <UserMessage text={pendingText || "(ran with its inputs)"} files={files} />
-                <LiveAnswer name={name} view={{ ...view, timeline: [], approvals: [], output: null, guardrails: [], status: null, live: null }} since={sentAt} token={token} stepName={stepName} />
+                <LiveAnswer name={name} view={{ ...view, timeline: [], approvals: [], output: null, guardrails: [], status: null, live: null, thinking: emptyRunView.thinking }} since={sentAt} token={token} stepName={stepName} />
               </div>
             )}
             <div ref={end} />
