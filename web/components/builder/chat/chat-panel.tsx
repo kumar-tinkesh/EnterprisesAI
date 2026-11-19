@@ -9,7 +9,7 @@ import { Menu } from "@/components/ui/menu";
 import { Spinner } from "@/components/ui/spinner";
 import { Field, Select } from "@/components/builder/fields";
 import { ApprovalCard } from "@/components/builder/approval-card";
-import { AnswerMessage, Avatar, AvatarKind, FileChip, GuardrailNotes, ThinkingBlock, UserMessage } from "@/components/builder/chat/chat-message";
+import { AnswerMessage, Avatar, AvatarKind, FileChip, GuardrailNotes, ThinkingBlock, ThinkingWords, UserMessage } from "@/components/builder/chat/chat-message";
 import { ChatHistory } from "@/components/builder/chat/chat-history";
 import { MarkdownView } from "@/components/builder/chat/markdown-view";
 import { AnswerView } from "@/components/builder/run-output";
@@ -19,7 +19,7 @@ import { ApiError } from "@/lib/api";
 import { builderApi } from "@/lib/builder/api";
 import { dayLabel, startersFor } from "@/lib/builder/chat";
 import { inputFields, stepTitle } from "@/lib/builder/graph";
-import { THINKING_WORDS, emptyRunView, isFinished, liveStatus, thinkingText, type RunView } from "@/lib/builder/run-state";
+import { emptyRunView, isFinished, liveStatus, thinkingText, type RunView } from "@/lib/builder/run-state";
 import type { Agent, AnswerDepth, Attachment, ChatRef, Problem, Run, Workflow } from "@/lib/builder/types";
 import { useRunStream } from "@/lib/builder/use-run-stream";
 import { useStreamPref } from "@/lib/builder/stream-pref";
@@ -46,22 +46,6 @@ function useElapsed(since: string | null | undefined, running: boolean): number 
     return () => clearInterval(t);
   }, [running]);
   return since ? Math.max(0, now - new Date(since).getTime()) : 0;
-}
-
-/** "Thinking… → Pondering… → …": a new word every couple of seconds, light sweeping across it. */
-function ThinkingWords() {
-  const [i, setI] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => setI((n) => n + 1), 2200);
-    return () => clearInterval(t);
-  }, []);
-  // The first word is always "Thinking"; after it they come round in order.
-  const word = THINKING_WORDS[i % THINKING_WORDS.length];
-  return (
-    <span key={word} className="thinking-word">
-      <span className="thinking-shimmer font-medium">{word}…</span>
-    </span>
-  );
 }
 
 /** The turn being answered right now: what it's doing, decisions it waits on, its answer as it lands. */

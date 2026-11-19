@@ -3,6 +3,8 @@
     event: run     {...the caller's view of the run}   first, then whenever its state changes
     event: delta   {"turn": 2, "at": 0, "text": "..."} the answer as it's written (runs started with stream on)
     event: doing   {"what": "tool" | "thinking"}       it started using a tool / went back to thinking
+    event: thinking {"step": "...", "turn": 1, "at": 0, "text": "..."}  its thinking as it's written, per
+                   step (an agent's is "agent") and turn, lined up by ``at`` like ``delta``
 
 Only what a caller may see goes out — the same view as polling (refreshed as
 each step starts and ends), plus the answer's text while it's being written.
@@ -48,6 +50,10 @@ async def caller_events(run_id: str, view: Callable[[], Awaitable[dict]], *, idl
             kind = event.get("type")
             if kind == "output_delta":
                 yield _sse("delta", {"turn": event.get("turn"), "at": event.get("at"), "text": event.get("text") or ""})
+            elif kind == "reasoning_delta" and not event.get("via"):  # a sub-agent's thinking stays inside
+                yield _sse("thinking", {
+                    "step": event.get("node_id"), "turn": event.get("turn"), "at": event.get("at"), "text": event.get("text") or "",
+                })
             elif kind == "tool_call":
                 yield _sse("doing", {"what": "tool" if event.get("phase") == "started" else "thinking"})
             elif kind in _STATE_EVENTS:

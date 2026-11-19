@@ -86,7 +86,7 @@ async def test_no_thinking_no_field_and_none_when_a_guardrail_checks_the_answer(
     assert "reasoning" not in ((await tenant_client.get(f"{B}/runs/{run_id}")).json()["output"] or {})
 
 
-async def test_callers_never_see_the_thinking():
+async def test_callers_see_the_thinking_but_not_a_sub_agents():
     bus = LocalEventBus()
     set_event_bus(bus)
     try:
@@ -97,15 +97,28 @@ async def test_callers_never_see_the_thinking():
 
         async def produce():
             await asyncio.sleep(0.05)
-            await bus.publish("r1", {"type": "reasoning_delta", "turn": 1, "at": 0, "text": "secret plan", "node_id": "agent"})
+            await bus.publish("r1", {"type": "reasoning_delta", "turn": 1, "at": 0, "text": "Greet them.", "node_id": "agent"})
+            await bus.publish("r1", {"type": "reasoning_delta", "turn": 1, "at": 0, "text": "helper plan", "node_id": "agent", "via": "Helper"})
             await bus.publish("r1", {"type": "run_status", "status": "succeeded"})
 
         task = asyncio.create_task(produce())
-        out = "".join([chunk async for chunk in caller_events("r1", view, idle_seconds=1)])
+        out = [chunk async for chunk in caller_events("r1", view, idle_seconds=1)]
         await task
     finally:
         set_event_bus(None)
-    assert "secret plan" not in out
+    events = [(c.split("\n")[0], json.loads(c.split("data: ", 1)[1])) for c in out if c.startswith("event: thinking")]
+    assert events == [("event: thinking", {"step": "agent", "turn": 1, "at": 0, "text": "Greet them."})]
+    assert "helper plan" not in "".join(out)
+
+
+async def test_a_published_run_shows_its_thinking(tenant_client, anon_client, demo, gateway, runtime):
+    agent = await make_agent(tenant_client, demo, [])
+    key = await publish(tenant_client, "agents", agent["id"])
+    gateway([_thinking("Hello!", "Greet them back.")])
+    r = await anon_client.post(f"{P}/runs", headers=bearer(key), json={"input": "hi", "wait_seconds": 0})
+    await worker(runtime).drain()
+    view = (await anon_client.get(f"{P}/runs/{r.json()['run_id']}", headers=bearer(key))).json()
+    assert (view["output"], view["reasoning"]) == ("Hello!", "Greet them back.")
 
 
 async def test_live_view_sends_only_text_and_state():

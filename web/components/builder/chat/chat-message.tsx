@@ -12,7 +12,7 @@ import { builderApi } from "@/lib/builder/api";
 import type { OutputConfig } from "@/lib/builder/types";
 import { answerJsonText } from "@/lib/builder/answer-json";
 import { formatCost, formatDuration, formatTokens, hueOf, initials, runDurationMs, trailSummary } from "@/lib/builder/chat";
-import { displayTool } from "@/lib/builder/run-state";
+import { THINKING_WORDS, displayTool } from "@/lib/builder/run-state";
 import type { Attachment, GuardrailFlag, Run, RunToolCall } from "@/lib/builder/types";
 import { cn } from "@/lib/utils";
 
@@ -163,6 +163,22 @@ export function RunTrail({ run, stepName, ms }: { run: Run; stepName?: (nodeId: 
         ))}
       </div>
     </details>
+  );
+}
+
+/** "Thinking… → Pondering… → …": a new word every couple of seconds, light sweeping across it. */
+export function ThinkingWords() {
+  const [i, setI] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setI((n) => n + 1), 2200);
+    return () => clearInterval(t);
+  }, []);
+  // The first word is always "Thinking"; after it they come round in order.
+  const word = THINKING_WORDS[i % THINKING_WORDS.length];
+  return (
+    <span key={word} className="thinking-word">
+      <span className="thinking-shimmer font-medium">{word}…</span>
+    </span>
   );
 }
 

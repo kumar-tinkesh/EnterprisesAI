@@ -63,9 +63,14 @@ _GENERAL_RULES = (
 
 PLAN_RULE = (
     "Before every reply (and before asking for any tool), first write your plan inside <think></think> tags: two to "
-    "four short lines on what the person wants and how you'll handle it, in the language of the question. Write "
-    "nothing before the opening tag, always close the tag, and never mention the tags or the plan in your answer — "
-    "the person sees the plan separately, and the answer comes after </think>."
+    "four short lines on what the person wants and how you'll handle it. Write nothing before the opening tag, always "
+    "close the tag, and never mention the tags or the plan in your answer — the person sees the plan separately, and "
+    "the answer comes after </think>."
+)
+# With the plan, a short message ("hi") sometimes got a plan, then an answer, in a random language: say which.
+PLAN_LANGUAGE_RULE = (
+    "Write the plan and the answer in the language the person wrote in; when that isn't clear from their message "
+    "(a greeting like \"hi\", a name, a number), use English."
 )
 
 
@@ -115,7 +120,8 @@ def system_prompt(
     # Its team (sub-agents) and what it remembers about this person.
     parts.extend(e for e in extra or [] if e)
     if plan:
-        parts.append(PLAN_RULE)
+        # An agent set to answer in one language keeps to it (response_rules); else the person's.
+        parts.append(PLAN_RULE if config.response.language not in ("", "auto") else f"{PLAN_RULE} {PLAN_LANGUAGE_RULE}")
     return "\n\n".join(parts)
 
 

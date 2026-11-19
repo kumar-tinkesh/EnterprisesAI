@@ -302,6 +302,8 @@ def public_view(run: BuilderRun) -> dict:
         "status": run.status,
         "output": run.output_text if run.status == "succeeded" else None,
         "sources": (out.get("sources") or []) if run.status == "succeeded" else [],
+        # Its thinking (the plan it wrote, or the model's own), as the builder's chat shows it.
+        "reasoning": (out.get("reasoning") or None) if run.status == "succeeded" else None,
         "waiting_for": "approval" if run.status == "waiting" else None,
         "error": error,
         "version": run.definition_version,

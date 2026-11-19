@@ -131,3 +131,13 @@ async def test_a_workflows_steps_keep_their_thinking_under_their_names(tenant_cl
     run = await get_run(tenant_client, run_id)
     assert run["output_text"] == "Story."
     assert run["output"]["reasoning"] == "Researcher\nLook up facts.\n\nWriter\nTurn them into a story."
+
+
+def test_the_plan_says_which_language_unless_the_agent_has_one():
+    from builder.agents.prompts import PLAN_LANGUAGE_RULE, PLAN_RULE
+
+    agent_def = {"name": "Helper", "role": "assistant", "goal": "Help"}
+    auto = system_prompt(agent_def, AgentConfig(), has_tools=False, has_knowledge=False, plan=True)
+    hindi = system_prompt(agent_def, AgentConfig.model_validate({"response": {"language": "Hindi"}}), has_tools=False, has_knowledge=False, plan=True)
+    assert PLAN_RULE in auto and PLAN_LANGUAGE_RULE in auto and "use English" in auto
+    assert PLAN_RULE in hindi and PLAN_LANGUAGE_RULE not in hindi and "Answer in Hindi" in hindi

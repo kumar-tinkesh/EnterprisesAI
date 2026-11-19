@@ -514,6 +514,8 @@ export interface SharedRun {
   status: RunStatus;
   output: string | null;
   sources: string[];
+  /** Its thinking (the plan it wrote, or the model's own), once it's done; a workflow's under each step's name. */
+  reasoning?: string | null;
   waiting_for: "approval" | null;
   error: string | null;
   version: number;

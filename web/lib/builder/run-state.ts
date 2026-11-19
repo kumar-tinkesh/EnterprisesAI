@@ -137,7 +137,7 @@ export function thinkingText(parts: ThoughtPart[], stepName?: (nodeId: string) =
 }
 
 /** Add a batch of streamed thinking to its step's turn (same rules as ``addLive``). */
-function addThought(parts: ThoughtPart[], d: { node_id: string; turn: number; at: number; text: string }): ThoughtPart[] {
+export function addThought(parts: ThoughtPart[], d: { node_id: string; turn: number; at: number; text: string }): ThoughtPart[] {
   const i = parts.findIndex((p) => p.node === d.node_id && p.turn === d.turn);
   if (i < 0) return d.at === 0 ? [...parts, { node: d.node_id, turn: d.turn, text: d.text }] : parts;
   const p = parts[i];
