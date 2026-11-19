@@ -108,6 +108,9 @@ class ChatSettings(_Strict):
     # Greetings and general questions its goal isn't for get a real answer, ending
     # with what it can help with (builder.agents.prompts) — not a refusal.
     answer_general: bool = True
+    # Write a short plan before answering, shown in chat as its thinking
+    # (builder.agents.prompts.PLAN_RULE). Costs a few tokens per answer.
+    show_plan: bool = True
 
     @field_validator("starters")
     @classmethod

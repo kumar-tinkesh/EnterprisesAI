@@ -170,11 +170,14 @@ async def test_agent_draft_explains_its_setup(tenant_client, llm, catalog):
     related = {t["tool_id"] for t in draft["insights"]["related_tools"]}
     assert related and not related & set(draft["config"]["tool_ids"])
 
-    # The chosen profile is applied to the settings, with the tone on top.
+    # The chosen profile is applied to the settings; tone, formatting and safety checks stay empty
+    # for the person to choose, even when the model offers a tone.
     config = draft["config"]
     assert config["llm"]["reasoning_effort"] == "high" and config["llm"]["max_output_tokens"] == 4000
     assert config["tools"]["max_calls"] == 12 and config["reliability"]["retries"] == 2
-    assert config["response"] == {**config["response"], "verbosity": "detailed", "tone": "friendly and brief"}
+    assert config["response"] == {**config["response"], "verbosity": "detailed", "tone": "", "formats": []}
+    assert not any(config["guardrails"][k] for k in ("injection", "tool_injection", "pii_input", "pii_output", "groundedness"))
+    assert config["guardrails"]["custom_rules"] == []
     assert config["approvals"] == {"read": False, "edit": True, "delete": True}
 
     insights = draft["insights"]

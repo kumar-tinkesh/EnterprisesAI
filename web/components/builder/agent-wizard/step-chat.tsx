@@ -82,6 +82,11 @@ export function ChatStep({ draft, update }: StepProps) {
           onChange={(answer_general) => setChat({ answer_general })}
           label="Answer greetings and general questions too, then say what it can help with"
         />
+        <Toggle
+          checked={chat.show_plan ?? true}
+          onChange={(show_plan) => setChat({ show_plan })}
+          label="Show its thinking: a short plan before each answer (a few extra tokens per answer)"
+        />
       </Category>
 
       <Category icon={Brain} tone="violet" title="Long-term memory" hint="It saves facts about each person (preferences, their project) and knows them in later chats." badge={<Badge tone={memory.enabled ? "violet" : "zinc"}>{memory.enabled ? "On" : "Off"}</Badge>}>

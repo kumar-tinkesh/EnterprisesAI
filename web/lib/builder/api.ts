@@ -8,6 +8,7 @@ import type {
   Agent,
   AgentConfig,
   AgentFile,
+  AgentImportResult,
   AgentMemory,
   Attachment,
   AgentRequirements,
@@ -113,8 +114,9 @@ export const builderApi = {
     call<Webhook>(t, `/webhooks/${id}`, "PATCH", body),
   deleteWebhook: (t: string, id: string) => call<void>(t, `/webhooks/${id}`, "DELETE"),
   agentRequirements: (t: string, id: string) => call<AgentRequirements>(t, `/agents/${id}/requirements`),
-  exportAgent: (t: string, id: string) => call<AgentFile>(t, `/agents/${id}/export`),
-  importAgent: (t: string, file: AgentFile) => call<{ agent: Agent; skipped: string[] }>(t, "/agents/import", "POST", file),
+  /** ``team``: the agents it hands work to go in the same file (a version 2 team file). */
+  exportAgent: (t: string, id: string, team = false) => call<AgentFile>(t, `/agents/${id}/export${team ? "?team=true" : ""}`),
+  importAgent: (t: string, file: AgentFile) => call<AgentImportResult>(t, "/agents/import", "POST", file),
   uploadAttachment: (t: string, file: File) => {
     const body = new FormData();
     body.append("file", file);

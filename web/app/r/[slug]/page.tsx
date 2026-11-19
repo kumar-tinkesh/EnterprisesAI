@@ -12,7 +12,7 @@ import { Menu } from "@/components/ui/menu";
 import { Spinner } from "@/components/ui/spinner";
 import { Field, Select } from "@/components/builder/fields";
 import { ApprovalCard } from "@/components/builder/approval-card";
-import { CopyButton, FileChip } from "@/components/builder/chat/chat-message";
+import { CopyButton, FileChip, ThinkingBlock, ThinkingWords } from "@/components/builder/chat/chat-message";
 import { ACCEPT, MAX_FILES } from "@/components/builder/chat/chat-panel";
 import { MarkdownView } from "@/components/builder/chat/markdown-view";
 import { AnswerView } from "@/components/builder/run-output";
@@ -21,6 +21,7 @@ import { TypeIcon } from "@/components/builder/type-icon";
 import { ApiError } from "@/lib/api";
 import { builderApi, sharedApi } from "@/lib/builder/api";
 import { formatCost, formatDuration, formatTokens } from "@/lib/builder/chat";
+import { addThought, thinkingText, type ThoughtPart } from "@/lib/builder/run-state";
 import type { Attachment, InputVariable, SharedInfo, SharedNeeds, SharedRun, SharedStep, ToolMode } from "@/lib/builder/types";
 import { useStreamPref } from "@/lib/builder/stream-pref";
 import { useAuthStore } from "@/stores/auth-store";
@@ -65,6 +66,8 @@ async function readEvents(res: Response, on: (event: string, data: unknown) => v
 type Live = { runId: string; turn: number; text: string; paused?: boolean };
 /** What it's doing now (the "doing" event): using a tool, or thinking. Never which tool. */
 type Doing = { runId: string; what: "tool" | "thinking" };
+/** Its thinking as it's written (the "thinking" event), per step and turn. */
+type Thought = { runId: string; parts: ThoughtPart[] };
 
 function errorText(err: unknown): string {
   if (err instanceof ApiError) {
@@ -280,6 +283,7 @@ function Runner({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [live, setLive] = useState<Live | null>(null);
+  const [thought, setThought] = useState<Thought | null>(null);
   const [files, setFiles] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(0);
   const [fileError, setFileError] = useState<string | null>(null);
@@ -339,6 +343,12 @@ function Runner({
               : l && l.runId === run.run_id && l.turn === d.turn && l.text.length === d.at ? { ...l, text: l.text + d.text }
                 : l,
           );
+        } else if (event === "thinking") {
+          const d = data as { step: string; turn: number; at: number; text: string };
+          setThought((t) => ({
+            runId: run.run_id,
+            parts: addThought(t?.runId === run.run_id ? t.parts : [], { node_id: d.step, turn: d.turn, at: d.at, text: d.text }),
+          }));
         } else if (event === "doing") {
           const what = (data as { what?: string }).what === "tool" ? "tool" : "thinking";
           setDoing({ runId: run.run_id, what });
@@ -508,6 +518,7 @@ function Runner({
                 key={current.run_id}
                 run={current}
                 live={live?.runId === current.run_id ? live : null}
+                thought={thought?.runId === current.run_id ? thought.parts : []}
                 doing={doing?.runId === current.run_id ? doing.what : null}
                 kind={kind}
                 own={own}
@@ -829,12 +840,14 @@ function Steps({ steps, running, ms }: { steps: SharedStep[]; running: boolean; 
 
 /** One question and its answer, the way a chat shows it. */
 function Turn({
-  run, question, live, doing, kind, own, token, onRetry, onDecided,
+  run, question, live, thought = [], doing, kind, own, token, onRetry, onDecided,
 }: {
   /** null: just sent, the run is still being started (``question`` is what was asked). */
   run: SharedRun | null;
   question?: string;
   live: Live | null;
+  /** Its thinking so far, while it runs (the finished run carries its own). */
+  thought?: ThoughtPart[];
   doing: Doing["what"] | null;
   kind: "agent" | "workflow";
   own: boolean;
@@ -844,7 +857,16 @@ function Turn({
 }) {
   const [details, setDetails] = useState(false);
   const running = !run || !DONE.has(run.status);
-  const working = doing === "tool" ? "Looking things up…" : "Working on it…";
+  // While it works: "Looking things up…" during a tool, else the rotating thinking words.
+  const working = (
+    <span className="text-sm">
+      {doing === "tool" ? <span className="thinking-word"><span className="thinking-shimmer font-medium">Looking things up…</span></span> : <ThinkingWords />}
+    </span>
+  );
+  // A workflow's steps named as on its outline (when the link shows it).
+  const stepName = (id: string) => run?.steps?.find((s) => s.id === id)?.title ?? "Step";
+  const writing = !!live?.text && !live.paused;
+  const thinking = run?.status === "succeeded" || run?.output ? (run.reasoning ?? "") : thinkingText(thought, stepName);
   const asked = run ? run.input : (question ?? "");
   return (
     <div className="space-y-6" aria-live="polite">
@@ -861,6 +883,8 @@ function Turn({
           ) : (
           <>
           <Steps steps={run.steps ?? []} running={running} ms={run.duration_ms} />
+          {/* Live until the answer starts being written; then it folds away above it. */}
+          {thinking && <div className="mb-2"><ThinkingBlock text={thinking} live={running && !run.output && !writing} /></div>}
           {run.status === "succeeded" ? (
             <AnswerView text={run.output ?? ""} />
           ) : run.status === "failed" || run.status === "cancelled" ? (
@@ -884,11 +908,11 @@ function Turn({
                 <MarkdownView text={live.paused ? live.text : live.text + " ▍"} />
               </div>
               {live.paused && (
-                <p className="mt-2 flex items-center gap-2 text-sm text-zinc-500"><Spinner className="h-4 w-4" /> {working}</p>
+                <p className="mt-2 text-zinc-500" role="status">{working}</p>
               )}
             </>
           ) : (
-            <p className="flex items-center gap-2 text-sm text-zinc-500"><Spinner className="h-4 w-4" /> {working}</p>
+            <p className="text-zinc-500" role="status">{working}</p>
           )}
           {run.approvals.map((a) => <div key={a.id} className="mt-2"><ApprovalCard approval={a} token={token} onDone={onDecided} /></div>)}
           {run.sources.length > 0 && (

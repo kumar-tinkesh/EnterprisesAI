@@ -26,8 +26,6 @@ export interface WizardData {
   insights: AgentInsights | null;
   /** What we know about each tool (server, risk, why it was picked), by tool id. */
   toolMeta: Record<string, ToolCandidate>;
-  /** Why the suggested guardrails were chosen (set when they're applied). */
-  guardrailReason: string | null;
   createdId: string | null;
 }
 
@@ -50,7 +48,6 @@ const EMPTY: WizardData = {
   draft: null,
   insights: null,
   toolMeta: {},
-  guardrailReason: null,
   createdId: null,
 };
 

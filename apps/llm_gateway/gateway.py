@@ -179,10 +179,12 @@ class LLMGateway:
         *,
         provider: Optional[str] = None,
         on_text: Callable[[str], Awaitable[None]],
+        on_reasoning: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> CompletionResponse:
         """``complete``, but streamed: ``on_text`` gets the answer's text as it
-        arrives, and the same CompletionResponse comes back at the end (the
-        text, the tool calls put together from their pieces, the usage)."""
+        arrives (and ``on_reasoning``, if given, the model's thinking), and the
+        same CompletionResponse comes back at the end (the text, the tool calls
+        put together from their pieces, the usage)."""
         content: list[str] = []
         reasoning: list[str] = []
         calls: dict[int, dict] = {}
@@ -194,6 +196,8 @@ class LLMGateway:
                 await on_text(chunk.content)
             if chunk.reasoning:
                 reasoning.append(chunk.reasoning)
+                if on_reasoning is not None:
+                    await on_reasoning(chunk.reasoning)
             for tc in chunk.tool_calls:
                 call = calls.setdefault(tc.index, {"id": "", "name": "", "arguments": []})
                 call["id"] = call["id"] or tc.id

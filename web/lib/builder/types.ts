@@ -64,8 +64,9 @@ export interface AgentConfig {
   approvals?: ApprovalPolicy;
   guardrails?: GuardrailSettings;
   /** What a person sees on an empty chat: a welcome line and suggested first questions.
-   *  answer_general (default on): greetings and general questions get a real answer, ending with what it can do. */
-  chat?: { welcome?: string; starters?: string[]; answer_general?: boolean };
+   *  answer_general (default on): greetings and general questions get a real answer, ending with what it can do.
+   *  show_plan (default on): it writes a short plan before answering, shown in chat as its thinking. */
+  chat?: { welcome?: string; starters?: string[]; answer_general?: boolean; show_plan?: boolean };
   /** Long-term memory of each person it works for. */
   memory?: { enabled?: boolean; max_items?: number };
   /** Other standalone agents it may hand tasks to (each becomes an "ask_<name>" tool). */
@@ -194,13 +195,23 @@ export interface AgentRequirements {
 }
 
 /** An agent exported as a file (tools by server and tool name, not by id). */
-export interface AgentFile {
-  format: string;
-  format_version: number;
+/** One agent in a file, with what it refers to by name (tools by server + tool, never by id). */
+export interface AgentFileEntry {
   agent: { name: string; role: string; goal: string; instructions?: string; llm_provider?: string; llm_model?: string; config: AgentConfig };
   tools: { server: string; tool: string }[];
   knowledge_bases: string[];
   sub_agents: string[];
+}
+
+/** Version 1: one agent (an ``AgentFileEntry`` at the top level). Version 2: a team in ``agents``. */
+export type AgentFile = { format: string; format_version: number } & (Partial<AgentFileEntry> & { agents?: AgentFileEntry[] });
+
+export interface AgentImportResult {
+  /** The agent to open: a team's lead. */
+  agent: Agent;
+  /** Every agent created, sub-agents first. */
+  agents: Agent[];
+  skipped: string[];
 }
 
 export interface InputVariable {
@@ -503,6 +514,8 @@ export interface SharedRun {
   status: RunStatus;
   output: string | null;
   sources: string[];
+  /** Its thinking (the plan it wrote, or the model's own), once it's done; a workflow's under each step's name. */
+  reasoning?: string | null;
   waiting_for: "approval" | null;
   error: string | null;
   version: number;
@@ -824,7 +837,8 @@ export interface Run {
   name: string | null;
   input: { text: string; variables: Record<string, unknown>; attachments?: Pick<Attachment, "id" | "filename" | "kind">[] };
   output_text: string | null;
-  output: { text?: string | null; sources?: string[]; guardrails?: GuardrailFlag[] } | null;
+  /** ``reasoning``: the model's thinking (agent runs, when the model shares it). */
+  output: { text?: string | null; sources?: string[]; guardrails?: GuardrailFlag[]; reasoning?: string | null } | null;
   error: string | null;
   prompt_tokens: number | null;
   completion_tokens: number | null;
@@ -865,7 +879,9 @@ export type RunEvent =
   | { type: "approval_resolved"; approval_id: string; status: string }
   | { type: "output"; text: string; sources?: string[] }
   /** The answer as it's written: ``text`` starts at ``at`` in that turn's answer. */
-  | { type: "output_delta"; node_id: string; turn: number; at: number; text: string };
+  | { type: "output_delta"; node_id: string; turn: number; at: number; text: string }
+  /** The model's thinking as it's written, sent like ``output_delta``. */
+  | { type: "reasoning_delta"; node_id: string; turn: number; at: number; text: string; via?: string };
 
 /** What your runs cost this month (estimates), and your own monthly limit. */
 export interface Spend {

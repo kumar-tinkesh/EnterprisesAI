@@ -359,3 +359,35 @@ async def test_complete_streamed_hands_out_text_and_puts_tool_calls_together(moc
     assert "".join(seen) == "Hello <" == resp.content and resp.reasoning == "plan"
     assert [(c.id, c.name, c.arguments) for c in resp.tool_calls] == [("c1", "search", '{"q": "x"}'), ("c2", "mail", "{}")]
     assert (resp.usage.prompt_tokens, resp.usage.completion_tokens, resp.finish_reason) == (7, 3, "tool_calls")
+
+
+@pytest.mark.asyncio
+async def test_complete_streamed_hands_out_the_thinking_when_asked(mock_env_settings):
+    from apps.llm_gateway.types import StreamChunk
+
+    async def stream(_request):
+        for chunk in (StreamChunk(reasoning="First, "), StreamChunk(content="<think>then this</think>Answer")):
+            yield chunk
+
+    mock_openai = AsyncMock()
+    mock_openai.stream = stream
+    with patch("apps.llm_gateway.gateway.OpenAIClient", return_value=mock_openai), \
+         patch("apps.llm_gateway.gateway.GroqClient"), \
+         patch("apps.llm_gateway.gateway.GeminiClient"):
+        gw = LLMGateway(mock_env_settings)
+        text: list[str] = []
+        thought: list[str] = []
+
+        async def on_text(t: str) -> None:
+            text.append(t)
+
+        async def on_reasoning(t: str) -> None:
+            thought.append(t)
+
+        resp = await gw.complete_streamed(
+            CompletionRequest(messages=[Message(role=Role.USER, content="Hi")]), on_text=on_text, on_reasoning=on_reasoning,
+        )
+
+    # Both kinds: a provider's own reasoning field and a <think> block in the text.
+    assert "".join(thought) == "First, then this" == resp.reasoning
+    assert "".join(text) == "Answer" == resp.content

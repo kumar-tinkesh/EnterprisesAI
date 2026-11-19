@@ -65,6 +65,13 @@ class BuilderSettings(BaseSettings):
     BUILDER_VERSIONS_KEEP: int = 100
     # Model calls: how many times to retry a failing model request.
     AGENT_MODEL_RETRY_DELAY_SECONDS: float = 2.0
+    # ── Identity ──
+    # Who every agent says made it, whatever model it runs on. Empty = say nothing.
+    AI_DEVELOPER: str = "Abhishek"
+    # Agents write a short plan in <think> tags before answering, shown as their
+    # thinking in chat (for models that don't share their own). Each agent can
+    # turn it off (config.chat.show_plan).
+    AGENT_PLAN_THINKING: bool = True
     # ── Publishing ──
     # Runs one IP address may start a minute through the public API and share
     # links, across every key (each key's own limits apply as well). 0 = off.

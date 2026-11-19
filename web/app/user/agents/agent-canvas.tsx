@@ -125,10 +125,48 @@ export default function BuilderHome({
     builder.createWithAi.mutate({ mode, description: q }, { onSuccess: () => setText("") });
   };
 
+  const isActive = isFocused || text.trim().length > 0;
+
+  const cancel = () => {
+    setText("");
+    setIsFocused(false);
+    box.current?.blur();
+  };
+
   return (
-    <div className="w-full space-y-6 pt-1 pb-10">
-      {!hasAnyConnectedServer && (
-        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-xs text-zinc-300">
+    <div
+      className={cn(
+        "mx-auto flex h-full w-full max-w-6xl flex-col px-4 py-6 transition-all duration-300 sm:px-8 sm:py-8",
+        isActive ? "items-center justify-center" : "justify-start"
+      )}
+    >
+      {/* Header: Centered in active mode, top-aligned in idle mode */}
+      <header
+        className={cn(
+          "transition-all duration-300",
+          isActive
+            ? "mb-6 w-full max-w-2xl text-center"
+            : "mb-5 flex w-full flex-wrap items-end justify-between gap-4"
+        )}
+      >
+        <div className="min-w-0">
+          <h1
+            className={cn(
+              "font-semibold text-zinc-100 transition-all",
+              isActive ? "text-2xl sm:text-3xl" : "text-xl"
+            )}
+          >
+            Agents & Workflows
+          </h1>
+          <p className="mt-1 text-sm text-zinc-400">
+            Build, manage, and run your AI agents and automated workflows.
+          </p>
+        </div>
+      </header>
+
+      {/* Connectors Banner (only when idle) */}
+      {!hasAnyConnectedServer && !isActive && (
+        <div className="mb-4 flex w-full flex-wrap items-center gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-xs text-zinc-300">
           <Plug className="h-4 w-4 shrink-0 text-amber-400" />
           <p className="min-w-0 flex-1">Connect an app first — agents and workflows work through them.</p>
           <Link
@@ -140,17 +178,22 @@ export default function BuilderHome({
         </div>
       )}
 
-      {/* Top AI Command Bar: Compact & Non-Intrusive */}
-      <section className="relative">
+      {/* AI Command Bar: Centered in active mode, at top in idle mode */}
+      <section
+        className={cn(
+          "relative transition-all duration-300",
+          isActive ? "w-full max-w-2xl" : "mb-5 w-full"
+        )}
+      >
         <form
           onSubmit={(e) => {
             e.preventDefault();
             submit();
           }}
           className={cn(
-            "rounded-2xl border border-[var(--border-strong)] bg-[var(--surface)] p-3 shadow-xs transition-all duration-200",
-            isFocused || text.length > 0
-              ? "border-[var(--accent-hover)] shadow-[0_0_24px_rgba(99,102,241,0.12)]"
+            "rounded-2xl border border-[var(--border-strong)] bg-[var(--surface)] p-3.5 shadow-xs transition-all duration-200",
+            isActive
+              ? "border-[var(--accent-hover)] shadow-[0_0_32px_rgba(99,102,241,0.22)]"
               : "hover:border-white/20"
           )}
         >
@@ -230,10 +273,15 @@ export default function BuilderHome({
               disabled={busy}
               placeholder={current.placeholder}
               onFocus={() => setIsFocused(true)}
-              onBlur={() => setIsFocused(false)}
+              onBlur={() => {
+                if (!text.trim()) setIsFocused(false);
+              }}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  cancel();
+                } else if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault();
                   submit();
                 }
@@ -255,6 +303,18 @@ export default function BuilderHome({
             </p>
 
             <div className="flex shrink-0 items-center gap-2">
+              {isActive && (
+                <button
+                  type="button"
+                  onClick={cancel}
+                  className="inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-xs text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-200 cursor-pointer transition-colors"
+                  title="Cancel and return to dashboard (Esc)"
+                >
+                  <X className="h-3.5 w-3.5" />
+                  <span>Cancel</span>
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={() => improve.mutate()}
@@ -295,8 +355,12 @@ export default function BuilderHome({
         )}
       </section>
 
-      {/* Main Workspace Dashboard: Unified Library & Templates */}
-      <AgentLibrary onOpen={onOpen} />
+      {/* Main Workspace Dashboard: Unified Library & Templates (Hidden when active) */}
+      {!isActive && (
+        <div className="min-h-0 flex-1 overflow-hidden">
+          <AgentLibrary onOpen={onOpen} />
+        </div>
+      )}
     </div>
   );
 }
@@ -441,108 +505,111 @@ function AgentLibrary({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
         </div>
       </div>
 
-      {/* View: Templates Tab */}
-      {tab === "templates" ? (
-        shownTemplates.length === 0 ? (
-          <p className="rounded-xl border border-dashed border-white/10 px-4 py-12 text-center text-xs text-zinc-400">
-            No templates match &ldquo;{query}&rdquo;.
-          </p>
-        ) : (
-          <TemplatesGrid templates={shownTemplates} onOpen={onOpen} token={token} />
-        )
-      ) : shown.length === 0 ? (
-        /* Empty States */
-        <div className="rounded-xl border border-dashed border-white/10 p-8 text-center">
-          {query ? (
-            <div className="space-y-2">
-              <p className="text-sm text-zinc-400">
-                No {tab === "all" ? "items" : `${tab}s`} match &ldquo;{query}&rdquo;.
-              </p>
-              <button
-                type="button"
-                onClick={() => setQuery("")}
-                className="text-xs font-medium text-indigo-400 hover:underline cursor-pointer"
-              >
-                Clear search filter
-              </button>
-            </div>
+      {/* Scrollable Container for Cards & Templates */}
+      <div className="max-h-[calc(100dvh-370px)] min-h-[300px] overflow-y-auto pr-1.5 pb-4 pt-1 [scrollbar-width:thin] [scrollbar-color:rgba(255,255,255,0.15)_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-white/10 hover:[&::-webkit-scrollbar-thumb]:bg-white/20">
+        {/* View: Templates Tab */}
+        {tab === "templates" ? (
+          shownTemplates.length === 0 ? (
+            <p className="rounded-xl border border-dashed border-white/10 px-4 py-12 text-center text-xs text-zinc-400">
+              No templates match &ldquo;{query}&rdquo;.
+            </p>
           ) : (
-            <div className="mx-auto max-w-sm space-y-3">
-              <Bot className="mx-auto h-8 w-8 text-zinc-500" />
-              <h3 className="text-sm font-medium text-zinc-200">
-                No {tab === "all" ? "agents or workflows" : `${tab}s`} yet
-              </h3>
-              <p className="text-xs text-zinc-400">
-                Use the AI prompt bar above to generate one instantly, or explore our pre-built templates.
-              </p>
-              {templateList.length > 0 && (
+            <TemplatesGrid templates={shownTemplates} onOpen={onOpen} token={token} />
+          )
+        ) : shown.length === 0 ? (
+          /* Empty States */
+          <div className="rounded-xl border border-dashed border-white/10 p-8 text-center">
+            {query ? (
+              <div className="space-y-2">
+                <p className="text-sm text-zinc-400">
+                  No {tab === "all" ? "items" : `${tab}s`} match &ldquo;{query}&rdquo;.
+                </p>
                 <button
                   type="button"
-                  onClick={() => setTab("templates")}
-                  className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-indigo-300 hover:bg-white/[0.08] cursor-pointer transition-colors"
+                  onClick={() => setQuery("")}
+                  className="text-xs font-medium text-indigo-400 hover:underline cursor-pointer"
                 >
-                  <Sparkles className="h-3.5 w-3.5 text-indigo-400" /> Browse ready-made templates
+                  Clear search filter
                 </button>
-              )}
-            </div>
-          )}
-        </div>
-      ) : (
-        /* Modern Cards Grid */
-        <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2 lg:grid-cols-3">
-          {shown.map((it) => (
-            <div
-              key={`${it.kind}:${it.id}`}
-              className="group flex flex-col justify-between rounded-xl border border-white/10 bg-[var(--surface)] p-4 shadow-xs transition-all hover:border-white/20 hover:bg-[var(--surface-raised)]"
-            >
-              {/* Card Header & Content */}
-              <div className="space-y-2.5">
-                <div className="flex items-start justify-between gap-2">
+              </div>
+            ) : (
+              <div className="mx-auto max-w-sm space-y-3">
+                <Bot className="mx-auto h-8 w-8 text-zinc-500" />
+                <h3 className="text-sm font-medium text-zinc-200">
+                  No {tab === "all" ? "agents or workflows" : `${tab}s`} yet
+                </h3>
+                <p className="text-xs text-zinc-400">
+                  Use the AI prompt bar above to generate one instantly, or explore our pre-built templates.
+                </p>
+                {templateList.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setTab("templates")}
+                    className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-indigo-300 hover:bg-white/[0.08] cursor-pointer transition-colors"
+                  >
+                    <Sparkles className="h-3.5 w-3.5 text-indigo-400" /> Browse ready-made templates
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        ) : (
+          /* Modern Cards Grid */
+          <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2 lg:grid-cols-3">
+            {shown.map((it) => (
+              <div
+                key={`${it.kind}:${it.id}`}
+                className="group flex flex-col justify-between rounded-xl border border-white/10 bg-[var(--surface)] p-4 shadow-xs transition-all hover:border-white/20 hover:bg-[var(--surface-raised)]"
+              >
+                {/* Card Header & Content */}
+                <div className="space-y-2.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={() => onOpen({ kind: it.kind, id: it.id })}
+                      className="flex min-w-0 flex-1 items-center gap-2.5 text-left cursor-pointer"
+                      title={`Open ${it.name} in canvas editor`}
+                    >
+                      <TypeIcon kind={it.kind} />
+                      <span className="truncate text-sm font-medium text-zinc-100 group-hover:text-white transition-colors">
+                        {it.name}
+                      </span>
+                    </button>
+                    <span className="shrink-0 text-[11px] text-zinc-500">
+                      {timeAgo(it.updated)}
+                    </span>
+                  </div>
+
+                  <p className="line-clamp-2 text-xs leading-relaxed text-zinc-400">
+                    {it.sub}
+                  </p>
+                </div>
+
+                {/* Card Action Footer */}
+                <div className="mt-4 flex items-center justify-end gap-2 border-t border-white/5 pt-3">
+                  <Link
+                    href={`/user/executions?chat=${it.kind}:${encodeURIComponent(it.id)}&tab=chat`}
+                    className="inline-flex h-7 items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.04] px-2.5 text-xs font-medium text-zinc-300 hover:bg-white/[0.08] hover:text-white transition-colors"
+                    title="Open Chat with this agent/workflow"
+                  >
+                    <MessageSquare className="h-3 w-3 text-zinc-400" />
+                    <span>Chat</span>
+                  </Link>
                   <button
                     type="button"
                     onClick={() => onOpen({ kind: it.kind, id: it.id })}
-                    className="flex min-w-0 flex-1 items-center gap-2.5 text-left cursor-pointer"
-                    title={`Open ${it.name} in canvas editor`}
+                    className="inline-flex h-7 items-center gap-1.5 rounded-md border border-indigo-500/30 bg-indigo-500/10 px-2.5 text-xs font-medium text-indigo-300 hover:bg-indigo-500/20 hover:text-indigo-200 cursor-pointer transition-colors"
+                    title="Edit in visual canvas"
                   >
-                    <TypeIcon kind={it.kind} />
-                    <span className="truncate text-sm font-medium text-zinc-100 group-hover:text-white transition-colors">
-                      {it.name}
-                    </span>
+                    <Layers className="h-3 w-3" />
+                    <span>Edit Canvas</span>
                   </button>
-                  <span className="shrink-0 text-[11px] text-zinc-500">
-                    {timeAgo(it.updated)}
-                  </span>
                 </div>
-
-                <p className="line-clamp-2 text-xs leading-relaxed text-zinc-400">
-                  {it.sub}
-                </p>
               </div>
-
-              {/* Card Action Footer */}
-              <div className="mt-4 flex items-center justify-end gap-2 border-t border-white/5 pt-3">
-                <Link
-                  href={`/user/executions?chat=${it.kind}:${encodeURIComponent(it.id)}&tab=chat`}
-                  className="inline-flex h-7 items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.04] px-2.5 text-xs font-medium text-zinc-300 hover:bg-white/[0.08] hover:text-white transition-colors"
-                  title="Open Chat with this agent/workflow"
-                >
-                  <MessageSquare className="h-3 w-3 text-zinc-400" />
-                  <span>Chat</span>
-                </Link>
-                <button
-                  type="button"
-                  onClick={() => onOpen({ kind: it.kind, id: it.id })}
-                  className="inline-flex h-7 items-center gap-1.5 rounded-md border border-indigo-500/30 bg-indigo-500/10 px-2.5 text-xs font-medium text-indigo-300 hover:bg-indigo-500/20 hover:text-indigo-200 cursor-pointer transition-colors"
-                  title="Edit in visual canvas"
-                >
-                  <Layers className="h-3 w-3" />
-                  <span>Edit Canvas</span>
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+            ))}
+          </div>
+        )}
+      </div>
     </section>
   );
 }

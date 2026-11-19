@@ -6,20 +6,20 @@ import { AlertTriangle, Upload } from "lucide-react";
 
 import { Spinner } from "@/components/ui/spinner";
 import { builderApi } from "@/lib/builder/api";
-import type { Agent, AgentFile } from "@/lib/builder/types";
+import type { Agent, AgentFile, AgentImportResult } from "@/lib/builder/types";
 import { cn } from "@/lib/utils";
 
 /**
- * Import an agent from a file exported elsewhere (Share → Export). Tools are
- * matched by server and tool name; what this workspace doesn't have is listed
- * before the new agent opens.
+ * Import an agent — or a whole team, from a team file — exported elsewhere
+ * (Export). Tools are matched by server and tool name; what this workspace
+ * doesn't have is listed before the new agent (a team's lead) opens.
  */
 export function ImportAgentButton({ token, onImported, className }: { token: string; onImported: (agent: Agent) => void; className?: string }) {
   const queryClient = useQueryClient();
   const input = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<{ agent: Agent; skipped: string[] } | null>(null);
+  const [result, setResult] = useState<AgentImportResult | null>(null);
 
   const read = async (file: File | undefined) => {
     if (!file) return;
@@ -68,9 +68,14 @@ export function ImportAgentButton({ token, onImported, className }: { token: str
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-900/40 p-4" role="dialog" aria-modal="true" aria-label="Imported with gaps">
           <div className="w-full max-w-md space-y-3 rounded-xl bg-white p-5 text-left shadow-xl">
             <p className="flex items-center gap-2 text-sm font-semibold text-zinc-900">
-              <AlertTriangle className="h-4 w-4 text-amber-500" /> Imported &ldquo;{result.agent.name}&rdquo;, with gaps
+              <AlertTriangle className="h-4 w-4 text-amber-500" />
+              {result.agents.length > 1
+                ? <>Imported &ldquo;{result.agent.name}&rdquo; and its team of {result.agents.length - 1}, with gaps</>
+                : <>Imported &ldquo;{result.agent.name}&rdquo;, with gaps</>}
             </p>
-            <p className="text-xs text-zinc-500">These weren&apos;t found here, so the agent was created without them. Add replacements in its settings.</p>
+            <p className="text-xs text-zinc-500">
+              These weren&apos;t found here, so {result.agents.length > 1 ? "the agents were" : "the agent was"} created without them. Add replacements in {result.agents.length > 1 ? "each agent's" : "its"} settings.
+            </p>
             <ul className="max-h-48 space-y-1 overflow-y-auto">
               {result.skipped.map((s, i) => <li key={i} className="rounded-md bg-amber-50 px-2.5 py-1.5 text-xs text-amber-900">{s}</li>)}
             </ul>

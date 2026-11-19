@@ -57,7 +57,7 @@ async def test_a_caller_runs_it_and_sees_only_the_answer(tenant_client, anon_cli
     await worker(runtime).drain()
     done = (await anon_client.get(f"{P}/runs/{r.json()['run_id']}", headers=bearer(key))).json()
     assert done == {"run_id": r.json()["run_id"], "status": "succeeded", "output": "Hi there.", "sources": [],
-                    "waiting_for": None, "error": None, "version": 1}
+                    "reasoning": None, "waiting_for": None, "error": None, "version": 1}
 
     # It ran as the publisher, kept apart from their own run history.
     assert (await tenant_client.get(f"{B}/runs")).json() == []

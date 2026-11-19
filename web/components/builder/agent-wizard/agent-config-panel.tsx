@@ -93,7 +93,7 @@ export function AgentConfigPanel({
       <fieldset disabled={readOnly} className="min-w-0 space-y-3">
         {t === "identity" && <IdentityStep {...props} />}
         {t === "abilities" && <AbilitiesStep {...props} />}
-        {t === "behaviour" && <BehaviourStep {...props} guardrailReason={null} />}
+        {t === "behaviour" && <BehaviourStep {...props} />}
         {t === "engine" && <EngineStep {...props} />}
         {t === "chat" && <ChatStep {...props} />}
         {t === "team" && <TeamStep {...props} agentId={agentId} />}

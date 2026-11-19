@@ -230,10 +230,75 @@ async def test_export_then_import_matches_tools_by_name(tenant_client, demo):
     assert r.status_code == 201, r.text
     body = r.json()
     assert body["agent"]["id"] != agent["id"] and body["agent"]["config"]["tool_ids"] == [f"mcp:{demo.id}:echo"]
-    assert body["agent"]["config"]["chat"] == {"welcome": "Hi!", "starters": ["Echo something"], "answer_general": True}
+    assert body["agent"]["config"]["chat"] == {"welcome": "Hi!", "starters": ["Echo something"], "answer_general": True, "show_plan": True}
     assert len(body["skipped"]) == 2
 
     assert (await tenant_client.post(f"{B}/agents/import", json={**file, "format": "other"})).status_code == 422
+    assert file["format_version"] == 1  # a single agent stays a version 1 file
+
+
+def _member(name: str, tools=(), subs=()) -> dict:
+    return {"agent": {"name": name, "role": "assistant", "goal": f"{name}'s goal", "config": {}},
+            "tools": [{"server": s, "tool": t} for s, t in tools], "knowledge_bases": [], "sub_agents": list(subs)}
+
+
+def _team(*members: dict) -> dict:
+    return {"format": "enterprisesai.agent", "format_version": 2, "agents": list(members)}
+
+
+async def test_a_team_file_imports_every_agent_at_once_in_any_order(tenant_client, demo):
+    # The lead comes FIRST in the file; its sub-agents are still created before it and linked to it.
+    file = _team(
+        _member("Lead", tools=[("demo", "echo")], subs=["Researcher", "Checker"]),
+        _member("Researcher", tools=[("demo", "echo"), ("gmail", "send")]),
+        _member("Checker"),
+    )
+    r = await tenant_client.post(f"{B}/agents/import", json=file)
+    assert r.status_code == 201, r.text
+    body = r.json()
+    by_name = {a["name"]: a for a in body["agents"]}
+    assert [a["name"] for a in body["agents"]] == ["Researcher", "Checker", "Lead"]
+    assert body["agent"]["name"] == "Lead"
+    assert body["agent"]["config"]["sub_agent_ids"] == [by_name["Researcher"]["id"], by_name["Checker"]["id"]]
+    assert by_name["Researcher"]["config"]["tool_ids"] == [f"mcp:{demo.id}:echo"]
+    assert body["skipped"] == ['Researcher — Tool gmail.send: no server named "gmail" is available to you.']
+
+
+async def test_a_team_file_with_a_problem_creates_nothing(tenant_client, demo):
+    before = len((await tenant_client.get(f"{B}/agents")).json())
+    loop = _team(_member("A", subs=["B"]), _member("B", subs=["A"]))
+    r = await tenant_client.post(f"{B}/agents/import", json=loop)
+    assert r.status_code == 422 and "loop" in r.json()["detail"]
+
+    twins = _team(_member("Same"), _member("same"))
+    assert "same" in (await tenant_client.post(f"{B}/agents/import", json=twins)).json()["detail"].lower()
+
+    # One bad agent's settings: the good one isn't created either.
+    bad = _team(_member("Fine"), {**_member("Broken"), "agent": {**_member("Broken")["agent"], "config": {"tools": {"max_calls": 999}}}})
+    r = await tenant_client.post(f"{B}/agents/import", json=bad)
+    assert r.status_code == 422 and '"Broken"' in r.json()["detail"]
+    assert len((await tenant_client.get(f"{B}/agents")).json()) == before
+
+    assert (await tenant_client.post(f"{B}/agents/import", json=_team())).status_code == 422
+
+
+async def test_export_with_team_round_trips_as_one_file(tenant_client, demo):
+    helper = await make_named(tenant_client, "Helper")
+    lead = await make_named(tenant_client, "Boss", sub_agent_ids=[helper["id"]])
+    r = await tenant_client.get(f"{B}/agents/{lead['id']}/export", params={"team": "true"})
+    assert r.status_code == 200 and "boss-team.agent.json" in r.headers["content-disposition"]
+    file = r.json()
+    assert file["format_version"] == 2 and [m["agent"]["name"] for m in file["agents"]] == ["Helper", "Boss"]
+    assert file["agents"][1]["sub_agents"] == ["Helper"]
+
+    # Imported into the same workspace, the new lead uses the NEW helper from the file, not the old one.
+    body = (await tenant_client.post(f"{B}/agents/import", json=file)).json()
+    new_helper = next(a for a in body["agents"] if a["name"] == "Helper")
+    assert new_helper["id"] != helper["id"] and body["agent"]["config"]["sub_agent_ids"] == [new_helper["id"]]
+
+    # Without ?team, or with no team, it's the single-agent file as before.
+    assert (await tenant_client.get(f"{B}/agents/{lead['id']}/export")).json()["format_version"] == 1
+    assert (await tenant_client.get(f"{B}/agents/{helper['id']}/export", params={"team": "true"})).json()["format_version"] == 1
 
 
 # ── What an agent needs ──────────────────────────────────────────────────────
@@ -311,6 +376,6 @@ def test_payload_text_shapes():
 
 async def test_welcome_and_starters_are_validated(tenant_client, demo):
     agent = await make_agent(tenant_client, demo, [], chat={"welcome": "Ask me about refunds.", "starters": [" Refund status ", "Refund status", ""]})
-    assert agent["config"]["chat"] == {"welcome": "Ask me about refunds.", "starters": ["Refund status"], "answer_general": True}
+    assert agent["config"]["chat"] == {"welcome": "Ask me about refunds.", "starters": ["Refund status"], "answer_general": True, "show_plan": True}
     r = await tenant_client.post(f"{B}/agents", json={"name": "X", "role": "r", "goal": "g", "config": {"chat": {"starters": ["a"] * 5}}})
     assert r.status_code == 422

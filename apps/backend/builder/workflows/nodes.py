@@ -60,6 +60,7 @@ class NodeOutcome:
     completion_tokens: int = 0
     guardrails: list[dict] = field(default_factory=list)  # an agent step's guardrail findings
     cost_usd: float | None = None
+    reasoning: str | None = None  # an agent step's thinking (builder.agents.runtime.AgentResult.reasoning)
 
 
 @dataclass
@@ -196,7 +197,7 @@ async def run_agent_step(ctx: StepContext) -> NodeOutcome:
     return NodeOutcome(
         ok=True, output=result.text, sources=result.sources,
         prompt_tokens=result.prompt_tokens, completion_tokens=result.completion_tokens,
-        guardrails=result.guardrails, cost_usd=result.cost_usd,
+        guardrails=result.guardrails, cost_usd=result.cost_usd, reasoning=result.reasoning,
     )
 
 

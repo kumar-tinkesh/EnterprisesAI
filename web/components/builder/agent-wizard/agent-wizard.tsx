@@ -105,31 +105,16 @@ function AgentWizard({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
     useAgentWizard.getState().set({ toolMeta: meta });
   }, []);
 
-  // Guardrails are suggested from the finished draft (they depend on its
-  // tools), in the background, so Behaviour is filled in by the time it's opened.
-  const suggestGuardrails = useMutation({
-    mutationFn: (d: DraftAgent) =>
-      builderApi.suggestGuardrails(token, {
-        name: d.name, role: d.role, goal: d.goal, instructions: d.instructions ?? "",
-        tool_ids: d.config.tool_ids ?? [], has_knowledge: (d.config.knowledge_base_ids ?? []).length > 0,
-      }),
-    onSuccess: (res) => {
-      const current = useAgentWizard.getState().draft;
-      if (!current) return;
-      update({ ...current, config: { ...current.config, guardrails: { ...(current.config.guardrails ?? {}), ...res.guardrails } } });
-      useAgentWizard.getState().set({ guardrailReason: res.reasoning || null });
-    },
-  });
-
+  // Behaviour starts empty: no safety checks or rules are switched on for the person.
+  // Its "Suggest" button (GuardrailFields) fills them in when they ask.
   const generate = useMutation({
     mutationFn: (description: string) => builderApi.draftAgent(token, description),
     onSuccess: (res) => {
       const next: DraftAgent = { name: res.name, role: res.role, goal: res.goal, instructions: res.instructions, llm_provider: "", llm_model: "", config: res.config };
       const tools = [...(res.tools.agent ?? []), ...(res.insights?.related_tools ?? [])];
       const meta = Object.fromEntries(tools.map((t) => [t.tool_id, t]));
-      useAgentWizard.getState().set({ draft: next, insights: res.insights ?? null, toolMeta: meta, guardrailReason: null, createdId: null });
+      useAgentWizard.getState().set({ draft: next, insights: res.insights ?? null, toolMeta: meta, createdId: null });
       useAgentWizard.getState().goTo("identity");
-      suggestGuardrails.mutate(next);
     },
   });
 
@@ -318,7 +303,7 @@ function AgentWizard({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
                     )}
                     {stepProps && w.step === "identity" && <IdentityStep {...stepProps} />}
                     {stepProps && w.step === "abilities" && <AbilitiesStep {...stepProps} />}
-                    {stepProps && w.step === "behaviour" && <BehaviourStep {...stepProps} guardrailReason={w.guardrailReason} />}
+                    {stepProps && w.step === "behaviour" && <BehaviourStep {...stepProps} />}
                     {stepProps && w.step === "engine" && <EngineStep {...stepProps} />}
                     {stepProps && w.step === "review" && <ReviewStep {...stepProps} issues={issues} kbNames={kbNames} createError={createError} />}
                   </div>

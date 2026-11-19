@@ -5,7 +5,7 @@ import { Hand, MessageSquare, ShieldCheck } from "lucide-react";
 import { AgentFields } from "@/components/builder/agent-fields";
 import { BareSections } from "@/components/builder/fields";
 import { GuardrailFields } from "@/components/builder/guardrail-fields";
-import { AiNote, Badge, Category, type StepProps } from "@/components/builder/agent-wizard/wizard-ui";
+import { Badge, Category, type StepProps } from "@/components/builder/agent-wizard/wizard-ui";
 import { guardrailsOn } from "@/lib/builder/agent-wizard";
 import { serverIdOf, toolName } from "@/lib/builder/graph";
 import type { Risk } from "@/lib/builder/types";
@@ -13,7 +13,7 @@ import type { Risk } from "@/lib/builder/types";
 const RISK_WORDS: Record<Risk, string> = { read: "only read", edit: "change data", delete: "delete" };
 
 /** Step four: safety checks, when it stops to ask, and how it writes. */
-export function BehaviourStep({ token, draft, update, toolMeta, servers, guardrailReason }: StepProps & { guardrailReason: string | null }) {
+export function BehaviourStep({ token, draft, update, toolMeta, servers }: StepProps) {
   const config = draft.config;
   const checks = guardrailsOn(config.guardrails);
   const counts: Record<Risk, number> = { read: 0, edit: 0, delete: 0 };
@@ -36,7 +36,6 @@ export function BehaviourStep({ token, draft, update, toolMeta, servers, guardra
           hint="Run around every request and answer. Each one you turn on is listed on the review."
           badge={<Badge tone={checks.length ? "emerald" : "zinc"}>{checks.length ? `${checks.length} on` : "Off"}</Badge>}
         >
-          {guardrailReason && <AiNote>Suggested for this agent: {guardrailReason}</AiNote>}
           <GuardrailFields
             agent={draft}
             value={config.guardrails ?? {}}

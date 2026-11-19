@@ -95,3 +95,49 @@ def test_agents_answer_general_questions_unless_turned_off():
     off = system_prompt(agent_def, AgentConfig.model_validate({"chat": {"answer_general": False}}), has_tools=False, has_knowledge=False)
     assert "general question your goal isn't for" in on and "what you can help with" in on
     assert "general question" not in off
+
+
+def test_agents_and_the_front_desk_say_who_made_them(monkeypatch):
+    from builder.config import get_builder_settings
+    from builder.workflows.front_desk import _prompt
+
+    agent_def = {"name": "Helper", "role": "assistant", "goal": "Help"}
+    prompt = system_prompt(agent_def, AgentConfig(), has_tools=False, has_knowledge=False)
+    assert "developed by Abhishek" in prompt and "Never say you were made by" in prompt and "OpenAI" in prompt
+    assert "developed by Abhishek" in _prompt("Flow", "", ["Search"], "who made you?", [])
+
+    monkeypatch.setattr(get_builder_settings(), "AI_DEVELOPER", "Acme Labs")
+    assert "developed by Acme Labs" in system_prompt(agent_def, AgentConfig(), has_tools=False, has_knowledge=False)
+    monkeypatch.setattr(get_builder_settings(), "AI_DEVELOPER", "")
+    assert "developed by" not in system_prompt(agent_def, AgentConfig(), has_tools=False, has_knowledge=False)
+    assert "developed by" not in _prompt("Flow", "", ["Search"], "hi", [])
+
+
+async def test_a_workflows_steps_keep_their_thinking_under_their_names(tenant_client, llm, runtime):
+    researcher, writer = await agent(tenant_client, "Researcher"), await agent(tenant_client, "Writer")
+    wf = await workflow(
+        tenant_client,
+        [INPUT, {"id": "r", "type": "agent", "agent_id": researcher}, {"id": "w", "type": "agent", "agent_id": writer}, OUTPUT],
+        [("in", "r"), ("r", "w"), ("w", "out")],
+    )
+    found, written = CompletionResponse(content="Facts.", usage=TokenUsage(1, 1, 2)), CompletionResponse(content="Story.", usage=TokenUsage(1, 1, 2))
+    found.reasoning, written.reasoning = "Look up facts.", "Turn them into a story."
+    llm.when("You are Researcher", found)
+    llm.when("You are Writer", written)
+
+    run_id = await start(tenant_client, wf, "write about tortoises")
+    await worker(runtime).drain()
+
+    run = await get_run(tenant_client, run_id)
+    assert run["output_text"] == "Story."
+    assert run["output"]["reasoning"] == "Researcher\nLook up facts.\n\nWriter\nTurn them into a story."
+
+
+def test_the_plan_says_which_language_unless_the_agent_has_one():
+    from builder.agents.prompts import PLAN_LANGUAGE_RULE, PLAN_RULE
+
+    agent_def = {"name": "Helper", "role": "assistant", "goal": "Help"}
+    auto = system_prompt(agent_def, AgentConfig(), has_tools=False, has_knowledge=False, plan=True)
+    hindi = system_prompt(agent_def, AgentConfig.model_validate({"response": {"language": "Hindi"}}), has_tools=False, has_knowledge=False, plan=True)
+    assert PLAN_RULE in auto and PLAN_LANGUAGE_RULE in auto and "use English" in auto
+    assert PLAN_RULE in hindi and PLAN_LANGUAGE_RULE not in hindi and "Answer in Hindi" in hindi

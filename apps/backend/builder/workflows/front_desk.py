@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 
+from builder.agents.prompts import identity_rule
 from builder.publishing.outline import outline
 from builder.runs.db import session_factory
 from builder.workflows import text as T
@@ -53,6 +54,7 @@ def _prompt(name: str, description: str, steps: list[str], text: str, history: l
     return "\n".join([
         f'You are the front desk of "{name}", an automated workflow.' + (f" {description}" if description else ""),
         "",
+        *([who, ""] if (who := identity_rule()) else []),
         "What its steps do:",
         *(f"- {s}" for s in steps or ["(no steps described)"]),
         "",
