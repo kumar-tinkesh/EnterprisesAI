@@ -53,8 +53,14 @@ export interface RunView {
   subUsed: Record<string, string[]>;
   /** The answer being written right now (streaming), until the real output arrives. */
   live: LiveText | null;
-  /** The model's thinking so far: earlier turns' (done) and the current turn's (being written). */
-  thinking: { done: string; live: LiveText | null };
+  /** The model's thinking so far, one part per step and turn, in the order they started. */
+  thinking: ThoughtPart[];
+}
+
+export interface ThoughtPart {
+  node: string;
+  turn: number;
+  text: string;
 }
 
 export interface LiveText {
@@ -92,7 +98,7 @@ export const emptyRunView: RunView = {
   subActive: {},
   subUsed: {},
   live: null,
-  thinking: { done: "", live: null },
+  thinking: [],
 };
 
 /** Shown in turn while an agent works and nothing more telling is happening. */
@@ -114,9 +120,29 @@ export function liveStatus(view: RunView): { text: string; busy: boolean } | nul
   return null;
 }
 
-/** All the thinking in view, oldest turn first. */
-export function thinkingText(t: RunView["thinking"]): string {
-  return [t.done, t.live?.text ?? ""].filter(Boolean).join("\n\n");
+/**
+ * All the thinking in view, oldest first. A workflow's steps each get their
+ * name above their part (``stepName``) once more than one step has thought.
+ */
+export function thinkingText(parts: ThoughtPart[], stepName?: (nodeId: string) => string): string {
+  const named = !!stepName && new Set(parts.map((p) => p.node)).size > 1;
+  const out: string[] = [];
+  let last: string | null = null;
+  for (const p of parts) {
+    if (!p.text) continue;
+    out.push(named && p.node !== last ? `${stepName!(p.node)}\n${p.text}` : p.text);
+    last = p.node;
+  }
+  return out.join("\n\n");
+}
+
+/** Add a batch of streamed thinking to its step's turn (same rules as ``addLive``). */
+function addThought(parts: ThoughtPart[], d: { node_id: string; turn: number; at: number; text: string }): ThoughtPart[] {
+  const i = parts.findIndex((p) => p.node === d.node_id && p.turn === d.turn);
+  if (i < 0) return d.at === 0 ? [...parts, { node: d.node_id, turn: d.turn, text: d.text }] : parts;
+  const p = parts[i];
+  const text = d.at === 0 ? d.text : p.text.length === d.at ? p.text + d.text : null;
+  return text === null ? parts : parts.map((x, j) => (j === i ? { ...x, text } : x));
 }
 
 const TERMINAL: RunStatus[] = ["succeeded", "failed", "cancelled"];
@@ -248,13 +274,9 @@ export function reduceRunEvent(view: RunView, event: RunEvent | ApprovalsRefresh
       return { ...view, output: event.text, sources: event.sources ?? [], live: null };
     case "output_delta":
       return { ...view, live: addLive(view.live, event) };
-    case "reasoning_delta": {
-      if (event.via) return view; // a sub-agent's thinking stays with it
-      const cur = view.thinking.live;
-      // A new turn's thinking: the last one's is kept above it.
-      const done = cur && event.at === 0 && cur.turn !== event.turn ? thinkingText(view.thinking) : view.thinking.done;
-      return { ...view, thinking: { done, live: addLive(cur && cur.turn === event.turn ? cur : null, event) } };
-    }
+    case "reasoning_delta":
+      // A sub-agent's thinking stays with it.
+      return event.via ? view : { ...view, thinking: addThought(view.thinking, event) };
     default:
       return view;
   }

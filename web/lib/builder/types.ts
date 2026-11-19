@@ -64,8 +64,9 @@ export interface AgentConfig {
   approvals?: ApprovalPolicy;
   guardrails?: GuardrailSettings;
   /** What a person sees on an empty chat: a welcome line and suggested first questions.
-   *  answer_general (default on): greetings and general questions get a real answer, ending with what it can do. */
-  chat?: { welcome?: string; starters?: string[]; answer_general?: boolean };
+   *  answer_general (default on): greetings and general questions get a real answer, ending with what it can do.
+   *  show_plan (default on): it writes a short plan before answering, shown in chat as its thinking. */
+  chat?: { welcome?: string; starters?: string[]; answer_general?: boolean; show_plan?: boolean };
   /** Long-term memory of each person it works for. */
   memory?: { enabled?: boolean; max_items?: number };
   /** Other standalone agents it may hand tasks to (each becomes an "ask_<name>" tool). */

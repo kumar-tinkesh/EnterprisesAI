@@ -114,6 +114,16 @@ def _step_summary(state: dict, graph: S.Graph, agents: dict) -> str:
     return "\n\n---\n**Step by step**\n\n" + "\n\n".join(parts) if parts else ""
 
 
+def _thinking(state: dict, graph: S.Graph, agents: dict) -> str:
+    """Each agent step's thinking, in the order the steps finished, under the step's name."""
+    parts = []
+    for node_id, text in state.get("reasoning") or []:
+        node = graph.nodes.get(node_id) or {}
+        name = node.get("label") or (agents.get(node.get("agent_id") or "") or {}).get("name") or "Step"
+        parts.append(f"{name}\n{text}")
+    return "\n\n".join(parts)
+
+
 def _asks_front_desk(run: BuilderRun, config: WorkflowConfig, variables: dict) -> bool:
     """Only a message someone typed (app chat, a share link) — never a schedule,
     a webhook, a test, or a run given its inputs as fields or files."""
@@ -280,6 +290,8 @@ async def execute_workflow(run: BuilderRun, user: CurrentUser, worker_id: str, *
                 state["cost_usd"] = add_cost(state.get("cost_usd"), outcome.cost_usd)
                 if outcome.guardrails:
                     state.setdefault("guardrails", []).extend({**f, "node_id": node_id} for f in outcome.guardrails)
+                if outcome.ok and outcome.reasoning:
+                    state.setdefault("reasoning", []).append([node_id, outcome.reasoning])
                 if outcome.ok:
                     await _finish_node(node_run_id, states.SUCCEEDED, outcome)
                     state["sources"] = list(dict.fromkeys(state["sources"] + outcome.sources))
@@ -331,6 +343,8 @@ async def execute_workflow(run: BuilderRun, user: CurrentUser, worker_id: str, *
     if config.include_step_summary:
         text = (text or "") + _step_summary(state, graph, agents)
     output = {"text": text, "sources": state["sources"], "final_node": final.get("node_id"), "guardrails": state.get("guardrails") or []}
+    if thinking := _thinking(state, graph, agents):
+        output["reasoning"] = thinking
     await emit(run.id, "output", text=text, sources=state["sources"])
     if await lease.release(
         run.id, worker_id, status=states.SUCCEEDED, output_text=text, output=output,

@@ -64,3 +64,14 @@ describe("the live status line", () => {
     expect(liveStatus({ ...view, status: "waiting" })).toEqual({ text: "Waiting for your decision", busy: false });
   });
 });
+
+describe("a workflow's thinking", () => {
+  it("keeps each step's part and names the steps once more than one has thought", () => {
+    let view = reduceRunEvent(emptyRunView, { type: "reasoning_delta", node_id: "r", turn: 1, at: 0, text: "Find facts." });
+    view = reduceRunEvent(view, { type: "reasoning_delta", node_id: "w", turn: 1, at: 0, text: "Write it." });
+    view = reduceRunEvent(view, { type: "reasoning_delta", node_id: "r", turn: 1, at: 11, text: " Then stop." });
+    const name = (id: string) => ({ r: "Researcher", w: "Writer" })[id] ?? id;
+    expect(thinkingText(view.thinking, name)).toBe("Researcher\nFind facts. Then stop.\n\nWriter\nWrite it.");
+    expect(thinkingText(view.thinking.slice(0, 1), name)).toBe("Find facts. Then stop."); // one step: no name
+  });
+});

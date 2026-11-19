@@ -166,3 +166,37 @@ async def test_one_address_can_only_start_so_many_runs(tenant_client, anon_clien
     key = await publish(tenant_client, "agents", agent["id"], requests_per_minute=100)
     codes = [(await anon_client.post(f"{P}/runs", headers=bearer(key), json={"input": "x", "wait_seconds": 0})).status_code for _ in range(3)]
     assert codes == [202, 202, 429]
+
+
+async def test_it_is_asked_for_a_plan_unless_turned_off(tenant_client, demo, gateway, runtime, monkeypatch):
+    from builder.agents.prompts import PLAN_RULE
+    from builder.config import get_builder_settings
+
+    gw = gateway([reply("A."), reply("B."), reply("C."), reply("D.")])
+    for agent in (
+        await make_agent(tenant_client, demo, []),
+        await make_agent(tenant_client, demo, [], chat={"show_plan": False}),
+        await make_agent(tenant_client, demo, [], guardrails={"pii_output": True}),  # its thinking couldn't be shown
+    ):
+        await _run_collecting(runtime, tenant_client, agent)
+    monkeypatch.setattr(get_builder_settings(), "AGENT_PLAN_THINKING", False)
+    await _run_collecting(runtime, tenant_client, await make_agent(tenant_client, demo, []))
+    asked = [PLAN_RULE in r.messages[0].content for r in gw.requests]
+    assert asked == [True, False, False, False]
+
+
+async def test_thinking_is_kept_and_shown_without_streaming_too(tenant_client, demo, gateway, runtime):
+    agent = await make_agent(tenant_client, demo, [])
+    gateway([_thinking("Answer.", "Short plan.")])
+    run_id, events = await _run_collecting(runtime, tenant_client, agent, stream=False)
+    assert [(e["turn"], e["at"], e["text"]) for e in events if e["type"] == "reasoning_delta"] == [(1, 0, "Short plan.")]
+    assert (await tenant_client.get(f"{B}/runs/{run_id}")).json()["output"]["reasoning"] == "Short plan."
+
+
+async def test_a_plan_tag_never_closed_is_the_answer(tenant_client, demo, gateway, runtime):
+    agent = await make_agent(tenant_client, demo, [])
+    gateway([_thinking("", "The whole answer ended up inside the tag.")])
+    run_id, _ = await _run_collecting(runtime, tenant_client, agent)
+    run = (await tenant_client.get(f"{B}/runs/{run_id}")).json()
+    assert run["output_text"] == "The whole answer ended up inside the tag."
+    assert "reasoning" not in (run["output"] or {})

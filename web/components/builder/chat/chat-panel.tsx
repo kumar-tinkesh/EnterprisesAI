@@ -81,7 +81,7 @@ function LiveAnswer({
   const elapsed = useElapsed(since, true);
   const pending = view.approvals.filter((a) => a.status === "pending");
   const status = liveStatus(view);
-  const thought = thinkingText(view.thinking);
+  const thought = thinkingText(view.thinking, stepName);
   return (
     <div className="flex gap-3">
       <Avatar name={name} live />
@@ -256,7 +256,7 @@ export function ChatPanel({
                 text: view.output ?? r.output?.text,
                 sources: view.sources.length ? view.sources : r.output?.sources,
                 guardrails: view.guardrails.length ? view.guardrails : r.output?.guardrails,
-                reasoning: r.output?.reasoning ?? (thinkingText(view.thinking) || null),
+                reasoning: r.output?.reasoning ?? (thinkingText(view.thinking, stepName) || null),
               },
             },
       ),

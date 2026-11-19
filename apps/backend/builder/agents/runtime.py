@@ -225,8 +225,22 @@ def _streams(ctx: AgentContext) -> bool:
     """Stream only an answer nobody has to check before it's shown: personal
     data scrubbing, the groundedness check and custom rules can change or
     withhold it, and text already on someone's screen can't be taken back."""
+    return ctx.stream and _shows_thinking(ctx)
+
+
+def _shows_thinking(ctx: AgentContext) -> bool:
+    """Its thinking may be shown (and kept on the run) only when no guardrail has
+    to check what it writes: the thinking isn't checked, so it could say what the
+    checked answer leaves out."""
     g = ctx.config.guardrails
-    return ctx.stream and not (g.pii_output or g.groundedness or g.custom_rules)
+    return not (g.pii_output or g.groundedness or g.custom_rules)
+
+
+def _plans(ctx: AgentContext) -> bool:
+    """Ask it for a short plan before each reply (shown as its thinking)."""
+    from builder.config import get_builder_settings
+
+    return get_builder_settings().AGENT_PLAN_THINKING and ctx.config.chat.show_plan and _shows_thinking(ctx)
 
 
 class _Live:
@@ -649,7 +663,7 @@ async def run_agent(ctx: AgentContext) -> AgentResult:
             await _note(ctx, {}, checked.flags)
             raise GuardrailBlocked(checked.blocked, [f.as_dict() for f in checked.flags])
         extra = [team_section(subs) if subs else "", prompt_section(memories) if _memory_on(ctx) else ""]
-        prompt = system_prompt(ctx.agent, ctx.config, has_tools=bool(tool_defs), has_knowledge=has_knowledge, depth=ctx.depth, extra=extra)
+        prompt = system_prompt(ctx.agent, ctx.config, has_tools=bool(tool_defs), has_knowledge=has_knowledge, depth=ctx.depth, extra=extra, plan=_plans(ctx))
         state = {
             "messages": [
                 {"role": "system", "content": prompt},
@@ -732,8 +746,16 @@ async def run_agent(ctx: AgentContext) -> AgentResult:
         live = _Live(ctx, state["turn"] + 1) if _streams(ctx) else None
         response = await _complete(ctx, messages, None if out_of_budget else (tool_defs or None), live)
         state["turn"] += 1
+        content = response.content or ""
         thought = (getattr(response, "reasoning", None) or "").strip()
-        if thought and live is not None:  # only what could be shown live (no guardrail has to check it)
+        if thought and not content.strip() and not response.tool_calls:
+            # Its whole reply came out as thinking (a plan tag it never closed): that was the answer.
+            content, thought = thought, ""
+        if thought:
+            content = content.lstrip()  # the blank lines it left after </think>
+        if thought and _shows_thinking(ctx):
+            if live is None:  # not streamed (a workflow's inner step): shown whole, once the turn is done
+                await ctx.emit("reasoning_delta", node_id=ctx.node_id, turn=state["turn"], at=0, text=thought)
             kept = state.setdefault("reasoning", [])
             room = MAX_REASONING_CHARS - sum(len(t) for t in kept)
             if room > 0:
@@ -745,7 +767,7 @@ async def run_agent(ctx: AgentContext) -> AgentResult:
             {"id": tc.id or f"call_{state['turn']}_{i}", "name": tc.name, "arguments": tc.arguments or "{}"}
             for i, tc in enumerate(response.tool_calls or [])
         ]
-        message: dict = {"role": "assistant", "content": response.content or ""}
+        message: dict = {"role": "assistant", "content": content}
         if calls and not out_of_budget:
             message["tool_calls"] = calls
         messages.append(message)

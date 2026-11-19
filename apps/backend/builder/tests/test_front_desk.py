@@ -111,3 +111,23 @@ def test_agents_and_the_front_desk_say_who_made_them(monkeypatch):
     monkeypatch.setattr(get_builder_settings(), "AI_DEVELOPER", "")
     assert "developed by" not in system_prompt(agent_def, AgentConfig(), has_tools=False, has_knowledge=False)
     assert "developed by" not in _prompt("Flow", "", ["Search"], "hi", [])
+
+
+async def test_a_workflows_steps_keep_their_thinking_under_their_names(tenant_client, llm, runtime):
+    researcher, writer = await agent(tenant_client, "Researcher"), await agent(tenant_client, "Writer")
+    wf = await workflow(
+        tenant_client,
+        [INPUT, {"id": "r", "type": "agent", "agent_id": researcher}, {"id": "w", "type": "agent", "agent_id": writer}, OUTPUT],
+        [("in", "r"), ("r", "w"), ("w", "out")],
+    )
+    found, written = CompletionResponse(content="Facts.", usage=TokenUsage(1, 1, 2)), CompletionResponse(content="Story.", usage=TokenUsage(1, 1, 2))
+    found.reasoning, written.reasoning = "Look up facts.", "Turn them into a story."
+    llm.when("You are Researcher", found)
+    llm.when("You are Writer", written)
+
+    run_id = await start(tenant_client, wf, "write about tortoises")
+    await worker(runtime).drain()
+
+    run = await get_run(tenant_client, run_id)
+    assert run["output_text"] == "Story."
+    assert run["output"]["reasoning"] == "Researcher\nLook up facts.\n\nWriter\nTurn them into a story."
