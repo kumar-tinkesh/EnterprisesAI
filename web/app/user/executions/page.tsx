@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowDown, CalendarClock, CheckCircle2, ChevronDown, Clock, Eye, Globe, Loader2, MessageSquare, Plus, RefreshCw, Search, ShieldAlert, Users, X, XCircle } from "lucide-react";
+import { ArrowDown, CalendarClock, CheckCircle2, ChevronDown, Clock, Eye, Globe, Loader2, MessageSquare, PanelLeftClose, PanelLeftOpen, Plus, RefreshCw, Search, ShieldAlert, Users, X, XCircle } from "lucide-react";
 
 import ProtectedDashboard from "@/components/protected-dashboard";
 import { Button } from "@/components/ui/button";
@@ -118,6 +119,7 @@ type Item = {
 };
 
 export default function ExecutionsPage() {
+  const router = useRouter();
   const token = useAuthStore((s) => s.accessToken) || "";
   const userId = useAuthStore((s) => s.user?.id);
   const [viewMode, setViewMode] = useState<"runs" | "inspector">(() => {
@@ -133,6 +135,7 @@ export default function ExecutionsPage() {
   // The selected one is open on the canvas, in place of the list.
   const [editing, setEditing] = useState(false);
   const [detail, setDetail] = useState<DetailTab>("overview");
+  const [listCollapsed, setListCollapsed] = useState(false);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [sort, setSort] = useState<Sort>("last_run");
@@ -264,7 +267,13 @@ export default function ExecutionsPage() {
       item={item}
       active={chat?.kind === item.kind && chat.id === item.id}
       serverNames={serverNames}
-      onOpen={(view) => openChat({ kind: item.kind, id: item.id }, view)}
+      onOpen={(view) => {
+        if (view === "chat") {
+          router.push(`/user/agents?workspace=${item.kind}:${encodeURIComponent(item.id)}&tab=chat`);
+        } else {
+          openChat({ kind: item.kind, id: item.id }, view);
+        }
+      }}
       onEdit={() => openEditor({ kind: item.kind, id: item.id })}
       onDelete={() => {
         if (window.confirm(`Delete "${item.name}"? This can't be undone.`)) {
@@ -411,13 +420,21 @@ export default function ExecutionsPage() {
             <RunLogsView
               token={token}
               onOpenChat={(target) => {
-                openChat(target, "chat");
-                setViewMode("inspector");
+                router.push(`/user/agents?workspace=${target.kind}:${encodeURIComponent(target.id)}&tab=chat`);
               }}
             />
           </section>
         ) : (
-          <section className={cn("min-w-0 flex-col gap-5 px-4 py-6 sm:px-8 sm:py-8", chat ? "hidden md:flex md:w-2/5 md:px-4 lg:w-1/3 lg:px-6" : "mx-auto flex w-full max-w-6xl flex-1")}>
+          <section
+            className={cn(
+              "min-w-0 flex-col gap-5 px-4 py-6 sm:px-8 sm:py-8 transition-all duration-200",
+              chat
+                ? listCollapsed
+                  ? "hidden"
+                  : "hidden md:flex md:w-2/5 md:px-4 lg:w-1/3 lg:px-6"
+                : "mx-auto flex w-full max-w-6xl flex-1"
+            )}
+          >
             <header className="flex flex-wrap items-end justify-between gap-4">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-3">
@@ -447,9 +464,22 @@ export default function ExecutionsPage() {
                 </div>
                 {!chat && <p className="mt-1 text-sm text-zinc-500">Every agent and workflow, how it&apos;s doing, and a chat with it.</p>}
               </div>
-              <Button className="shrink-0" disabled={createBlank.isPending} onClick={() => createBlank.mutate(tab)}>
-                {createBlank.isPending ? <Spinner className="h-4 w-4" /> : <Plus />} New {tab}
-              </Button>
+              <div className="flex items-center gap-2 shrink-0">
+                <Button className="shrink-0" disabled={createBlank.isPending} onClick={() => createBlank.mutate(tab)}>
+                  {createBlank.isPending ? <Spinner className="h-4 w-4" /> : <Plus />} New {tab}
+                </Button>
+                {chat && (
+                  <button
+                    type="button"
+                    onClick={() => setListCollapsed(true)}
+                    title="Collapse agents list"
+                    aria-label="Collapse agents list"
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-white/10 bg-white/[0.04] text-zinc-400 hover:bg-white/[0.08] hover:text-white cursor-pointer transition-colors"
+                  >
+                    <PanelLeftClose className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
             </header>
             {error && <p className="text-sm text-red-600">{error}</p>}
             {list}
@@ -465,6 +495,9 @@ export default function ExecutionsPage() {
               onTab={pickDetail}
               onClose={() => openChat(null)}
               onOpenCanvas={() => openEditor(chat)}
+              onSwitchTarget={(newTarget) => openChat(newTarget, detail)}
+              isListCollapsed={listCollapsed}
+              onToggleList={() => setListCollapsed(false)}
             />
           </section>
         )}

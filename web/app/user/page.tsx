@@ -20,9 +20,11 @@ import { cn } from "@/lib/utils";
 
 const WINDOW = 7;
 
-/** Executions with this agent/workflow's chat open (and its editor, with ``edit``). */
+/** Dedicated workspace with this agent/workflow's chat open (and its canvas editor, with ``edit``). */
 const chatHref = (kind: "agent" | "workflow", id: string, edit = false) =>
-  `/user/executions?chat=${kind}:${encodeURIComponent(id)}${edit ? "&edit=1" : "&tab=chat"}`;
+  edit
+    ? `/user/agents?${kind}=${encodeURIComponent(id)}`
+    : `/user/agents?workspace=${kind}:${encodeURIComponent(id)}&tab=chat`;
 
 function runHref(run: Run): string {
   const id = run.kind === "workflow" ? run.workflow_id : run.agent_id;
