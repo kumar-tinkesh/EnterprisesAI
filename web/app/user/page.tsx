@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, CheckCircle2, ChevronDown, ChevronRight, Circle, Clock, Loader2, MessageSquare, Network, Plus, ShieldAlert, XCircle } from "lucide-react";
+import { ArrowRight, BarChart3, Brain, CheckCircle2, ChevronDown, ChevronRight, Circle, Clock, Loader2, MessageSquare, Network, Plug, Plus, ShieldAlert, Sparkles, XCircle } from "lucide-react";
 
 import ProtectedDashboard from "@/components/protected-dashboard";
 import { ApprovalCard } from "@/components/builder/approval-card";
@@ -209,6 +209,81 @@ function Dashboard() {
             <Plus className="h-4 w-4" /> New agent
           </Link>
         </div>
+      </div>
+
+      {/* Quick Launchpad Hub */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <Link
+          href="/user/agents"
+          className="group flex flex-col justify-between rounded-xl border border-white/10 bg-[var(--surface)] p-4 transition-all hover:border-[var(--accent-border)] hover:bg-white/[0.04]"
+        >
+          <div className="flex items-center gap-3">
+            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--accent-wash)] text-[var(--link)] group-hover:bg-[var(--accent)] group-hover:text-white transition-colors">
+              <Sparkles className="h-4 w-4" />
+            </span>
+            <div>
+              <p className="text-sm font-semibold text-zinc-100">AI Compiler</p>
+              <p className="text-xs text-zinc-500">Prompt to agent in seconds</p>
+            </div>
+          </div>
+          <span className="mt-3 flex items-center gap-1 text-[11px] font-medium text-zinc-400 group-hover:text-white">
+            Build agent <ArrowRight className="h-3 w-3" />
+          </span>
+        </Link>
+
+        <Link
+          href="/user/knowledge"
+          className="group flex flex-col justify-between rounded-xl border border-white/10 bg-[var(--surface)] p-4 transition-all hover:border-[var(--accent-border)] hover:bg-white/[0.04]"
+        >
+          <div className="flex items-center gap-3">
+            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-500/10 text-amber-400 group-hover:bg-amber-500 group-hover:text-white transition-colors">
+              <Brain className="h-4 w-4" />
+            </span>
+            <div>
+              <p className="text-sm font-semibold text-zinc-100">Knowledge Base</p>
+              <p className="text-xs text-zinc-500">Enterprise docs & vector RAG</p>
+            </div>
+          </div>
+          <span className="mt-3 flex items-center gap-1 text-[11px] font-medium text-zinc-400 group-hover:text-white">
+            Manage docs <ArrowRight className="h-3 w-3" />
+          </span>
+        </Link>
+
+        <Link
+          href="/user/connectors"
+          className="group flex flex-col justify-between rounded-xl border border-white/10 bg-[var(--surface)] p-4 transition-all hover:border-[var(--accent-border)] hover:bg-white/[0.04]"
+        >
+          <div className="flex items-center gap-3">
+            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-sky-500/10 text-sky-400 group-hover:bg-sky-500 group-hover:text-white transition-colors">
+              <Plug className="h-4 w-4" />
+            </span>
+            <div>
+              <p className="text-sm font-semibold text-zinc-100">Connectors & Tools</p>
+              <p className="text-xs text-zinc-500">Slack, GitHub & custom MCPs</p>
+            </div>
+          </div>
+          <span className="mt-3 flex items-center gap-1 text-[11px] font-medium text-zinc-400 group-hover:text-white">
+            Configure tools <ArrowRight className="h-3 w-3" />
+          </span>
+        </Link>
+
+        <Link
+          href="/user/analytics"
+          className="group flex flex-col justify-between rounded-xl border border-white/10 bg-[var(--surface)] p-4 transition-all hover:border-[var(--accent-border)] hover:bg-white/[0.04]"
+        >
+          <div className="flex items-center gap-3">
+            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-400 group-hover:bg-emerald-500 group-hover:text-white transition-colors">
+              <BarChart3 className="h-4 w-4" />
+            </span>
+            <div>
+              <p className="text-sm font-semibold text-zinc-100">Token Analytics</p>
+              <p className="text-xs text-zinc-500">Cost & latency intelligence</p>
+            </div>
+          </div>
+          <span className="mt-3 flex items-center gap-1 text-[11px] font-medium text-zinc-400 group-hover:text-white">
+            View metrics <ArrowRight className="h-3 w-3" />
+          </span>
+        </Link>
       </div>
 
       {/* Getting started */}

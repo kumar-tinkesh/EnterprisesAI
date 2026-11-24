@@ -94,8 +94,10 @@ h1, h2, h3 { letter-spacing: -0.01em; line-height: 1.25; }
 /* surfaces */
 .builder-dark .bg-white { background-color: var(--surface); }
 .builder-dark .bg-white\/90 { background-color: rgb(17 17 19 / 0.9); }
-.builder-dark .bg-zinc-50, .builder-dark .bg-zinc-50\/60, .builder-dark .bg-zinc-50\/75, .builder-dark .bg-zinc-50\/80 { background-color: var(--surface-raised); }
+.builder-dark .bg-zinc-50, .builder-dark .bg-zinc-50\/60, .builder-dark .bg-zinc-50\/70, .builder-dark .bg-zinc-50\/75, .builder-dark .bg-zinc-50\/80 { background-color: var(--surface-raised); }
 .builder-dark .bg-zinc-100, .builder-dark .bg-zinc-200 { background-color: var(--surface-strong); }
+.builder-dark input, .builder-dark textarea, .builder-dark select { background-color: var(--surface-raised); color: var(--text); border-color: var(--border-strong); }
+.builder-dark input::placeholder, .builder-dark textarea::placeholder { color: var(--text-subtle); }
 .builder-dark .hover\:bg-zinc-50:hover, .builder-dark .hover\:bg-zinc-50\/50:hover, .builder-dark .hover\:bg-zinc-50\/80:hover { background-color: var(--hover) !important; }
 .builder-dark .hover\:bg-zinc-100:hover, .builder-dark .hover\:bg-zinc-200:hover { background-color: var(--hover) !important; }
 .builder-dark select option { background-color: var(--surface-raised); color: var(--text); }

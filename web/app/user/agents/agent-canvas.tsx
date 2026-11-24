@@ -78,6 +78,12 @@ export default function BuilderHome({
     try {
       const saved = window.localStorage.getItem(MODE_KEY);
       if (saved === "agent" || saved === "workflow") setMode(saved);
+      const params = new URLSearchParams(window.location.search);
+      const p = params.get("prompt");
+      if (p) {
+        setText(p);
+        setIsFocused(true);
+      }
     } catch {
       /* default */
     }
