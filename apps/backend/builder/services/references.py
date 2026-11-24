@@ -36,6 +36,7 @@ from builder.graph.schema import WorkflowConfig, WorkflowNode, parse_tool_id
 from builder.graph.schema import WorkflowEdge
 from builder.graph.validation import GraphProblem, validate_graph
 from builder.models import BuilderAgent
+from builder.scope import in_workspace
 
 
 def _dedupe(problems: list[GraphProblem]) -> list[GraphProblem]:
@@ -107,13 +108,13 @@ async def tool_problems(
 
 
 async def knowledge_problems(
-    db: AsyncSession, tenant_id: str, kb_ids: list[str], *, node_id: str | None = None
+    db: AsyncSession, tenant_id: str, kb_ids: list[str], *, node_id: str | None = None, user=None
 ) -> list[GraphProblem]:
     ids = list(dict.fromkeys(kb_ids))
     if not ids:
         return []
     found = set(
-        (await db.execute(select(KnowledgeBase.id).where(KnowledgeBase.id.in_(ids), KnowledgeBase.tenant_id == tenant_id)))
+        (await db.execute(select(KnowledgeBase.id).where(KnowledgeBase.id.in_(ids), KnowledgeBase.tenant_id == tenant_id, in_workspace(KnowledgeBase.workspace_id, user))))
         .scalars()
         .all()
     )
@@ -140,7 +141,7 @@ async def sub_agent_problems(
     rows = {
         a.id: a
         for a in (
-            await db.execute(select(BuilderAgent).where(BuilderAgent.id.in_(ids), BuilderAgent.tenant_id == user.tenant_id))
+            await db.execute(select(BuilderAgent).where(BuilderAgent.id.in_(ids), BuilderAgent.tenant_id == user.tenant_id, in_workspace(BuilderAgent.workspace_id, user)))
         ).scalars()
     }
     problems: list[GraphProblem] = []
@@ -155,7 +156,7 @@ async def sub_agent_problems(
         elif check_connection:
             config = AgentConfig.model_validate(sub.config or {})
             problems += await tool_problems(db, user, config.tool_ids, node_id=node_id, check_connection=True)
-            problems += await knowledge_problems(db, user.tenant_id, config.knowledge_base_ids, node_id=node_id)
+            problems += await knowledge_problems(db, user.tenant_id, config.knowledge_base_ids, node_id=node_id, user=user)
     return problems
 
 
@@ -172,7 +173,7 @@ async def agent_config_problems(
     if check_connection:
         # Saving never waits for a system to be connected; running does.
         problems += need_problems(await resolve_needs(db, user, config.tool_needs), node_id=node_id, optional=config.runs_without_needs)
-    problems += await knowledge_problems(db, user.tenant_id, config.knowledge_base_ids, node_id=node_id)
+    problems += await knowledge_problems(db, user.tenant_id, config.knowledge_base_ids, node_id=node_id, user=user)
     problems += await sub_agent_problems(
         db, user, config.sub_agent_ids, node_id=node_id, check_connection=check_connection, self_id=self_id,
     )
@@ -194,7 +195,7 @@ async def workflow_reference_problems(
         a.id: a
         for a in (
             await db.execute(
-                select(BuilderAgent).where(BuilderAgent.id.in_(agent_ids), BuilderAgent.tenant_id == user.tenant_id)
+                select(BuilderAgent).where(BuilderAgent.id.in_(agent_ids), BuilderAgent.tenant_id == user.tenant_id, in_workspace(BuilderAgent.workspace_id, user))
             )
         ).scalars()
     } if agent_ids else {}
@@ -229,7 +230,7 @@ async def workflow_reference_problems(
         elif n.type == "tool" and n.tool_id and parse_tool_id(n.tool_id):
             problems += await tool_problems(db, user, [n.tool_id], node_id=n.id, check_connection=check_connection)
 
-    problems += await knowledge_problems(db, user.tenant_id, config.default_knowledge_base_ids)
+    problems += await knowledge_problems(db, user.tenant_id, config.default_knowledge_base_ids, user=user)
     return _dedupe(problems)
 
 

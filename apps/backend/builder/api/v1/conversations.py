@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.deps import CurrentUser
 from src.db.session import get_db
 
+from builder.scope import in_workspace
 from builder.api.v1.deps import get_end_user
 from builder.models import BuilderConversation, BuilderRun
 from builder.runs.conversations import ConversationError, chat_order, conversation_view, delete_conversation, get_conversation
@@ -47,7 +48,7 @@ async def list_conversations(
     user: CurrentUser = Depends(get_end_user),
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(BuilderConversation).where(BuilderConversation.owner_id == user.id)
+    query = select(BuilderConversation).where(BuilderConversation.owner_id == user.id, in_workspace(BuilderConversation.workspace_id, user))
     if agent_id:
         query = query.where(BuilderConversation.agent_id == agent_id)
     if workflow_id:

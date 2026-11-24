@@ -11,7 +11,8 @@ from src.models.tenant import Tenant, uuid_str
 
 
 class Workspace(Base, TimestampMixin):
-    """A workspace scoped under a tenant. Users belong to one workspace."""
+    """A workspace inside a tenant. A solo account has exactly one; a tenant can
+    have many, and a user can be a member of several (``WorkspaceMember``)."""
 
     __tablename__ = "workspaces"
     __table_args__ = (UniqueConstraint("tenant_id", "slug", name="uq_workspace_tenant_slug"),)
@@ -22,6 +23,8 @@ class Workspace(Base, TimestampMixin):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     slug: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    description: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    # "active" | "archived" — an archived workspace can't be entered.
     status: Mapped[str] = mapped_column(String(32), default="active")
 
     tenant: Mapped[Tenant] = relationship(back_populates="workspaces")

@@ -40,6 +40,7 @@ from builder.models import BuilderAgent
 from builder.runs.db import utcnow
 from builder.services.references import config_errors
 from builder.versions.service import record_version
+from builder.scope import in_workspace, workspace_of
 
 router = APIRouter()
 
@@ -93,7 +94,7 @@ async def agent_requirements(agent_id: str, user: CurrentUser = Depends(get_end_
     subs = [
         AgentConfig.model_validate(a.config or {})
         for a in (
-            await db.execute(select(BuilderAgent).where(BuilderAgent.id.in_(config.sub_agent_ids), BuilderAgent.tenant_id == user.tenant_id))
+            await db.execute(select(BuilderAgent).where(BuilderAgent.id.in_(config.sub_agent_ids), BuilderAgent.tenant_id == user.tenant_id, in_workspace(BuilderAgent.workspace_id, user)))
         ).scalars()
     ] if config.sub_agent_ids else []
     requirements = await _requirements(db, user, [config, *subs])
@@ -179,10 +180,10 @@ async def _entry(db: AsyncSession, user: CurrentUser, agent: BuilderAgent) -> Ag
         for s in (await db.execute(select(VendorMCPServer).where(VendorMCPServer.id.in_({sid for sid, _ in refs})))).scalars()
     } if refs else {}
     kbs = (
-        await db.execute(select(KnowledgeBase.name).where(KnowledgeBase.id.in_(config.knowledge_base_ids), KnowledgeBase.tenant_id == user.tenant_id))
+        await db.execute(select(KnowledgeBase.name).where(KnowledgeBase.id.in_(config.knowledge_base_ids), KnowledgeBase.tenant_id == user.tenant_id, in_workspace(KnowledgeBase.workspace_id, user)))
     ).scalars().all() if config.knowledge_base_ids else []
     subs = (
-        await db.execute(select(BuilderAgent.name).where(BuilderAgent.id.in_(config.sub_agent_ids), BuilderAgent.tenant_id == user.tenant_id))
+        await db.execute(select(BuilderAgent.name).where(BuilderAgent.id.in_(config.sub_agent_ids), BuilderAgent.tenant_id == user.tenant_id, in_workspace(BuilderAgent.workspace_id, user)))
     ).scalars().all() if config.sub_agent_ids else []
     return AgentEntry(
         agent=ExportedAgent(
@@ -210,7 +211,7 @@ async def export_agent(
         ids = AgentConfig.model_validate(agent.config or {}).sub_agent_ids
         rows = {
             a.id: a
-            for a in (await db.execute(select(BuilderAgent).where(BuilderAgent.id.in_(ids), BuilderAgent.tenant_id == user.tenant_id))).scalars()
+            for a in (await db.execute(select(BuilderAgent).where(BuilderAgent.id.in_(ids), BuilderAgent.tenant_id == user.tenant_id, in_workspace(BuilderAgent.workspace_id, user)))).scalars()
         } if ids else {}
         members = [rows[i] for i in ids if i in rows and i != agent.id]
     if members:
@@ -307,7 +308,7 @@ async def import_agent(payload: AgentFile, user: CurrentUser = Depends(get_end_u
 
         kb_ids: list[str] = []
         for name in e.knowledge_bases:
-            kb = (await db.execute(select(KnowledgeBase.id).where(KnowledgeBase.tenant_id == user.tenant_id, KnowledgeBase.name == name))).scalars().first()
+            kb = (await db.execute(select(KnowledgeBase.id).where(KnowledgeBase.tenant_id == user.tenant_id, in_workspace(KnowledgeBase.workspace_id, user), KnowledgeBase.name == name))).scalars().first()
             if kb:
                 kb_ids.append(kb)
             else:
@@ -321,7 +322,7 @@ async def import_agent(payload: AgentFile, user: CurrentUser = Depends(get_end_u
                 continue
             sub = (
                 await db.execute(select(BuilderAgent.id).where(
-                    BuilderAgent.tenant_id == user.tenant_id, BuilderAgent.workflow_id.is_(None), BuilderAgent.name == name,
+                    BuilderAgent.tenant_id == user.tenant_id, in_workspace(BuilderAgent.workspace_id, user), BuilderAgent.workflow_id.is_(None), BuilderAgent.name == name,
                 ))
             ).scalars().first()
             if sub:
@@ -337,7 +338,7 @@ async def import_agent(payload: AgentFile, user: CurrentUser = Depends(get_end_u
             raise HTTPException(status_code=422, detail=f"The settings{where} in the file aren't valid: " + "; ".join(config_errors(exc))) from exc
         skipped += [f"{names[i]} — {s}" for s in mine] if team else mine
         agents[i] = BuilderAgent(
-            id=ids[i], tenant_id=user.tenant_id, owner_id=user.id, name=names[i], role=a.role.strip(), goal=a.goal.strip(),
+            id=ids[i], tenant_id=user.tenant_id, workspace_id=workspace_of(user), owner_id=user.id, name=names[i], role=a.role.strip(), goal=a.goal.strip(),
             instructions=a.instructions.strip(), llm_provider=a.llm_provider.strip(), llm_model=a.llm_model.strip(),
             config=config.model_dump(),
         )

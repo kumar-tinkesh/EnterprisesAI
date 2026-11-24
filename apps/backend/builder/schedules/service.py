@@ -68,7 +68,7 @@ async def sync_workflow_schedules(db: AsyncSession, workflow: BuilderWorkflow) -
         row = existing.get(node_id)
         if row is None:
             row = BuilderSchedule(
-                tenant_id=workflow.tenant_id, owner_id=workflow.owner_id, kind="workflow",
+                tenant_id=workflow.tenant_id, workspace_id=workflow.workspace_id, owner_id=workflow.owner_id, kind="workflow",
                 workflow_id=workflow.id, node_id=node_id, cron="", timezone="UTC", enabled=False, input={},
             )
             db.add(row)

@@ -27,6 +27,7 @@ from builder.models import BuilderAgent, BuilderPublicKey, BuilderRun, BuilderSc
 from builder.publishing.service import start_of_day
 from builder.runs import states
 from builder.runs.db import as_utc, utcnow
+from builder.scope import in_workspace
 
 router = APIRouter()
 
@@ -99,7 +100,7 @@ async def insights(
             select(
                 BuilderRun.kind, BuilderRun.agent_id, BuilderRun.workflow_id, BuilderRun.status,
                 BuilderRun.created_at, BuilderRun.started_at, BuilderRun.finished_at, BuilderRun.definition,
-            ).where(BuilderRun.owner_id == user.id, BuilderRun.purpose == "run")
+            ).where(BuilderRun.owner_id == user.id, BuilderRun.purpose == "run", in_workspace(BuilderRun.workspace_id, user))
         )
     ).all()
 
@@ -206,15 +207,15 @@ async def overview(
     db: AsyncSession = Depends(get_db),
 ):
     agents = (await db.execute(
-        select(BuilderAgent).where(BuilderAgent.tenant_id == user.tenant_id, BuilderAgent.workflow_id.is_(None)).limit(200)
+        select(BuilderAgent).where(BuilderAgent.tenant_id == user.tenant_id, BuilderAgent.workflow_id.is_(None), in_workspace(BuilderAgent.workspace_id, user)).limit(200)
     )).scalars().all()
-    workflows = (await db.execute(select(BuilderWorkflow).where(BuilderWorkflow.tenant_id == user.tenant_id).limit(200))).scalars().all()
+    workflows = (await db.execute(select(BuilderWorkflow).where(BuilderWorkflow.tenant_id == user.tenant_id, in_workspace(BuilderWorkflow.workspace_id, user)).limit(200))).scalars().all()
     targets = [("agent", a) for a in agents] + [("workflow", w) for w in workflows]
 
     since = start_of_day(utcnow()) - timedelta(days=days - 1)
     rows = (await db.execute(
         select(BuilderRun.kind, BuilderRun.agent_id, BuilderRun.workflow_id, BuilderRun.status, BuilderRun.created_at)
-        .where(BuilderRun.owner_id == user.id, BuilderRun.purpose == "run")
+        .where(BuilderRun.owner_id == user.id, BuilderRun.purpose == "run", in_workspace(BuilderRun.workspace_id, user))
     )).all()
     live = {states.QUEUED, states.RUNNING}
     stale_before = utcnow() - timedelta(days=STALE_WAIT_DAYS)
@@ -241,13 +242,13 @@ async def overview(
     for s in (
         await db.execute(
             select(BuilderSchedule)
-            .where(BuilderSchedule.tenant_id == user.tenant_id, BuilderSchedule.enabled.is_(True))
+            .where(BuilderSchedule.tenant_id == user.tenant_id, BuilderSchedule.enabled.is_(True), in_workspace(BuilderSchedule.workspace_id, user))
             .order_by(BuilderSchedule.next_run_at.desc())
         )
     ).scalars():
         schedules[(s.kind, s.agent_id or s.workflow_id)] = s
     keys: dict[str, int] = {}
-    for k in (await db.execute(select(BuilderPublicKey).where(BuilderPublicKey.tenant_id == user.tenant_id, BuilderPublicKey.status == "active"))).scalars():
+    for k in (await db.execute(select(BuilderPublicKey).where(BuilderPublicKey.tenant_id == user.tenant_id, BuilderPublicKey.status == "active", in_workspace(BuilderPublicKey.workspace_id, user)))).scalars():
         keys[k.agent_id or k.workflow_id or ""] = keys.get(k.agent_id or k.workflow_id or "", 0) + 1
 
     items = []

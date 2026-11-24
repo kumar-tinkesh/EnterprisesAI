@@ -52,6 +52,7 @@ from builder.runs.service import (
     run_view,
 )
 from builder.runs.start import agent_run_problems, workflow_run_problems
+from builder.scope import in_workspace
 
 router = APIRouter()
 
@@ -231,7 +232,9 @@ async def list_runs(
     user: CurrentUser = Depends(get_end_user),
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(BuilderRun).where(BuilderRun.owner_id == user.id, BuilderRun.purpose == purpose)
+    query = select(BuilderRun).where(
+        BuilderRun.owner_id == user.id, BuilderRun.purpose == purpose, in_workspace(BuilderRun.workspace_id, user)
+    )
     if agent_id:
         query = query.where(BuilderRun.agent_id == agent_id)
     if workflow_id:
@@ -261,7 +264,7 @@ async def list_approvals(
     user: CurrentUser = Depends(get_end_user),
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(BuilderApproval).where(BuilderApproval.owner_id == user.id)
+    query = select(BuilderApproval).where(BuilderApproval.owner_id == user.id, in_workspace(BuilderApproval.workspace_id, user))
     if status_:
         query = query.where(BuilderApproval.status == status_)
     approvals = (await db.execute(query.order_by(BuilderApproval.created_at.desc()).limit(200))).scalars().all()

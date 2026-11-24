@@ -31,6 +31,7 @@ from builder.assist.drafts import X_GAP, draft_agent, draft_workflow
 from builder.assist.edit import Editor, EditError, normalize_ops, resolve
 from builder.assist.llm import AssistUnavailable, Usage, ask, ask_json
 from builder.assist.tools import search_tools
+from builder.scope import in_workspace
 from builder.graph.schema import WorkflowConfig, WorkflowEdge, WorkflowNode
 from builder.graph.validation import validate_graph
 from builder.models import BuilderAgent
@@ -146,7 +147,7 @@ async def assist_workflow_edit(payload: EditRequest, user: CurrentUser = Depends
     agents = {
         a.id: {"name": a.name, "role": a.role, "goal": a.goal, "instructions": a.instructions, "llm_provider": a.llm_provider,
                "llm_model": a.llm_model, "config": a.config or {}}
-        for a in (await db.execute(select(BuilderAgent).where(BuilderAgent.id.in_(agent_ids), BuilderAgent.tenant_id == user.tenant_id))).scalars()
+        for a in (await db.execute(select(BuilderAgent).where(BuilderAgent.id.in_(agent_ids), BuilderAgent.tenant_id == user.tenant_id, in_workspace(BuilderAgent.workspace_id, user)))).scalars()
     } if agent_ids else {}
     node_lines, edge_lines = _describe(payload.nodes, payload.edges, agents)
     usage = Usage()

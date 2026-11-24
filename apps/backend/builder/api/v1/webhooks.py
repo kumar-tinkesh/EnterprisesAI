@@ -108,7 +108,7 @@ async def create_webhook(
         raise HTTPException(status_code=422, detail="This agent belongs to a workflow; give the workflow a trigger instead.")
     token, token_hash, prefix = new_token()
     hook = BuilderWebhook(
-        tenant_id=user.tenant_id, owner_id=user.id, agent_id=agent.id, name=payload.name.strip(),
+        tenant_id=user.tenant_id, workspace_id=agent.workspace_id, owner_id=user.id, agent_id=agent.id, name=payload.name.strip(),
         token_hash=token_hash, token_prefix=prefix, instruction=payload.instruction.strip(),
         requests_per_minute=payload.requests_per_minute, enabled=True,
     )

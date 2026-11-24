@@ -13,7 +13,7 @@ from src.api.deps import CurrentUser
 from src.models import User
 
 from builder.agents.runtime import message_text
-from builder.models import BuilderAgent, BuilderApproval, BuilderNodeRun, BuilderRun, BuilderToolCall
+from builder.models import BuilderAgent, BuilderApproval, BuilderNodeRun, BuilderRun, BuilderToolCall, BuilderWorkflow
 from builder.runs import states
 from builder.runs.db import as_utc, utcnow
 from builder.runs.events import emit
@@ -58,8 +58,12 @@ async def create_run(
     from builder.agents.handoff import freeze_sub_agents
 
     definition = await freeze_sub_agents(db, user.tenant_id, definition)
+    # A run belongs to the workspace of what it runs (a share link or a
+    # schedule may start it from outside that workspace).
+    target = await db.get(BuilderAgent if kind == "agent" else BuilderWorkflow, target_id)
     run = BuilderRun(
         tenant_id=user.tenant_id,
+        workspace_id=target.workspace_id if target is not None else getattr(user, "workspace_id", None),
         owner_id=user.id,
         kind=kind,
         **({"agent_id": target_id} if kind == "agent" else {"workflow_id": target_id}),

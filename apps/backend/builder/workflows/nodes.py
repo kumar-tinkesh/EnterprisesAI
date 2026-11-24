@@ -26,6 +26,7 @@ from sqlalchemy import select
 
 from src.api.deps import CurrentUser
 
+from builder.scope import run_workspace
 from builder.agents.config import AgentConfig, merge_config, split_step_overrides
 from builder.agents.runtime import AgentContext, AgentFailed, GuardrailBlocked, run_agent
 from builder.agents.tools import resolve_agent_tools
@@ -302,7 +303,7 @@ async def run_tool_step(ctx: StepContext) -> NodeOutcome:
     if missing or problems:
         async with session_factory() as db:
             ask = BuilderApproval(
-                run_id=ctx.run_id, tenant_id=ctx.user.tenant_id, owner_id=ctx.user.id, kind=KIND_MISSING_INPUT,
+                run_id=ctx.run_id, tenant_id=ctx.user.tenant_id, workspace_id=run_workspace(ctx.run_id), owner_id=ctx.user.id, kind=KIND_MISSING_INPUT,
                 node_id=ctx.node_id, tool_name=tool.tool_name, risk=classify_tool(tool.tool_name, tool.annotations).risk,
                 payload={
                     "attempt": ctx.attempt, "server_name": tool.server_name, "tool_name": tool.tool_name,
@@ -508,7 +509,7 @@ async def run_human_approval(ctx: StepContext) -> NodeOutcome:
         ask = next((a for a in asks if (a.payload or {}).get("attempt") == ctx.attempt), None)
         if ask is None:
             ask = BuilderApproval(
-                run_id=ctx.run_id, tenant_id=ctx.user.tenant_id, owner_id=ctx.user.id, kind=states.KIND_HUMAN_STEP,
+                run_id=ctx.run_id, tenant_id=ctx.user.tenant_id, workspace_id=run_workspace(ctx.run_id), owner_id=ctx.user.id, kind=states.KIND_HUMAN_STEP,
                 node_id=ctx.node_id,
                 payload={
                     "attempt": ctx.attempt, "step": ctx.graph.label(ctx.node_id),

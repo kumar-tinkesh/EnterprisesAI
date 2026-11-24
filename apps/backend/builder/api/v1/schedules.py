@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.deps import CurrentUser
 from src.db.session import get_db
 
+from builder.scope import in_workspace
 from builder.api.v1.agents import get_agent
 from builder.api.v1.attachments import attachments_for_run
 from builder.api.v1.deps import get_end_user
@@ -132,7 +133,7 @@ def _check(cron: str, tz: str) -> None:
 
 async def _get(db: AsyncSession, schedule_id: str, user: CurrentUser) -> BuilderSchedule:
     s = (
-        await db.execute(select(BuilderSchedule).where(BuilderSchedule.id == schedule_id, BuilderSchedule.tenant_id == user.tenant_id))
+        await db.execute(select(BuilderSchedule).where(BuilderSchedule.id == schedule_id, BuilderSchedule.tenant_id == user.tenant_id, in_workspace(BuilderSchedule.workspace_id, user)))
     ).scalars().first()
     if s is None:
         raise HTTPException(status_code=404, detail="Schedule not found.")
@@ -153,7 +154,7 @@ async def list_schedules(
     user: CurrentUser = Depends(get_end_user),
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(BuilderSchedule).where(BuilderSchedule.tenant_id == user.tenant_id)
+    query = select(BuilderSchedule).where(BuilderSchedule.tenant_id == user.tenant_id, in_workspace(BuilderSchedule.workspace_id, user))
     if agent_id:
         query = query.where(BuilderSchedule.agent_id == agent_id)
     elif workflow_id:
@@ -184,7 +185,7 @@ async def create_schedule(payload: ScheduleCreate, user: CurrentUser = Depends(g
         if agent.workflow_id:
             raise HTTPException(status_code=409, detail="This agent belongs to a workflow; schedule the workflow instead.")
         s = BuilderSchedule(
-            tenant_id=user.tenant_id, owner_id=user.id, kind="agent", agent_id=agent.id,
+            tenant_id=user.tenant_id, workspace_id=agent.workspace_id, owner_id=user.id, kind="agent", agent_id=agent.id,
             cron="", timezone="UTC", enabled=False, input={"text": payload.input, "variables": {}, "attachments": files},
         )
     else:
@@ -195,7 +196,7 @@ async def create_schedule(payload: ScheduleCreate, user: CurrentUser = Depends(g
             raise HTTPException(status_code=409, detail="This workflow starts on its Schedule step; change the time there.")
         _need_filled(workflow, payload.variables)
         s = BuilderSchedule(
-            tenant_id=user.tenant_id, owner_id=user.id, kind="workflow", workflow_id=workflow.id, node_id=None,
+            tenant_id=user.tenant_id, workspace_id=workflow.workspace_id, owner_id=user.id, kind="workflow", workflow_id=workflow.id, node_id=None,
             cron="", timezone="UTC", enabled=False,
             input={"text": payload.input, "variables": dict(payload.variables), "attachments": files},
         )

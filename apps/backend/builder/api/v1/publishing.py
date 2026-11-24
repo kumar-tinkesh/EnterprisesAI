@@ -37,6 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.deps import CurrentUser
 from src.db.session import get_db
 
+from builder.scope import in_workspace
 from builder.agents.config import AgentConfig
 from builder.api.v1.agents import get_agent
 from builder.api.v1.deps import can_manage, get_end_user
@@ -211,7 +212,7 @@ async def create_key(kind: Kind, target_id: str, payload: KeyIn, user: CurrentUs
         })
     secret, digest, prefix = new_key()
     key = BuilderPublicKey(
-        tenant_id=target.tenant_id, owner_id=user.id, kind=kind[:-1], name=payload.name.strip(), key_hash=digest,
+        tenant_id=target.tenant_id, workspace_id=target.workspace_id, owner_id=user.id, kind=kind[:-1], name=payload.name.strip(), key_hash=digest,
         key_prefix=prefix, status="active", version=payload.version, allowed_origins=payload.allowed_origins,
         requests_per_minute=payload.requests_per_minute, daily_quota=payload.daily_quota,
         share_enabled=payload.share, share_slug=new_share_slug() if payload.share else None,
@@ -227,7 +228,7 @@ async def create_key(kind: Kind, target_id: str, payload: KeyIn, user: CurrentUs
 
 async def _key(db: AsyncSession, key_id: str, user: CurrentUser) -> BuilderPublicKey:
     key = (
-        await db.execute(select(BuilderPublicKey).where(BuilderPublicKey.id == key_id, BuilderPublicKey.tenant_id == user.tenant_id))
+        await db.execute(select(BuilderPublicKey).where(BuilderPublicKey.id == key_id, BuilderPublicKey.tenant_id == user.tenant_id, in_workspace(BuilderPublicKey.workspace_id, user)))
     ).scalars().first()
     if key is None or key.status == "revoked":
         raise HTTPException(status_code=404, detail="Key not found.")
@@ -395,7 +396,10 @@ async def published(days: int = 14, user: CurrentUser = Depends(get_end_user), d
     keys = (
         await db.execute(
             select(BuilderPublicKey)
-            .where(BuilderPublicKey.owner_id == user.id, BuilderPublicKey.tenant_id == user.tenant_id)
+            .where(
+                BuilderPublicKey.owner_id == user.id, BuilderPublicKey.tenant_id == user.tenant_id,
+                in_workspace(BuilderPublicKey.workspace_id, user),
+            )
             .order_by(BuilderPublicKey.created_at.desc())
         )
     ).scalars().all()

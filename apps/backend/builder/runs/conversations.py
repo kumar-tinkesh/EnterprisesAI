@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import CurrentUser
 
+from builder.scope import target_workspace
 from builder.models import BuilderApproval, BuilderConversation, BuilderNodeRun, BuilderRun, BuilderToolCall
 from builder.runs import states
 from builder.runs.db import as_utc, utcnow
@@ -80,7 +81,8 @@ async def open_conversation(
     if not new:
         return None
     conv = BuilderConversation(
-        tenant_id=user.tenant_id, owner_id=user.id, kind=kind, title=title_from(text), turn_count=0,
+        tenant_id=user.tenant_id, workspace_id=target_workspace(kind, target_id), owner_id=user.id,
+        kind=kind, title=title_from(text), turn_count=0,
         **({"agent_id": target_id} if kind == "agent" else {"workflow_id": target_id}),
     )
     db.add(conv)

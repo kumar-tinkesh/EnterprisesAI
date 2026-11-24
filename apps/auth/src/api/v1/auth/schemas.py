@@ -42,6 +42,7 @@ class AccountOut(BaseModel):
     full_name: str
     role: str
     tenant_id: str | None = None
+    workspace_id: str | None = None
 
 
 class AuthResponse(BaseModel):
@@ -58,6 +59,8 @@ class MeResponse(BaseModel):
     role: str
     tenant_id: str | None = None
     is_active: bool = True
+    workspace_id: str | None = None
+    workspace_name: str | None = None
 
 
 class AuditEventOut(BaseModel):

@@ -54,6 +54,8 @@ export interface Account {
   full_name: string;
   role: Role;
   tenant_id: string | null;
+  /** The workspace the current token works in (solo: their only one). */
+  workspace_id?: string | null;
 }
 
 export interface AuthPayload {

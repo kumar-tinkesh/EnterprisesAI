@@ -126,13 +126,9 @@ async def handle_callback(
         if user.role == Roles.TENANT_USER:
             user.role = Roles.SOLO_USER
 
-    first_ws = (
-        await db.execute(
-            select(Workspace.id)
-            .where(Workspace.tenant_id == user.tenant_id)
-            .limit(1)
-        )
-    ).scalars().first()
+    from src.api.v1.workspaces.service import default_workspace_id
+
+    first_ws = await default_workspace_id(db, user_id=user.id, role=user.role, tenant_id=user.tenant_id)
 
     pair = create_token_pair(
         sub=user.id, tid=user.tenant_id, wid=first_ws, role=user.role

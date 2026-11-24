@@ -50,6 +50,7 @@ from knowledge.models import KnowledgeBase, KnowledgeChunk, KnowledgeDocument
 from knowledge.services import ingest
 from knowledge.services.document_safety import DocumentUploadError, upload_limits, validate_uploaded_document
 from knowledge.services.retrieval import retrieve
+from builder.scope import in_workspace, workspace_of
 
 router = APIRouter()
 
@@ -131,7 +132,10 @@ def _doc_out(doc: KnowledgeDocument) -> DocumentOut:
 async def _get_kb(db: AsyncSession, kb_id: str, user: CurrentUser) -> KnowledgeBase:
     kb = (
         await db.execute(
-            select(KnowledgeBase).where(KnowledgeBase.id == kb_id, KnowledgeBase.tenant_id == user.tenant_id)
+            select(KnowledgeBase).where(
+                KnowledgeBase.id == kb_id, KnowledgeBase.tenant_id == user.tenant_id,
+                in_workspace(KnowledgeBase.workspace_id, user),
+            )
         )
     ).scalars().first()
     if kb is None:
@@ -167,6 +171,7 @@ async def create_knowledge_base(
 ):
     kb = KnowledgeBase(
         tenant_id=user.tenant_id,
+        workspace_id=workspace_of(user),
         owner_id=user.id,
         name=" ".join(payload.name.split()),
         description=payload.description.strip(),
@@ -185,7 +190,7 @@ async def list_knowledge_bases(
     kbs = (
         await db.execute(
             select(KnowledgeBase)
-            .where(KnowledgeBase.tenant_id == user.tenant_id)
+            .where(KnowledgeBase.tenant_id == user.tenant_id, in_workspace(KnowledgeBase.workspace_id, user))
             .order_by(KnowledgeBase.created_at.desc())
         )
     ).scalars().all()
