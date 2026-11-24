@@ -34,6 +34,10 @@ const LANGS = [
 const LANG_KEY = "voice-typing-lang";
 const BTN = 28;
 const MAX_RECORD_MS = 120_000;
+const ENGINE_KEY = "voice-typing-engine"; // "record" once the browser's own recognition heard nothing
+const SOUND_LEVEL = 0.02; // RMS above this counts as sound reaching the mic
+const SILENCE_STOP_MS = 2500; // after some speech, this much quiet ends the recording
+const NO_SOUND_NOTE = "The mic isn't picking up any sound. Check the input device in your system sound settings, or in Chrome at chrome://settings/content/microphone.";
 const NO_AUTOCOMPLETE = /^(email|username|current-password|new-password|one-time-code|tel|url|cc-|postal-code)/;
 const NO_INPUTMODE = new Set(["numeric", "decimal", "email", "tel", "url", "none"]);
 
@@ -101,6 +105,7 @@ export function VoiceTyping() {
     setLangState(l);
   };
   const [note, setNote] = useState<string | null>(null);
+  const [level, setLevel] = useState(0);
   const [supported, setSupported] = useState({ speech: false, record: false });
   const token = useAuthStore((s) => s.accessToken);
 
@@ -114,7 +119,13 @@ export function VoiceTyping() {
   const savedPadding = useRef<string>("");
 
   useEffect(() => {
-    setSupported({ speech: !!speechRecognition(), record: canRecord() });
+    let forceRecord = false;
+    try {
+      forceRecord = sessionStorage.getItem(ENGINE_KEY) === "record";
+    } catch {
+      /* storage blocked */
+    }
+    setSupported({ speech: !!speechRecognition() && !(forceRecord && canRecord()), record: canRecord() });
     setLang(readLang());
   }, []);
 
@@ -216,6 +227,7 @@ export function VoiceTyping() {
     rec.continuous = true;
     rec.interimResults = true;
     let fellBack = false;
+    let heardWords = false;
     rec.onresult = (e: Recognition) => {
       let finals = "";
       let interim = "";
@@ -224,6 +236,7 @@ export function VoiceTyping() {
         if (e.results[i].isFinal) finals += t;
         else interim += t;
       }
+      heardWords = true;
       insertAt.current.done = finals;
       write(`${finals} ${interim}`);
     };
@@ -233,7 +246,19 @@ export function VoiceTyping() {
         // e.g. Brave: has the API but no speech service — record instead.
         fellBack = true;
         setSupported((s) => ({ ...s, speech: false }));
+      } else if (e.error === "no-speech" && !heardWords && canServer) {
+        // Chrome's recognition got nothing (common on Linux: it listens on a
+        // different input than the page). Record instead; the level meter
+        // there shows whether any sound reaches the mic at all.
+        fellBack = true;
+        setSupported((s) => ({ ...s, speech: false }));
+        try {
+          sessionStorage.setItem(ENGINE_KEY, "record");
+        } catch {
+          /* storage blocked */
+        }
       } else if (e.error === "no-speech") setNote("Didn't hear anything. Tap the mic and try again.");
+      else if (e.error === "audio-capture") setNote(NO_SOUND_NOTE);
       else if (e.error !== "aborted") setNote("Voice typing stopped. Try again.");
     };
     rec.onend = () => {
@@ -264,19 +289,62 @@ export function VoiceTyping() {
     const type = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"].find((t) => MediaRecorder.isTypeSupported?.(t));
     const rec = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
     const chunks: Blob[] = [];
+
+    // Level meter: shows sound is arriving, ends the clip after a pause,
+    // and skips sending a clip that was only silence.
+    let peak = 0;
+    let lastSound = 0;
+    let raf = 0;
+    let audio: AudioContext | null = null;
+    try {
+      audio = new AudioContext();
+      const analyser = audio.createAnalyser();
+      analyser.fftSize = 1024;
+      audio.createMediaStreamSource(stream).connect(analyser);
+      const buf = new Float32Array(analyser.fftSize);
+      const started = performance.now();
+      const tick = () => {
+        analyser.getFloatTimeDomainData(buf);
+        let sum = 0;
+        for (const v of buf) sum += v * v;
+        const rms = Math.sqrt(sum / buf.length);
+        const now = performance.now();
+        if (rms > SOUND_LEVEL) lastSound = now;
+        peak = Math.max(peak, rms);
+        setLevel(Math.min(1, rms * 8));
+        if (rec.state === "recording") {
+          if (peak > SOUND_LEVEL && lastSound && now - lastSound > SILENCE_STOP_MS) rec.stop();
+          else if (peak <= SOUND_LEVEL && now - started > 4000) setNote(NO_SOUND_NOTE);
+          raf = requestAnimationFrame(tick);
+        }
+      };
+      raf = requestAnimationFrame(tick);
+    } catch {
+      peak = 1; // no meter available: don't second-guess the recording
+    }
+
     rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
     rec.onstop = async () => {
       stream.getTracks().forEach((t) => t.stop());
+      cancelAnimationFrame(raf);
+      void audio?.close();
+      setLevel(0);
       if (stopTimer.current) window.clearTimeout(stopTimer.current);
       recorder.current = null;
+      if (peak <= SOUND_LEVEL) {
+        setNote(NO_SOUND_NOTE);
+        return setPhase("idle");
+      }
       const blob = new Blob(chunks, { type: rec.mimeType || "audio/webm" });
       const t = useAuthStore.getState().accessToken;
       if (!blob.size || !t) return setPhase("idle");
       setPhase("writing");
       try {
         const { text } = await builderApi.transcribe(t, blob, langRef.current);
-        if (text) write(text);
-        else setNote("Didn't catch any words. Try again.");
+        if (text) {
+          write(text);
+          setNote(null);
+        } else setNote("Didn't catch any words. Try again.");
       } catch {
         setNote("Couldn't turn that into text. Try again.");
       } finally {
@@ -378,11 +446,20 @@ export function VoiceTyping() {
           role="status"
           aria-live="polite"
           data-voice-ui
-          style={{ top: above ? pos.top - 36 : pos.top + BTN + 6, left: Math.max(8, pos.left + BTN - 260), width: 260 }}
+          style={{
+            ...(above ? { bottom: window.innerHeight - pos.top + 6 } : { top: pos.top + BTN + 6 }),
+            left: Math.max(8, pos.left + BTN - 280),
+            width: 280,
+          }}
           className="pointer-events-none fixed z-[200] flex justify-end"
         >
           <span className="pointer-events-auto flex max-w-full items-center gap-2 rounded-md border border-[var(--border-strong)] bg-[var(--surface-raised)] px-2 py-1 text-xs text-[var(--text-muted)] shadow-lg">
-            {note ?? (phase === "writing" ? "Writing it down…" : "Listening…")}
+            {phase === "recording" && (
+              <span aria-hidden className="h-1.5 w-10 shrink-0 overflow-hidden rounded-full bg-[var(--surface-strong)]">
+                <span className="block h-full rounded-full bg-[var(--success)] transition-[width] duration-75" style={{ width: `${Math.round(level * 100)}%` }} />
+              </span>
+            )}
+            <span className="min-w-0">{note ?? (phase === "writing" ? "Writing it down…" : "Listening…")}</span>
             {active && (
               <button
                 type="button"
