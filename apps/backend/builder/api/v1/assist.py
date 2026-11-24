@@ -7,6 +7,7 @@
     POST /assist/workflow-edit     instruction + the open graph -> edited draft
     POST /assist/improve-text      polish one field's rough text
     POST /assist/guardrails        an agent's definition -> the guardrails it should have, and why
+    POST /assist/transcribe        a short voice clip -> text (mic button, browsers without speech recognition)
 
 Drafts are never saved here. The canvas shows them; saving goes through the
 agent/workflow endpoints, which check everything again (and turn each new
@@ -16,7 +17,7 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -250,3 +251,26 @@ async def suggest_guardrails(payload: GuardrailSuggestRequest, user: CurrentUser
         accepted[key] = value
     settings = GuardrailSettings.model_validate(accepted)
     return {"guardrails": settings.model_dump(), "reasoning": str(data.get("reasoning") or "")[:500]}
+
+
+@router.post("/assist/transcribe")
+async def transcribe_voice(
+    file: UploadFile = File(...),
+    language: str = Form(default="", max_length=8),
+    user: CurrentUser = Depends(get_end_user),
+):
+    """Voice clip -> text for the mic on text fields. Nothing is stored."""
+    from builder.assist import speech
+
+    audio = await file.read(speech.MAX_AUDIO_BYTES + 1)
+    if not audio:
+        raise HTTPException(status_code=400, detail="The recording was empty.")
+    if len(audio) > speech.MAX_AUDIO_BYTES:
+        raise HTTPException(status_code=413, detail="That recording is too long. Keep it under two minutes.")
+    # "hi-IN" -> "hi": Whisper takes the bare language code.
+    lang = language.split("-")[0].lower() or None
+    try:
+        text = await speech.transcribe(audio, file.filename or "voice.webm", file.content_type or "audio/webm", lang)
+    except AssistUnavailable as exc:
+        raise _unavailable(exc) from exc
+    return {"text": text}

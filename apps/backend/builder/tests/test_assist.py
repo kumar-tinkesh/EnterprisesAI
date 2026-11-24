@@ -461,3 +461,31 @@ async def test_improve_text_and_unavailable_model(tenant_client, llm, monkeypatc
     monkeypatch.setattr("builder.agents.runtime._gateway", lambda: Down())
     r = await tenant_client.post("/api/v1/builder/assist/agent", json={"description": "anything"})
     assert r.status_code == 503 and "isn't available" in r.json()["detail"]
+
+
+async def test_transcribe_voice(tenant_client, monkeypatch):
+    from builder.assist import speech
+
+    seen = {}
+
+    async def fake(audio, filename, content_type, language=None):
+        seen.update(audio=audio, filename=filename, language=language)
+        return "kal ki meetings ka summary bhejo"
+
+    monkeypatch.setattr(speech, "transcribe", fake)
+    r = await tenant_client.post(
+        "/api/v1/builder/assist/transcribe",
+        files={"file": ("voice.webm", b"opus-bytes", "audio/webm")},
+        data={"language": "hi-IN"},
+    )
+    assert r.status_code == 200 and r.json() == {"text": "kal ki meetings ka summary bhejo"}
+    assert seen == {"audio": b"opus-bytes", "filename": "voice.webm", "language": "hi"}
+
+    r = await tenant_client.post("/api/v1/builder/assist/transcribe", files={"file": ("voice.webm", b"", "audio/webm")})
+    assert r.status_code == 400
+
+    monkeypatch.undo()  # the real transcribe, with no speech keys set
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    r = await tenant_client.post("/api/v1/builder/assist/transcribe", files={"file": ("voice.webm", b"x", "audio/webm")})
+    assert r.status_code == 503 and "isn't set up" in r.json()["detail"]

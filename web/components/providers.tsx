@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 // Side effect: API calls skip ngrok's browser warning page when the app runs behind ngrok.
 import "@/lib/ngrok";
+import { VoiceTyping } from "@/components/voice-typing";
 
 export function Providers({ children }: { children: ReactNode }) {
   const [client] = useState(
@@ -16,5 +17,10 @@ export function Providers({ children }: { children: ReactNode }) {
       }),
   );
 
-  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+  return (
+    <QueryClientProvider client={client}>
+      {children}
+      <VoiceTyping />
+    </QueryClientProvider>
+  );
 }

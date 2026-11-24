@@ -13,7 +13,7 @@ export const PasswordInput = forwardRef<HTMLInputElement, Omit<InputProps, "type
   ({ className, ...props }, ref) => {
     const [shown, setShown] = useState(false);
     return (
-      <div className="relative">
+      <div className="relative" data-voice="off">
         <Input ref={ref} type={shown ? "text" : "password"} className={cn("pr-10", className)} {...props} />
         <button
           type="button"

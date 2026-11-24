@@ -252,6 +252,13 @@ export const builderApi = {
   ) => call<{ guardrails: GuardrailSettings; reasoning: string }>(t, "/assist/guardrails", "POST", body),
   improveText: (t: string, field: string, text: string, context = "") =>
     call<{ text: string }>(t, "/assist/improve-text", "POST", { field, text, context }),
+  /** A short voice clip -> text (the mic on text fields, when the browser can't do it itself). */
+  transcribe: (t: string, audio: Blob, language: string) => {
+    const body = new FormData();
+    body.append("file", audio, audio.type.includes("mp4") ? "voice.mp4" : audio.type.includes("ogg") ? "voice.ogg" : "voice.webm");
+    body.append("language", language);
+    return request<{ text: string }>(`${B}/assist/transcribe`, { method: "POST", body }, t, BACKEND_API_URL);
+  },
 };
 
 /** Share links (/api/v1/shared/{slug}): the info needs no login; running needs one. */
