@@ -1,15 +1,19 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Building2, ShieldCheck, Users } from "lucide-react";
+import { Sparkles } from "lucide-react";
 
 import { LoginForm } from "@/components/login-form";
 import { SignupForm } from "@/components/signup-form";
 import { rememberNext } from "@/lib/after-login";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
 type Mode = "login" | "signup";
+
+const COPY: Record<Mode, { title: string; sub: string }> = {
+  login: { title: "Welcome back", sub: "Log in to your workspace." },
+  signup: { title: "Create your account", sub: "Free to start. Build your first agent in minutes." },
+};
 
 export default function AuthPage() {
   const [mode, setMode] = useState<Mode>("login");
@@ -22,56 +26,52 @@ export default function AuthPage() {
   }, []);
 
   return (
-    <main className="flex min-h-screen items-center justify-center p-6">
-      <div className="flex w-full max-w-md flex-col gap-6">
-        <div className="text-center">
-          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-500 text-white shadow-lg shadow-indigo-500/20">
-            <Building2 className="h-6 w-6" />
+    <main className="flex min-h-dvh flex-col items-center justify-center px-4 py-10 sm:py-16">
+      <div className="w-full max-w-sm sm:max-w-md">
+        <div className="mb-8 flex items-center justify-center gap-2">
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--accent)] text-white">
+            <Sparkles className="h-4 w-4" />
+          </span>
+          <span className="text-base font-semibold tracking-tight">EnterpriseAI</span>
+        </div>
+
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5 sm:p-8">
+          <div role="tablist" aria-label="Log in or sign up" className="mb-6 grid grid-cols-2 gap-1 rounded-lg bg-[var(--bg)] p-1">
+            {(["login", "signup"] as Mode[]).map((m) => (
+              <button
+                key={m}
+                type="button"
+                role="tab"
+                aria-selected={mode === m}
+                onClick={() => setMode(m)}
+                className={cn(
+                  "h-9 rounded-md text-sm font-medium transition-colors cursor-pointer",
+                  mode === m
+                    ? "bg-[var(--surface-strong)] text-[var(--text)]"
+                    : "text-[var(--text-subtle)] hover:text-[var(--text)]",
+                )}
+              >
+                {m === "login" ? "Log in" : "Sign up"}
+              </button>
+            ))}
           </div>
-          <h1 className="text-2xl font-semibold">EnterpriseAI</h1>
-          <p className="text-sm text-zinc-500">
-            Vendor · Tenant · Workspace — one account, three dashboards
-          </p>
+
+          <h1 className="text-xl font-semibold tracking-tight">{COPY[mode].title}</h1>
+          <p className="mt-1 mb-6 text-sm text-[var(--text-muted)]">{COPY[mode].sub}</p>
+
+          {mode === "login" ? <LoginForm /> : <SignupForm />}
         </div>
 
-        <Card>
-          <CardHeader>
-            <div className="mb-2 grid grid-cols-2 gap-1 rounded-lg bg-zinc-100 p-1">
-              {(["login", "signup"] as Mode[]).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  onClick={() => setMode(m)}
-                  className={cn(
-                    "rounded-md py-2 text-sm font-medium capitalize transition-colors",
-                    mode === m
-                      ? "bg-white text-zinc-900 shadow-sm"
-                      : "text-zinc-500 hover:text-zinc-800",
-                  )}
-                >
-                  {m === "login" ? "Login" : "Sign up"}
-                </button>
-              ))}
-            </div>
-            <CardTitle className="text-lg">
-              {mode === "login" ? "Welcome back" : "Create an account"}
-            </CardTitle>
-            <CardDescription>
-              {mode === "login"
-                ? "Log in and we'll take you to your dashboard."
-                : "Pick a role to get the matching dashboard."}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {mode === "login" ? <LoginForm /> : <SignupForm />}
-          </CardContent>
-        </Card>
-
-        <div className="flex items-center justify-center gap-4 text-xs text-zinc-500">
-          <span className="flex items-center gap-1"><ShieldCheck className="h-3.5 w-3.5" /> Vendor</span>
-          <span className="flex items-center gap-1"><Users className="h-3.5 w-3.5" /> Tenant</span>
-          <span className="flex items-center gap-1"><Building2 className="h-3.5 w-3.5" /> Workspace</span>
-        </div>
+        <p className="mt-6 text-center text-sm text-[var(--text-subtle)]">
+          {mode === "login" ? "New here? " : "Already have an account? "}
+          <button
+            type="button"
+            onClick={() => setMode(mode === "login" ? "signup" : "login")}
+            className="font-medium text-[var(--link)] hover:underline cursor-pointer"
+          >
+            {mode === "login" ? "Create an account" : "Log in"}
+          </button>
+        </p>
       </div>
     </main>
   );

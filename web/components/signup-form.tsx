@@ -4,21 +4,15 @@ import { useRouter } from "next/navigation";
 import { useMutation } from "@tanstack/react-query";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
-import { UserPlus } from "lucide-react";
 
 import { api, ApiError } from "@/lib/api";
 import { afterLoginPath } from "@/lib/after-login";
-import {
-  ROLES,
-  signupSchema,
-  type SignupValues,
-} from "@/lib/validations";
+import { ROLES, signupSchema, type SignupValues } from "@/lib/validations";
 import { useAuthStore } from "@/stores/auth-store";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
-import { Field, FieldError } from "@/components/auth-fields";
-
+import { Field, FieldError, FormError, OrDivider, PasswordInput } from "@/components/auth-fields";
 import { GoogleButton } from "@/components/google-button";
 
 export function SignupForm() {
@@ -57,47 +51,39 @@ export function SignupForm() {
   });
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       <GoogleButton />
-      <div className="relative flex items-center justify-center">
-        <div className="absolute inset-0 flex items-center">
-          <div className="w-full border-t border-zinc-200" />
-        </div>
-        <span className="relative bg-white px-2 text-xs uppercase text-zinc-400">
-          Or continue with
-        </span>
-      </div>
-      <form onSubmit={onSubmit} className="space-y-4">
+      <OrDivider />
+      <form onSubmit={onSubmit} className="space-y-4" noValidate>
         <Field label="Full name">
-          <Input placeholder="Jane Doe" {...register("fullName")} />
+          <Input autoComplete="name" placeholder="Jane Doe" {...register("fullName")} />
           <FieldError msg={formState.errors.fullName?.message} />
         </Field>
 
         <Field label="Email">
-          <Input type="email" placeholder="you@company.com" {...register("email")} />
+          <Input type="email" autoComplete="email" inputMode="email" placeholder="you@company.com" {...register("email")} />
           <FieldError msg={formState.errors.email?.message} />
         </Field>
 
-        <Field label="Password">
-          <Input type="password" placeholder="At least 8 characters" {...register("password")} />
-          <FieldError msg={formState.errors.password?.message} />
-        </Field>
-
-        <Field label="Confirm password">
-          <Input type="password" placeholder="Repeat password" {...register("confirmPassword")} />
-          <FieldError msg={formState.errors.confirmPassword?.message} />
-        </Field>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Password">
+            <PasswordInput autoComplete="new-password" placeholder="8+ characters" {...register("password")} />
+            <FieldError msg={formState.errors.password?.message} />
+          </Field>
+          <Field label="Confirm password">
+            <PasswordInput autoComplete="new-password" placeholder="Same again" {...register("confirmPassword")} />
+            <FieldError msg={formState.errors.confirmPassword?.message} />
+          </Field>
+        </div>
 
         {mutation.isError && (
-          <p className="text-xs text-red-600">
-            {mutation.error instanceof ApiError
-              ? mutation.error.message
-              : "Failed to create account"}
-          </p>
+          <FormError>
+            {mutation.error instanceof ApiError ? mutation.error.message : "Couldn't create the account. Try again."}
+          </FormError>
         )}
 
-        <Button type="submit" disabled={mutation.isPending} className="w-full" size="lg">
-          {mutation.isPending ? <Spinner /> : <UserPlus />} Create account
+        <Button type="submit" disabled={mutation.isPending} className="h-10 w-full">
+          {mutation.isPending && <Spinner className="h-4 w-4" />} Create account
         </Button>
       </form>
     </div>

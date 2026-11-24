@@ -177,7 +177,7 @@ export default function VendorOverview() {
                 {o.top_accounts.map((a) => (
                   <li key={a.id}>
                     <Link href={`/vendor/accounts?open=${encodeURIComponent(a.id)}`} className="flex items-center gap-3 px-4 py-2.5 hover:bg-zinc-50">
-                      <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", a.is_personal ? "bg-purple-50 text-purple-700" : "bg-indigo-50 text-indigo-700")}>
+                      <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", a.is_personal ? "bg-zinc-100 text-zinc-600" : "bg-indigo-50 text-indigo-700")}>
                         {a.is_personal ? <User className="h-4 w-4" /> : <Building2 className="h-4 w-4" />}
                       </span>
                       <span className="min-w-0 flex-1 truncate text-sm text-zinc-900">{a.name}</span>

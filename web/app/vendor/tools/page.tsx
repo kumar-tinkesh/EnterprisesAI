@@ -706,7 +706,7 @@ function ConnectCredentialModal({
           )}
 
           {(server.auth_config as any)?.auth_type === "linkedin_cookie" && (
-            <p className="rounded-lg bg-sky-50 border border-sky-100 p-3 text-xs text-sky-800">
+            <p className="rounded-lg border border-indigo-200 bg-indigo-50 p-3 text-xs text-indigo-800">
               Paste a LinkedIn <span className="font-mono">li_at</span> cookie to test it: sign in to linkedin.com,
               open DevTools → Application → Cookies → https://www.linkedin.com and copy the value of li_at. Each
               user still connects their own cookie; runs always use the runner&apos;s.
@@ -848,7 +848,7 @@ function ConnectCredentialModal({
                 <span className="text-xs font-mono text-indigo-600 uppercase">Connecting</span>
               </div>
               <div className="h-2 w-full overflow-hidden rounded-full bg-indigo-200">
-                <div className="h-full bg-gradient-to-r from-indigo-500 via-sky-500 to-emerald-500 animate-pulse rounded-full w-full" />
+                <div className="h-full bg-indigo-500 animate-pulse rounded-full w-full" />
               </div>
               <p className="text-xs text-indigo-700">Running MCP protocol handshake and discovering tools list...</p>
             </div>
