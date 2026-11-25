@@ -144,8 +144,8 @@ export default function BuilderHome({
   return (
     <div
       className={cn(
-        "mx-auto flex h-full w-full max-w-6xl flex-col px-4 py-6 transition-all duration-300 sm:px-8 sm:py-8",
-        isActive ? "items-center justify-center" : "justify-start"
+        "animate-fade-up mx-auto flex h-full w-full max-w-6xl flex-col px-4 py-6 transition-all duration-300 sm:px-8 sm:py-8",
+        isActive ? "bg-ambient-grid items-center justify-center" : "justify-start"
       )}
     >
       {/* Header: Centered in active mode, top-aligned in idle mode */}
@@ -459,6 +459,15 @@ function AgentLibrary({
       t.description.toLowerCase().includes(needle)
   );
 
+  const isLoading =
+    tab === "templates"
+      ? templates.isLoading
+      : tab === "agent"
+        ? agents.isLoading
+        : tab === "workflow"
+          ? workflows.isLoading
+          : agents.isLoading || workflows.isLoading;
+
   return (
     <section className="space-y-4" aria-labelledby="library-heading">
       {/* Top Filter and Search Bar */}
@@ -540,8 +549,28 @@ function AgentLibrary({
 
       {/* Scrollable Container for Cards & Templates */}
       <div className="max-h-[calc(100dvh-370px)] min-h-[300px] overflow-y-auto pr-1.5 pb-4 pt-1 [scrollbar-width:thin] [scrollbar-color:rgba(255,255,255,0.15)_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-white/10 hover:[&::-webkit-scrollbar-thumb]:bg-white/20">
-        {/* View: Templates Tab */}
-        {tab === "templates" ? (
+        {/* Loading Skeleton */}
+        {isLoading ? (
+          <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2 lg:grid-cols-3" aria-busy="true">
+            {[0, 1, 2, 3, 4, 5].map((i) => (
+              <div key={i} className="flex flex-col justify-between rounded-xl border border-white/10 bg-[var(--surface)] p-4">
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="h-8 w-8 animate-pulse rounded-lg bg-white/[0.06]" />
+                    <div className="h-4 w-1/2 animate-pulse rounded bg-white/[0.06]" />
+                  </div>
+                  <div className="h-3 w-full animate-pulse rounded bg-white/[0.04]" />
+                  <div className="h-3 w-2/3 animate-pulse rounded bg-white/[0.04]" />
+                </div>
+                <div className="mt-4 flex justify-end gap-2 border-t border-white/5 pt-3">
+                  <div className="h-7 w-20 animate-pulse rounded-md bg-white/[0.05]" />
+                  <div className="h-7 w-16 animate-pulse rounded-md bg-white/[0.05]" />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : /* View: Templates Tab */
+        tab === "templates" ? (
           shownTemplates.length === 0 ? (
             <p className="rounded-xl border border-dashed border-white/10 px-4 py-12 text-center text-xs text-zinc-400">
               No templates match &ldquo;{query}&rdquo;.
@@ -589,10 +618,11 @@ function AgentLibrary({
         ) : (
           /* Modern Cards Grid */
           <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2 lg:grid-cols-3">
-            {shown.map((it) => (
+            {shown.map((it, idx) => (
               <div
                 key={`${it.kind}:${it.id}`}
-                className="group flex flex-col justify-between rounded-xl border border-white/10 bg-[var(--surface)] p-4 shadow-xs transition-all hover:border-white/20 hover:bg-[var(--surface-raised)]"
+                style={{ animationDelay: `${Math.min(idx * 35, 240)}ms` }}
+                className="card-lift animate-fade-up group flex flex-col justify-between rounded-xl border border-white/10 bg-[var(--surface)] p-4 shadow-xs hover:border-indigo-500/35 hover:bg-[var(--surface-raised)]"
               >
                 {/* Card Header & Content */}
                 <div className="space-y-2.5">
@@ -706,13 +736,14 @@ function TemplatesGrid({
 
   return (
     <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2 lg:grid-cols-3">
-      {templates.map((t) => {
+      {templates.map((t, idx) => {
         const sum = needsSummary(t.systems);
         const isBusy = create.isPending && create.variables === t.key;
         return (
           <div
             key={t.key}
-            className="flex flex-col justify-between rounded-xl border border-white/10 bg-[var(--surface)] p-4 shadow-xs transition-all hover:border-white/20 hover:bg-[var(--surface-raised)]"
+            style={{ animationDelay: `${Math.min(idx * 35, 240)}ms` }}
+            className="card-lift animate-fade-up flex flex-col justify-between rounded-xl border border-white/10 bg-[var(--surface)] p-4 shadow-xs hover:border-indigo-500/35 hover:bg-[var(--surface-raised)]"
           >
             <div className="space-y-2">
               <div className="flex items-center gap-2">

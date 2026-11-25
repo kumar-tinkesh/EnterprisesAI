@@ -103,7 +103,7 @@ export function Menu({
             role="menu"
             aria-label={label}
             style={{ top: pos?.top ?? 0, left: pos?.left ?? 0, width: menuWidth, visibility: pos ? "visible" : "hidden" }}
-            className="fixed z-[60] max-h-[75vh] overflow-y-auto rounded-lg border border-white/10 bg-[var(--surface-raised)] p-1.5 shadow-xl [scrollbar-width:thin]"
+            className="animate-scale-in fixed z-[60] max-h-[75vh] overflow-y-auto rounded-lg border border-white/10 bg-[var(--surface-raised)] p-1.5 shadow-2xl ring-1 ring-white/5 [scrollbar-width:thin]"
           >
             {items.map((it, idx) => (
               <div key={`${it.label}-${idx}`}>

@@ -181,15 +181,15 @@ export function UserShell({
           <button
             type="button"
             aria-label="Close menu"
-            className="absolute inset-0 bg-black/60 backdrop-blur-xs"
+            className="animate-fade-in absolute inset-0 bg-black/60 backdrop-blur-xs"
             onClick={() => setDrawer(false)}
           />
-          <div className="relative flex h-full w-72 max-w-[85vw] flex-col bg-[var(--surface)] border-r border-white/10 shadow-xl">
+          <div className="animate-slide-in-left relative flex h-full w-72 max-w-[85vw] flex-col border-r border-white/10 bg-[var(--surface)] shadow-2xl">
             <button
               type="button"
               onClick={() => setDrawer(false)}
               aria-label="Close menu"
-              className="absolute right-2 top-3 rounded-md p-1.5 text-zinc-400 hover:bg-white/5 cursor-pointer"
+              className="absolute right-2 top-3 rounded-md p-1.5 text-zinc-400 transition-colors hover:bg-white/5 hover:text-white cursor-pointer"
             >
               <X className="h-4 w-4" />
             </button>
@@ -206,7 +206,9 @@ export function UserShell({
       <aside
         className={cn(
           "hidden shrink-0 flex-col border-r border-white/10 bg-[var(--surface)] transition-[width] duration-200 md:flex",
-          collapsed ? "w-16" : "w-60",
+          collapsed
+            ? "w-16 min-w-16 max-w-16"
+            : "w-64 min-w-64 max-w-64 lg:w-72 lg:min-w-72 lg:max-w-72",
         )}
       >
         <SidebarBody
@@ -247,7 +249,7 @@ export function UserShell({
         )}
 
         {/* Content */}
-        <div className="flex-1 min-h-0">
+        <div key={fullBleed ? "bleed" : pathname} className={cn("flex-1 min-h-0", !fullBleed && "animate-fade-up")}>
           {fullBleed ? <div className="h-full [&>div]:h-full">{children}</div> : children}
         </div>
       </main>
@@ -257,8 +259,8 @@ export function UserShell({
 
 function Brand({ collapsed, home = "/user" }: { collapsed?: boolean; home?: string }) {
   return (
-    <Link href={home} className="flex min-w-0 items-center gap-2.5">
-      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--accent)] text-white shadow-sm ring-1 ring-white/20">
+    <Link href={home} className="group flex min-w-0 items-center gap-2.5">
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-[var(--accent)] to-[var(--accent-hover)] text-white shadow-[0_0_16px_-2px_rgba(99,102,241,0.55)] ring-1 ring-white/20 transition-transform duration-200 group-hover:scale-105">
         <Sparkles className="h-4 w-4" />
       </span>
       {!collapsed && (
@@ -373,31 +375,35 @@ function SidebarBody({
               title={collapsed ? label : undefined}
               aria-current={active ? "page" : undefined}
               className={cn(
-                "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors relative",
+                "group relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-150",
                 collapsed && "justify-center px-0",
                 active
-                  ? "bg-[var(--surface-strong)] text-[var(--text)]"
-                  : "text-zinc-500 hover:bg-zinc-50 hover:text-zinc-900",
+                  ? "bg-[var(--surface-strong)] text-[var(--text)] shadow-xs"
+                  : "text-zinc-400 hover:bg-white/[0.05] hover:text-zinc-100",
               )}
             >
+              {active && !collapsed && (
+                <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-r bg-[var(--accent-hover)]" aria-hidden />
+              )}
               <Icon
                 className={cn(
-                  "h-4 w-4 shrink-0",
-                  active ? "text-[var(--link)]" : "text-zinc-400",
+                  "h-4 w-4 shrink-0 transition-transform duration-150 group-hover:scale-105",
+                  active ? "text-[var(--link)]" : "text-zinc-400 group-hover:text-zinc-200",
                 )}
               />
               {!collapsed && <span className="truncate flex-1">{label}</span>}
               {showBadge && (
                 <span
                   className={cn(
-                    "flex items-center justify-center rounded-full bg-amber-500 text-white font-semibold tabular-nums",
+                    "relative flex items-center justify-center rounded-full bg-amber-500 text-white font-semibold tabular-nums",
                     collapsed
                       ? "absolute top-1 right-1 h-2 w-2 p-0"
                       : "h-5 min-w-5 px-1.5 text-[11px]",
                   )}
                   title={`${pendingCount} pending decision(s)`}
                 >
-                  {!collapsed && pendingCount}
+                  <span className="absolute inset-0 animate-ping rounded-full bg-amber-400 opacity-50" aria-hidden />
+                  <span className="relative">{!collapsed && pendingCount}</span>
                 </span>
               )}
             </Link>

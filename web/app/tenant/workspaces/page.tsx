@@ -91,7 +91,7 @@ export default function TenantWorkspacesPage() {
                 <button
                   type="button"
                   onClick={() => setOpenId(w.id)}
-                  className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-zinc-50 cursor-pointer"
+                  className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-white/[0.04] cursor-pointer"
                 >
                   <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-700">
                     <Building2 className="h-4 w-4" />

@@ -161,7 +161,7 @@ export function ProjectDetail({
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--bg)]">
       {/* Top Workspace Header */}
-      <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-white/10 px-3 py-2.5 sm:px-4">
+      <header className="flex min-h-14 shrink-0 flex-wrap items-center justify-between gap-3 border-b border-white/10 px-3 py-2 sm:px-4">
         {/* Left: Breadcrumbs & Quick Switcher */}
         <div className="flex items-center gap-2 min-w-0">
           {onToggleList && isListCollapsed && (
@@ -253,7 +253,7 @@ export function ProjectDetail({
         </div>
       </header>
 
-      <div className="min-h-0 flex-1">
+      <div key={tab} className="animate-fade-in min-h-0 flex-1">
         {loadError ? (
           <p className="m-5 rounded-lg bg-red-50 p-3 text-sm text-red-700">{loadError instanceof Error ? loadError.message : "Couldn't load it."}</p>
         ) : !item ? (

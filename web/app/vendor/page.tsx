@@ -201,8 +201,8 @@ export default function VendorOverview() {
 
 function Panel({ title, aside, children }: { title: string; aside?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <section className="overflow-hidden rounded-xl border border-zinc-200">
-      <div className="flex items-center justify-between gap-2 border-b border-zinc-100 px-4 py-3">
+    <section className="overflow-hidden rounded-xl border border-white/10 bg-[var(--surface)]">
+      <div className="flex items-center justify-between gap-2 border-b border-white/5 px-4 py-3">
         <h2 className="text-base font-semibold text-zinc-900">{title}</h2>
         {aside}
       </div>

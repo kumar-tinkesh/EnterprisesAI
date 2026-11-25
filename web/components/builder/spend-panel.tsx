@@ -78,8 +78,8 @@ export function SpendPanel({ token }: { token: string }) {
   const top = s?.by_item.filter((i) => i.cost_usd > 0) ?? [];
 
   return (
-    <section id="spend" className="scroll-mt-6 overflow-hidden rounded-lg border border-zinc-200">
-      <div className="flex items-center justify-between gap-2 border-b border-zinc-100 px-4 py-3">
+    <section id="spend" className="scroll-mt-6 overflow-hidden rounded-xl border border-white/10 bg-[var(--surface)]">
+      <div className="flex items-center justify-between gap-2 border-b border-white/5 px-4 py-3">
         <h2 className="text-base font-semibold text-zinc-900">Cost this month</h2>
         <span className="text-xs text-zinc-500">{s ? `${monthName(s.month_start)}, estimated` : ""}</span>
       </div>
@@ -110,7 +110,7 @@ export function SpendPanel({ token }: { token: string }) {
                   aria-valuenow={s.spent_usd}
                 >
                   <div
-                    className={cn("h-full rounded-full", s.status === "over" ? "bg-[var(--danger)]" : s.status === "near" ? "bg-amber-500" : "bg-[var(--accent)]")}
+                    className={cn("h-full rounded-full transition-all duration-700 ease-out", s.status === "over" ? "bg-[var(--danger)]" : s.status === "near" ? "bg-amber-500" : "bg-[var(--accent)]")}
                     style={{ width: `${Math.max(share * 100, s.spent_usd > 0 ? 2 : 0)}%` }}
                   />
                 </div>
@@ -188,7 +188,7 @@ export function SpendPanel({ token }: { token: string }) {
                         </span>
                       </div>
                       <div className="mt-1 h-1 overflow-hidden rounded-full bg-zinc-100" aria-hidden>
-                        <div className="h-full rounded-full bg-zinc-400" style={{ width: `${Math.max(part * 100, 2)}%` }} />
+                        <div className="h-full rounded-full bg-zinc-400 transition-all duration-700 ease-out" style={{ width: `${Math.max(part * 100, 2)}%` }} />
                       </div>
                     </li>
                   );

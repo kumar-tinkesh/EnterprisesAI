@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Bell,
   Check,
@@ -9,13 +9,9 @@ import {
   EyeOff,
   Key,
   Laptop,
-  Lock,
-  Moon,
   Palette,
   Plus,
   Shield,
-  Smartphone,
-  Sun,
   Trash2,
   User,
 } from "lucide-react";
@@ -24,6 +20,14 @@ import ProtectedDashboard from "@/components/protected-dashboard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar } from "@/components/builder/chat/chat-message";
+import {
+  APPEARANCE_KEY,
+  applyAppearance,
+  DEFAULT_APPEARANCE,
+  loadAppearance,
+  type AppearancePrefs,
+  type ThemeTone,
+} from "@/components/providers";
 import { useAuthStore } from "@/stores/auth-store";
 import { cn } from "@/lib/utils";
 
@@ -45,10 +49,26 @@ export default function SettingsPage() {
   const [fullName, setFullName] = useState(user?.full_name || "");
   const [profileSaved, setProfileSaved] = useState(false);
 
-  // Appearance state
-  const [themeTone, setThemeTone] = useState<"calm_dark" | "midnight" | "zinc">("calm_dark");
-  const [compactDensity, setCompactDensity] = useState(false);
-  const [animationsOn, setAnimationsOn] = useState(true);
+  // Appearance state (persisted & applied live across the whole app)
+  const [appearance, setAppearance] = useState<AppearancePrefs>(DEFAULT_APPEARANCE);
+  useEffect(() => {
+    setAppearance(loadAppearance());
+  }, []);
+  const updateAppearance = (patch: Partial<AppearancePrefs>) => {
+    setAppearance((prev) => {
+      const next = { ...prev, ...patch };
+      applyAppearance(next);
+      try {
+        window.localStorage.setItem(APPEARANCE_KEY, JSON.stringify(next));
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  };
+  const themeTone = appearance.theme;
+  const compactDensity = appearance.compact;
+  const animationsOn = appearance.animations;
 
   // Password state
   const [oldPassword, setOldPassword] = useState("");
@@ -165,7 +185,7 @@ export default function SettingsPage() {
         </aside>
 
         {/* Tab Content Panes */}
-        <div className="flex-1 min-w-0">
+        <div key={tab} className="animate-fade-up flex-1 min-w-0">
           {/* 1. Profile Tab */}
           {tab === "profile" && (
             <div className="rounded-xl border border-white/10 bg-[var(--surface)] p-6 space-y-6">
@@ -239,23 +259,23 @@ export default function SettingsPage() {
                 <label className="block text-xs font-medium text-zinc-300">Color Palette</label>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   {[
-                    { id: "calm_dark", label: "Calm Dark", desc: "Default neutral dark with indigo accent", border: "#4f46e5" },
-                    { id: "midnight", label: "Deep Midnight", desc: "High contrast pure black & violet", border: "#8b5cf6" },
-                    { id: "zinc", label: "Graphite Zinc", desc: "Subtle cool grey with emerald touch", border: "#10b981" },
+                    { id: "calm_dark" as ThemeTone, label: "Calm Dark", desc: "Default neutral dark with indigo accent", border: "#4f46e5" },
+                    { id: "midnight" as ThemeTone, label: "Deep Midnight", desc: "High contrast pure black & violet", border: "#8b5cf6" },
+                    { id: "zinc" as ThemeTone, label: "Graphite Zinc", desc: "Subtle cool grey with emerald touch", border: "#10b981" },
                   ].map((t) => (
                     <button
                       key={t.id}
                       type="button"
-                      onClick={() => setThemeTone(t.id as any)}
+                      onClick={() => updateAppearance({ theme: t.id })}
                       className={cn(
-                        "rounded-xl border p-4 text-left transition-all cursor-pointer relative",
+                        "card-lift rounded-xl border p-4 text-left cursor-pointer relative",
                         themeTone === t.id
                           ? "border-[var(--accent)] bg-white/[0.06] ring-1 ring-[var(--accent)]"
                           : "border-white/10 bg-white/[0.02] hover:border-white/20",
                       )}
                     >
                       <div className="flex items-center justify-between mb-2">
-                        <span className="h-3.5 w-3.5 rounded-full" style={{ backgroundColor: t.border }} />
+                        <span className="h-3.5 w-3.5 rounded-full shadow-xs" style={{ backgroundColor: t.border }} />
                         {themeTone === t.id && <Check className="h-3.5 w-3.5 text-[var(--link)]" />}
                       </div>
                       <p className="text-sm font-semibold text-zinc-200">{t.label}</p>
@@ -271,11 +291,10 @@ export default function SettingsPage() {
                     <p className="text-sm font-medium text-zinc-200">Compact Density</p>
                     <p className="text-xs text-zinc-500">Reduces margins and padding in tables and graph nodes.</p>
                   </div>
-                  <input
-                    type="checkbox"
+                  <ToggleSwitch
                     checked={compactDensity}
-                    onChange={(e) => setCompactDensity(e.target.checked)}
-                    className="h-4 w-4 rounded border-zinc-700 text-indigo-600 focus:ring-indigo-500"
+                    onChange={(v) => updateAppearance({ compact: v })}
+                    label="Compact Density"
                   />
                 </div>
 
@@ -284,11 +303,10 @@ export default function SettingsPage() {
                     <p className="text-sm font-medium text-zinc-200">Fluid Canvas Animations</p>
                     <p className="text-xs text-zinc-500">Show live edge flow particles and streaming text shimmer.</p>
                   </div>
-                  <input
-                    type="checkbox"
+                  <ToggleSwitch
                     checked={animationsOn}
-                    onChange={(e) => setAnimationsOn(e.target.checked)}
-                    className="h-4 w-4 rounded border-zinc-700 text-indigo-600 focus:ring-indigo-500"
+                    onChange={(v) => updateAppearance({ animations: v })}
+                    label="Fluid Canvas Animations"
                   />
                 </div>
               </div>
@@ -465,11 +483,10 @@ export default function SettingsPage() {
                     <p className="text-sm font-medium text-zinc-200">Execution Failure Alerts</p>
                     <p className="text-xs text-zinc-500">Receive immediate notifications when an automated workflow or agent encounters a fatal error.</p>
                   </div>
-                  <input
-                    type="checkbox"
+                  <ToggleSwitch
                     checked={notifyOnFail}
-                    onChange={(e) => setNotifyOnFail(e.target.checked)}
-                    className="h-4 w-4 rounded border-zinc-700 text-indigo-600 focus:ring-indigo-500"
+                    onChange={setNotifyOnFail}
+                    label="Execution Failure Alerts"
                   />
                 </div>
 
@@ -478,11 +495,10 @@ export default function SettingsPage() {
                     <p className="text-sm font-medium text-zinc-200">Pending Decision / Approval Alerts</p>
                     <p className="text-xs text-zinc-500">Alert me when an agent asks for human-in-the-loop authorization before sending an email or updating data.</p>
                   </div>
-                  <input
-                    type="checkbox"
+                  <ToggleSwitch
                     checked={notifyOnApproval}
-                    onChange={(e) => setNotifyOnApproval(e.target.checked)}
-                    className="h-4 w-4 rounded border-zinc-700 text-indigo-600 focus:ring-indigo-500"
+                    onChange={setNotifyOnApproval}
+                    label="Pending Decision / Approval Alerts"
                   />
                 </div>
 
@@ -491,11 +507,10 @@ export default function SettingsPage() {
                     <p className="text-sm font-medium text-zinc-200">Weekly Executive Digest</p>
                     <p className="text-xs text-zinc-500">Receive a weekly summary of token usage, most active agents, and cost savings.</p>
                   </div>
-                  <input
-                    type="checkbox"
+                  <ToggleSwitch
                     checked={weeklyDigest}
-                    onChange={(e) => setWeeklyDigest(e.target.checked)}
-                    className="h-4 w-4 rounded border-zinc-700 text-indigo-600 focus:ring-indigo-500"
+                    onChange={setWeeklyDigest}
+                    label="Weekly Executive Digest"
                   />
                 </div>
               </div>
@@ -504,5 +519,36 @@ export default function SettingsPage() {
         </div>
       </div>
     </ProtectedDashboard>
+  );
+}
+
+function ToggleSwitch({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      onClick={() => onChange(!checked)}
+      className={cn(
+        "relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border transition-colors duration-200",
+        checked ? "border-[var(--accent)] bg-[var(--accent)]" : "border-white/15 bg-white/10",
+      )}
+    >
+      <span
+        className={cn(
+          "inline-block h-3.5 w-3.5 rounded-full bg-white shadow-xs transition-transform duration-200",
+          checked ? "translate-x-4.5" : "translate-x-0.5",
+        )}
+      />
+    </button>
   );
 }

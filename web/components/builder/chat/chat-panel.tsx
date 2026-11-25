@@ -414,7 +414,7 @@ export function ChatPanel({
       {/* Main Chat Conversation Area */}
       <div className="flex min-w-0 flex-1 flex-col">
         {/* Header */}
-        <header className="flex shrink-0 items-center gap-2 border-b border-white/10 px-3 py-2 sm:px-4">
+        <header className="flex h-12 shrink-0 items-center gap-2 border-b border-white/10 px-3 sm:px-4">
           {showSessionSidebar && !sessionsOpen && (
             <button
               type="button"
@@ -439,8 +439,8 @@ export function ChatPanel({
               {chat ? chat.title : "New chat"}
             </p>
           </div>
-          {/* Already in a new, empty chat: nothing for "New chat" to do. */}
-          {(chatId || pendingText !== null) && (
+          {/* Already in a new, empty chat, or sidebar New Chat is visible: avoid duplicate button. */}
+          {(chatId || pendingText !== null) && (!showSessionSidebar || !sessionsOpen) && (
             <button
               type="button"
               onClick={newChat}
@@ -500,7 +500,7 @@ export function ChatPanel({
             {runs.isError && <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">Couldn&apos;t load this chat.</p>}
 
             {empty && (
-              <div className="mx-auto flex max-w-lg flex-col items-center py-10 text-center">
+              <div className="animate-fade-up mx-auto flex max-w-lg flex-col items-center py-10 text-center">
                 <Avatar name={name} size={56} />
                 <h2 className="mt-4 text-xl font-semibold text-zinc-900">{name}</h2>
                 {sub && <p className={cn("mt-1.5 line-clamp-3", welcome ? "text-sm text-zinc-700" : "text-sm text-zinc-500")}>{sub}</p>}
@@ -538,10 +538,10 @@ export function ChatPanel({
                           type="button"
                           disabled={busy}
                           onClick={() => submit(s.prompt)}
-                          className="group flex h-full w-full items-center justify-between gap-2 rounded-lg border border-zinc-200 p-3 text-left text-sm text-zinc-700 transition-colors hover:border-zinc-300 hover:bg-zinc-50 hover:text-zinc-900 disabled:opacity-50 cursor-pointer"
+                          className="card-lift group flex h-full w-full items-center justify-between gap-2 rounded-xl border border-white/10 bg-[var(--surface)] p-3 text-left text-sm text-zinc-300 hover:border-[var(--accent-border)] hover:bg-[var(--surface-raised)] hover:text-white disabled:opacity-50 cursor-pointer"
                         >
-                          <span className="flex items-center gap-2"><Sparkles className="h-4 w-4 shrink-0 text-zinc-400" /> {s.label}</span>
-                          <ChevronRight className="h-4 w-4 shrink-0 text-zinc-400 group-hover:text-zinc-900" />
+                          <span className="flex items-center gap-2"><Sparkles className="h-4 w-4 shrink-0 text-[var(--link)]" /> {s.label}</span>
+                          <ChevronRight className="h-4 w-4 shrink-0 text-zinc-400 transition-transform group-hover:translate-x-0.5 group-hover:text-white" />
                         </button>
                       </li>
                     ))}
@@ -598,7 +598,7 @@ export function ChatPanel({
           <button
             type="button"
             onClick={() => end.current?.scrollIntoView({ behavior: "smooth", block: "end" })}
-            className="absolute bottom-3 left-1/2 z-10 inline-flex -translate-x-1/2 items-center gap-1 rounded-full border border-zinc-200 bg-[var(--surface-raised)] px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-lg hover:text-zinc-900 cursor-pointer"
+            className="animate-fade-up absolute bottom-3 left-1/2 z-10 inline-flex -translate-x-1/2 items-center gap-1 rounded-full border border-white/15 bg-[var(--surface-raised)] px-3 py-1.5 text-xs font-medium text-zinc-200 shadow-xl transition-colors hover:text-white cursor-pointer"
           >
             <ArrowDown className="h-3 w-3" /> Jump to latest
           </button>
@@ -675,7 +675,7 @@ export function ChatPanel({
               e.preventDefault();
               submit();
             }}
-            className="rounded-2xl border border-[var(--border-strong)] bg-[var(--surface)] px-3 pb-2 pt-3 transition focus-within:border-[var(--accent-hover)]"
+            className="rounded-2xl border border-[var(--border-strong)] bg-[var(--surface)] px-3 pb-2 pt-3 shadow-sm transition-all duration-200 focus-within:border-[var(--accent-hover)] focus-within:shadow-[0_0_24px_-6px_rgba(99,102,241,0.3)]"
           >
             {(files.length > 0 || uploading > 0 || fileError) && (
               <div className="mb-2 flex flex-wrap items-center gap-1.5">

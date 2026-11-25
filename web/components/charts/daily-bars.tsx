@@ -52,7 +52,7 @@ export function DailyBars({
   const bad = badLabel.toLowerCase();
 
   return (
-    <section className="rounded-lg border border-zinc-200 p-4 sm:p-5" aria-label={title}>
+    <section className="rounded-xl border border-white/10 bg-[var(--surface)] p-4 sm:p-5" aria-label={title}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-base font-semibold text-zinc-900">{title}</h2>
@@ -62,7 +62,7 @@ export function DailyBars({
         <div className="flex items-center gap-3 text-xs text-zinc-600">
           <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm" style={{ background: GOOD }} /><CheckCircle2 className="h-3 w-3" /> {goodLabel}</span>
           {!single && <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm" style={{ background: CRITICAL }} /><XCircle className="h-3 w-3" /> {badLabel}</span>}
-          <button type="button" onClick={() => setAsTable((t) => !t)} className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1 hover:bg-zinc-50 cursor-pointer" aria-pressed={asTable}>
+          <button type="button" onClick={() => setAsTable((t) => !t)} className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1 transition-colors hover:bg-zinc-50 cursor-pointer" aria-pressed={asTable}>
             <Table2 className="h-3 w-3" /> {asTable ? "Chart" : "Table"}
           </button>
         </div>
@@ -71,7 +71,7 @@ export function DailyBars({
       {total === 0 ? (
         <div className="mt-4 flex h-40 items-center justify-center rounded-lg border border-dashed border-zinc-200 px-4 text-center text-sm text-zinc-500">{empty}</div>
       ) : asTable ? (
-        <div className="mt-4 max-h-72 overflow-y-auto">
+        <div className="animate-fade-in mt-4 max-h-72 overflow-y-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs uppercase tracking-wider text-zinc-500">
@@ -82,7 +82,7 @@ export function DailyBars({
             </thead>
             <tbody className="divide-y divide-zinc-100">
               {days.map((d) => (
-                <tr key={d.date}>
+                <tr key={d.date} className="transition-colors hover:bg-white/[0.03]">
                   <td className="py-1.5 text-zinc-700">{dayLabel(d.date)}</td>
                   <td className="py-1.5 text-right tabular-nums text-zinc-900">{d.good}</td>
                   {!single && <td className="py-1.5 text-right tabular-nums text-zinc-900">{d.bad}</td>}
@@ -106,7 +106,7 @@ export function DailyBars({
                 return (
                   <div
                     key={d.date}
-                    className="relative flex flex-1 flex-col justify-end pb-5 outline-none"
+                    className="group relative flex flex-1 flex-col justify-end pb-5 outline-none"
                     onMouseEnter={() => setHover(i)}
                     onMouseLeave={() => setHover(null)}
                     onFocus={() => setHover(i)}
@@ -115,17 +115,21 @@ export function DailyBars({
                     aria-label={single ? `${dayLabel(d.date)}: ${d.good} ${good}` : `${dayLabel(d.date)}: ${d.good} ${good}, ${d.bad} ${bad}`}
                   >
                     <div
-                      className={cn("flex w-full flex-col justify-end gap-[2px] transition-opacity", hover !== null && hover !== i && "opacity-60")}
-                      style={{ height: `calc((100% - 1.25rem) * ${n / top})` }}
+                      className={cn(
+                        "animate-bar-grow flex w-full flex-col justify-end gap-[2px] transition-all duration-200",
+                        hover !== null && hover !== i && "opacity-45",
+                        hover === i && "brightness-110 scale-x-[1.06]",
+                      )}
+                      style={{ height: `calc((100% - 1.25rem) * ${n / top})`, animationDelay: `${Math.min(i * 22, 300)}ms` }}
                     >
                       {d.bad > 0 && <div className="w-full rounded-t-[4px]" style={{ flexGrow: d.bad, background: CRITICAL, minHeight: 2 }} />}
                       {d.good > 0 && <div className={cn("w-full", d.bad > 0 ? "" : "rounded-t-[4px]")} style={{ flexGrow: d.good, background: GOOD, minHeight: 2 }} />}
                     </div>
-                    <span className={cn("absolute bottom-0 left-1/2 -translate-x-1/2 whitespace-nowrap text-xs text-zinc-500", i % 2 === (days.length - 1) % 2 ? "" : "hidden @3xl:inline")}>
+                    <span className={cn("absolute bottom-0 left-1/2 -translate-x-1/2 whitespace-nowrap text-xs text-zinc-500 transition-colors", hover === i && "text-zinc-200 font-medium", i % 2 === (days.length - 1) % 2 ? "" : "hidden @3xl:inline")}>
                       {dayLabel(d.date)}
                     </span>
                     {hover === i && (
-                      <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 -translate-x-1/2 whitespace-nowrap rounded-md border border-zinc-200 bg-[var(--surface-raised)] px-2.5 py-1.5 text-xs shadow-lg">
+                      <div className="animate-fade-in pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 -translate-x-1/2 whitespace-nowrap rounded-lg border border-white/15 bg-[var(--surface-raised)] px-2.5 py-1.5 text-xs shadow-xl">
                         <p className="font-medium text-zinc-900">{dayLabel(d.date)} <span className="font-normal text-zinc-400">({n} total)</span></p>
                         <p className="flex items-center gap-1 text-zinc-600"><CheckCircle2 className="h-3 w-3" style={{ color: GOOD }} /> {d.good} {good}{n > 0 ? ` (${Math.round((d.good / n) * 100)}%)` : ""}</p>
                         {!single && d.bad > 0 && <p className="flex items-center gap-1 text-zinc-600"><XCircle className="h-3 w-3" style={{ color: CRITICAL }} /> {d.bad} {bad}</p>}

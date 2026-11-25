@@ -155,12 +155,13 @@ function KeyRow({
             <span className="font-medium text-zinc-100">{k.name}</span>
             <span
               className={cn(
-                "rounded-full px-2 py-0.5 text-xs font-medium border",
+                "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium border",
                 active
                   ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-400"
                   : "border-white/10 bg-white/[0.05] text-zinc-400"
               )}
             >
+              {active && <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" aria-hidden />}
               {active ? "Live" : "Paused"}
             </span>
             {k.name !== way.title && <span className="text-zinc-400">{way.title}</span>}
@@ -364,8 +365,8 @@ function VisitorPreviewDialog({
       aria-modal="true"
       aria-label={`Visitor Preview: ${item.name}`}
     >
-      <div className="fixed inset-0 bg-black/80 backdrop-blur-xs" onClick={onClose} />
-      <div className="relative flex flex-col h-[92vh] w-full max-w-5xl overflow-hidden rounded-2xl border border-white/10 bg-[var(--surface-raised)] shadow-2xl">
+      <div className="animate-fade-in fixed inset-0 bg-black/80 backdrop-blur-xs" onClick={onClose} />
+      <div className="animate-scale-in relative flex flex-col h-[92vh] w-full max-w-5xl overflow-hidden rounded-2xl border border-white/10 bg-[var(--surface-raised)] shadow-2xl">
         {/* Header bar */}
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3 sm:px-6">
           <div className="flex items-center gap-2.5 min-w-0">
@@ -476,7 +477,7 @@ function VisitorPreviewDialog({
         {/* Content View / Frame */}
         <div className="relative flex-1 overflow-auto bg-[var(--bg)] p-4 flex items-center justify-center">
           {showQr && (
-            <div className="absolute top-4 right-4 z-20 flex flex-col items-center rounded-xl border border-white/10 bg-[var(--surface-raised)] p-4 shadow-2xl">
+            <div className="animate-scale-in absolute top-4 right-4 z-20 flex flex-col items-center rounded-xl border border-white/10 bg-[var(--surface-raised)] p-4 shadow-2xl">
               <p className="text-xs font-medium text-zinc-200 mb-2">Scan with Phone</p>
               <div className="rounded-lg bg-white p-2">
                 <canvas ref={canvasRef} />
@@ -486,7 +487,7 @@ function VisitorPreviewDialog({
           )}
 
           {device === "desktop" ? (
-            <div className="h-full w-full rounded-xl border border-white/10 bg-[var(--surface)] shadow-xl overflow-hidden flex flex-col">
+            <div key="desktop" className="animate-scale-in h-full w-full rounded-xl border border-white/10 bg-[var(--surface)] shadow-xl overflow-hidden flex flex-col">
               <div className="flex items-center gap-1.5 border-b border-white/10 bg-white/[0.03] px-3 py-2">
                 <div className="flex gap-1.5">
                   <div className="h-2.5 w-2.5 rounded-full bg-red-500/80" />
@@ -504,7 +505,7 @@ function VisitorPreviewDialog({
               />
             </div>
           ) : (
-            <div className="relative flex flex-col h-full max-h-[720px] w-[375px] rounded-[40px] border-[10px] border-zinc-800 bg-black shadow-2xl overflow-hidden ring-1 ring-white/10">
+            <div key="mobile" className="animate-scale-in relative flex flex-col h-full max-h-[720px] w-[375px] rounded-[40px] border-[10px] border-zinc-800 bg-black shadow-2xl overflow-hidden ring-1 ring-white/10">
               {/* Dynamic Island */}
               <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 flex h-4 w-24 items-center justify-center rounded-full bg-zinc-900">
                 <div className="h-2 w-2 rounded-full bg-zinc-800 mr-2" />

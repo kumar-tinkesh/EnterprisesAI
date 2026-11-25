@@ -92,8 +92,8 @@ export function AuditLogsPanel({
   const hidden = logs.filter((l) => NOISE.has(l.action)).length;
 
   return (
-    <section className="overflow-hidden rounded-xl border border-zinc-200">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-100 px-4 py-3">
+    <section className="overflow-hidden rounded-xl border border-white/10 bg-[var(--surface)]">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/5 px-4 py-3">
         <h2 className="text-base font-semibold text-zinc-900">{title}</h2>
         {moreHref && (
           <a href={moreHref} className="text-sm font-medium text-zinc-700 hover:text-zinc-900">

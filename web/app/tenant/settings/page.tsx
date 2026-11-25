@@ -114,7 +114,7 @@ export default function TenantSettingsPage() {
                 type="button"
                 onClick={() => setSsoProvider(p.id as any)}
                 className={cn(
-                  "rounded-xl border p-4 text-left transition-all cursor-pointer",
+                  "card-lift rounded-xl border p-4 text-left cursor-pointer",
                   ssoProvider === p.id
                     ? "border-[var(--accent)] bg-white/[0.06] ring-1 ring-[var(--accent)]"
                     : "border-white/10 bg-white/[0.02] hover:border-white/20",
@@ -153,12 +153,24 @@ export default function TenantSettingsPage() {
                 <p className="text-sm font-medium text-zinc-200">Enforce Mandatory Two-Factor Authentication</p>
                 <p className="text-xs text-zinc-500">Require all members to register an authenticator app before accessing workspace agents.</p>
               </div>
-              <input
-                type="checkbox"
-                checked={enforce2FA}
-                onChange={(e) => setEnforce2FA(e.target.checked)}
-                className="h-4 w-4 rounded border-zinc-700 text-indigo-600 focus:ring-indigo-500"
-              />
+              <button
+                type="button"
+                role="switch"
+                aria-checked={enforce2FA}
+                aria-label="Enforce Mandatory Two-Factor Authentication"
+                onClick={() => setEnforce2FA(!enforce2FA)}
+                className={cn(
+                  "relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border transition-colors duration-200",
+                  enforce2FA ? "border-[var(--accent)] bg-[var(--accent)]" : "border-white/15 bg-white/10",
+                )}
+              >
+                <span
+                  className={cn(
+                    "inline-block h-3.5 w-3.5 rounded-full bg-white shadow-xs transition-transform duration-200",
+                    enforce2FA ? "translate-x-4.5" : "translate-x-0.5",
+                  )}
+                />
+              </button>
             </div>
 
             <div className="flex items-center justify-between gap-4 py-2">

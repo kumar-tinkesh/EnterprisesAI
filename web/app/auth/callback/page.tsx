@@ -111,8 +111,8 @@ function AuthCallbackContent() {
 
 export default function AuthCallbackPage() {
   return (
-    <main className="flex min-h-dvh items-center justify-center px-4 py-10">
-      <div className="w-full max-w-sm rounded-xl border border-[var(--border)] bg-[var(--surface)] p-6 text-center sm:p-8">
+    <main className="bg-ambient-grid flex min-h-dvh items-center justify-center px-4 py-10">
+      <div className="animate-scale-in w-full max-w-sm rounded-2xl border border-white/10 bg-[var(--surface)]/95 p-6 text-center shadow-2xl ring-1 ring-white/5 backdrop-blur-md sm:p-8">
         <Suspense fallback={<Waiting text="Loading…" />}>
           <AuthCallbackContent />
         </Suspense>

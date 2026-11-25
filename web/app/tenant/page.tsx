@@ -228,7 +228,7 @@ export default function TenantDashboard() {
 
 function Stat({ icon, label, value }: { icon: React.ReactNode; label: string; value: React.ReactNode }) {
   return (
-    <div className="rounded-xl border border-zinc-200 p-4">
+    <div className="card-lift animate-fade-up rounded-xl border border-white/10 bg-[var(--surface)] p-4">
       <div className="flex items-center gap-1.5 text-xs font-medium text-zinc-500">{icon}{label}</div>
       <p className="mt-1.5 text-2xl font-semibold tabular-nums text-zinc-900">{value}</p>
     </div>
@@ -258,8 +258,8 @@ function AddMemberModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-      <div className="w-full max-w-md rounded-xl bg-[var(--surface-raised)] p-6 shadow-xl">
+    <div className="animate-fade-in fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <div className="animate-scale-in w-full max-w-md rounded-xl border border-white/10 bg-[var(--surface-raised)] p-6 shadow-2xl">
         <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
           <h3 className="text-lg font-semibold text-zinc-900">Add Tenant Member</h3>
           <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600 cursor-pointer">
@@ -353,8 +353,8 @@ function EditMemberModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-      <div className="w-full max-w-md rounded-xl bg-[var(--surface-raised)] p-6 shadow-xl">
+    <div className="animate-fade-in fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <div className="animate-scale-in w-full max-w-md rounded-xl border border-white/10 bg-[var(--surface-raised)] p-6 shadow-2xl">
         <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
           <h3 className="text-lg font-semibold text-zinc-900">Edit Member</h3>
           <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600 cursor-pointer">

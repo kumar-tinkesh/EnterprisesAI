@@ -258,11 +258,11 @@ export function CommandPalette({
       <button
         type="button"
         aria-label="Close command palette"
-        className="fixed inset-0 bg-black/60 backdrop-blur-sm transition-opacity"
+        className="animate-fade-in fixed inset-0 bg-black/65 backdrop-blur-sm transition-opacity"
         onClick={onClose}
       />
 
-      <div className="relative flex max-h-[80dvh] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-[var(--surface-raised)] shadow-2xl ring-1 ring-white/10">
+      <div className="animate-scale-in relative flex max-h-[80dvh] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-[var(--surface-raised)] shadow-2xl ring-1 ring-white/10">
         {/* Search header */}
         <div className="flex items-center gap-3 border-b border-white/10 px-4 py-3">
           <Search className="h-5 w-5 shrink-0 text-zinc-400" />

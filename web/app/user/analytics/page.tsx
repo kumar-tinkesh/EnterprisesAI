@@ -135,7 +135,7 @@ export default function AnalyticsPage() {
             {modelShares.map((m) => (
               <div
                 key={m.name}
-                className={cn("h-full transition-all", m.color)}
+                className={cn("h-full transition-all duration-700 ease-out hover:brightness-110", m.color)}
                 style={{ width: `${m.share}%` }}
                 title={`${m.name}: ${m.share}%`}
               />
@@ -144,8 +144,12 @@ export default function AnalyticsPage() {
 
           {/* Model Cards Grid */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-2">
-            {modelShares.map((m) => (
-              <div key={m.name} className="rounded-lg border border-white/5 bg-white/[0.02] p-3.5">
+            {modelShares.map((m, idx) => (
+              <div
+                key={m.name}
+                style={{ animationDelay: `${idx * 50}ms` }}
+                className="card-lift animate-fade-up rounded-lg border border-white/10 bg-white/[0.02] p-3.5 hover:border-white/20"
+              >
                 <div className="flex items-center justify-between mb-2">
                   <span className="flex items-center gap-1.5 text-xs font-semibold text-zinc-200">
                     <span className={cn("h-2.5 w-2.5 rounded-full", m.color)} />
@@ -188,7 +192,7 @@ export default function AnalyticsPage() {
           </div>
 
           {/* Efficiency & Guardrails Widget */}
-          <div className="rounded-xl border border-white/10 bg-[var(--surface)] p-5 flex flex-col justify-between">
+          <div className="rounded-xl border border-indigo-500/20 bg-gradient-to-br from-indigo-500/[0.07] via-[var(--surface)] to-[var(--surface)] p-5 flex flex-col justify-between">
             <div>
               <div className="flex items-center gap-2 text-indigo-400 mb-2">
                 <Sparkles className="h-4 w-4" />

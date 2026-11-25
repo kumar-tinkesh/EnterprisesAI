@@ -103,7 +103,7 @@ export default function KnowledgeBasesPage() {
           </Button>
         </div>
       ) : (
-        <div className="mt-6 grid gap-6 lg:grid-cols-[260px_minmax(0,1fr)]">
+        <div className="mt-6 grid gap-6 lg:grid-cols-[288px_minmax(0,1fr)]">
           {/* Phones and tablets: a picker instead of a column. */}
           <div className="lg:hidden">
             <Select value={selectedId ?? ""} onChange={(e) => setSelectedId(e.target.value)} aria-label="Knowledge base">
@@ -282,11 +282,13 @@ function KnowledgeBaseDetail({
 
       <Tabs value={tab} onChange={setTab} tabs={[["documents", "Documents"], ["search", "Test search"]] as const} />
 
-      {tab === "documents" ? (
-        <DocumentsPanel kb={kb} token={token} onChanged={onChanged} />
-      ) : (
-        <SearchPanel kb={kb} token={token} />
-      )}
+      <div key={tab} className="animate-fade-in">
+        {tab === "documents" ? (
+          <DocumentsPanel kb={kb} token={token} onChanged={onChanged} />
+        ) : (
+          <SearchPanel kb={kb} token={token} />
+        )}
+      </div>
     </section>
   );
 }
@@ -388,11 +390,13 @@ function DocumentsPanel({ kb, token, onChanged }: { kb: KnowledgeBase; token: st
           addFiles(files);
         }}
         className={cn(
-          "flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-6 text-center transition-colors",
-          isDragging ? "border-indigo-500/60 bg-indigo-500/10" : "border-white/10 hover:border-white/20 bg-white/[0.02] hover:bg-white/[0.04]"
+          "flex flex-col items-center justify-center rounded-xl border-2 border-dashed p-6 text-center transition-all duration-200",
+          isDragging
+            ? "scale-[1.01] border-indigo-500/70 bg-indigo-500/10 shadow-[0_0_28px_-4px_rgba(99,102,241,0.3)]"
+            : "border-white/10 hover:border-white/20 bg-white/[0.02] hover:bg-white/[0.04]"
         )}
       >
-        <Upload className={cn("h-7 w-7", isDragging ? "text-indigo-400" : "text-zinc-400")} />
+        <Upload className={cn("h-7 w-7 transition-transform duration-200", isDragging ? "scale-110 text-indigo-400 animate-bounce" : "text-zinc-400")} />
         <p className="mt-2 text-xs font-medium text-zinc-200">
           Drag & drop files here, or{" "}
           <button
@@ -550,7 +554,11 @@ function SearchPanel({ kb, token }: { kb: KnowledgeBase; token: string }) {
               const pct = Math.round(hit.score * 100);
               const high = hit.score >= 0.7;
               return (
-                <li key={hit.id} className="rounded-lg border border-white/10 bg-[var(--surface)] p-4 transition-colors hover:border-white/20">
+                <li
+                  key={hit.id}
+                  style={{ animationDelay: `${i * 45}ms` }}
+                  className="card-lift animate-fade-up rounded-xl border border-white/10 bg-[var(--surface)] p-4 hover:border-white/20"
+                >
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-400">
                     <span className="font-medium text-zinc-100">#{i + 1}</span>
                     <span className="min-w-0 truncate font-medium text-zinc-200">{hit.filename}</span>

@@ -105,13 +105,13 @@ export function DescribeStep({
                   type="button"
                   onClick={() => onChange(ex.text)}
                   className={cn(
-                    "group h-full w-full rounded-lg border border-zinc-200 bg-white p-3 text-left transition-colors hover:border-indigo-400 hover:bg-zinc-50 cursor-pointer",
-                    description === ex.text && "border-indigo-400",
+                    "card-lift group h-full w-full rounded-lg border border-zinc-200 bg-white p-3 text-left hover:border-indigo-400 hover:bg-zinc-50 cursor-pointer",
+                    description === ex.text && "border-indigo-400 ring-1 ring-indigo-500/30",
                   )}
                 >
                   <span className="flex items-center justify-between text-xs font-semibold text-zinc-900">
                     {ex.title}
-                    <ArrowRight className="h-3.5 w-3.5 text-zinc-400 group-hover:text-indigo-600" />
+                    <ArrowRight className="h-3.5 w-3.5 text-zinc-400 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-indigo-600" />
                   </span>
                   <span className="mt-1 block text-xs leading-snug text-zinc-500">{ex.text}</span>
                 </button>

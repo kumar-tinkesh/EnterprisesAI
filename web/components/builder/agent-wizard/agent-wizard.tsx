@@ -203,7 +203,7 @@ function AgentWizard({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
   const generateError = generate.isError ? (generate.error instanceof Error ? generate.error.message : "Couldn't design the agent.") : null;
 
   return (
-    <div className="builder-dark fixed inset-0 z-40 flex flex-col bg-zinc-950" role="dialog" aria-modal="true" aria-label="Create an agent">
+    <div className="builder-dark animate-fade-in fixed inset-0 z-40 flex flex-col bg-zinc-950" role="dialog" aria-modal="true" aria-label="Create an agent">
       <header className="flex items-center gap-2 border-b border-zinc-200 bg-white px-3 py-2">
         <Sparkles className="h-4 w-4 shrink-0 text-indigo-600" />
         <div className="min-w-0 flex-1">
@@ -278,7 +278,7 @@ function AgentWizard({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
               <div className="flex h-full flex-col">
                 <Stepper current={w.step} visited={w.visited} canJump={!!draft} onGo={(s) => useAgentWizard.getState().goTo(s)} />
                 <div ref={panel} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-                  <div className="mx-auto max-w-2xl space-y-4 p-3 sm:p-5">
+                  <div key={w.step} className="animate-fade-up mx-auto max-w-2xl space-y-4 p-3 sm:p-5">
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-wide text-indigo-600">Step {at + 1} of {WIZARD_STEPS.length}</p>
                       <h2 className="mt-0.5 text-lg font-semibold text-zinc-900">{meta.title}</h2>

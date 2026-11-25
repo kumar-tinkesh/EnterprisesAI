@@ -197,14 +197,14 @@ function HeaderButton({ on, onClick, label, children }: { on: boolean; onClick: 
 /** A side panel: beside the page from md, over it on a phone. */
 function Drawer({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   return (
-    <aside className="fixed inset-0 z-40 flex flex-col bg-[var(--surface)] md:static md:z-auto md:w-96 md:shrink-0 md:border-l md:border-zinc-200" aria-label={title}>
-      <div className="flex shrink-0 items-center justify-between px-4 py-3">
+    <aside className="animate-slide-in-right fixed inset-0 z-40 flex flex-col bg-[var(--surface)] md:static md:z-auto md:w-96 md:shrink-0 md:border-l md:border-white/10" aria-label={title}>
+      <div className="flex shrink-0 items-center justify-between border-b border-white/5 px-4 py-3">
         <h2 className="text-base font-semibold text-zinc-900">{title}</h2>
-        <button type="button" aria-label="Close" onClick={onClose} className="rounded-md p-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer">
+        <button type="button" aria-label="Close" onClick={onClose} className="rounded-md p-1 text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer">
           <X className="h-4 w-4" />
         </button>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6">{children}</div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 pb-6">{children}</div>
     </aside>
   );
 }
@@ -212,11 +212,14 @@ function Drawer({ title, onClose, children }: { title: string; onClose: () => vo
 /** What it is: shown until the first answer. */
 function Intro({ shared }: { shared: SharedInfo }) {
   return (
-    <div className="flex flex-col items-center text-center">
-      <TypeIcon kind={shared.kind} size="lg" />
+    <div className="animate-fade-up relative flex flex-col items-center pt-4 text-center">
+      <div className="pointer-events-none absolute -top-2 h-24 w-24 rounded-full bg-[var(--accent)]/20 blur-2xl" aria-hidden />
+      <div className="relative">
+        <TypeIcon kind={shared.kind} size="lg" />
+      </div>
       <h2 className="mt-4 text-xl font-semibold text-zinc-900">{shared.name}</h2>
       {shared.description && <p className="mt-1.5 line-clamp-4 max-w-lg text-sm text-zinc-500">{shared.description}</p>}
-      {shared.shared_by && <p className="mt-2 text-xs text-zinc-500">Shared by {shared.shared_by}</p>}
+      {shared.shared_by && <p className="mt-2 rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-0.5 text-xs text-zinc-400">Shared by {shared.shared_by}</p>}
     </div>
   );
 }
@@ -571,7 +574,7 @@ function Runner({
                 e.preventDefault();
                 if (canSend) void submit();
               }}
-              className="rounded-2xl border border-[var(--border-strong)] bg-[var(--surface)] px-3 pb-2 pt-2.5 transition focus-within:border-[var(--accent-hover)]"
+              className="rounded-2xl border border-[var(--border-strong)] bg-[var(--surface)] px-3 pb-2 pt-2.5 shadow-sm transition-all duration-200 focus-within:border-[var(--accent-hover)] focus-within:shadow-[0_0_24px_-6px_rgba(99,102,241,0.3)]"
             >
               {(files.length > 0 || uploading > 0 || fileError) && (
                 <div className="mb-2 flex flex-wrap items-center gap-1.5">
@@ -864,7 +867,7 @@ function Turn({
   const thinking = run?.status === "succeeded" || run?.output ? (run.reasoning ?? "") : thinkingText(thought, stepName);
   const asked = run ? run.input : (question ?? "");
   return (
-    <div className="space-y-6" aria-live="polite">
+    <div className="animate-fade-up space-y-6" aria-live="polite">
       <div className="flex justify-end">
         <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-[var(--surface-strong)] px-4 py-2.5 text-sm text-zinc-900">
           {asked || "(ran with its inputs)"}

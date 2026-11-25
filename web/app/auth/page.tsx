@@ -26,17 +26,18 @@ export default function AuthPage() {
   }, []);
 
   return (
-    <main className="flex min-h-dvh flex-col items-center justify-center px-4 py-10 sm:py-16">
-      <div className="w-full max-w-sm sm:max-w-md">
-        <div className="mb-8 flex items-center justify-center gap-2">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--accent)] text-white">
+    <main className="bg-ambient-grid relative flex min-h-dvh flex-col items-center justify-center overflow-hidden px-4 py-10 sm:py-16">
+      <div className="pointer-events-none absolute top-1/4 left-1/2 h-80 w-80 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[var(--accent)]/15 blur-[100px]" aria-hidden />
+      <div className="animate-fade-up relative w-full max-w-sm sm:max-w-md">
+        <div className="mb-8 flex items-center justify-center gap-2.5">
+          <span className="animate-pulse-glow flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-[var(--accent)] to-[var(--accent-hover)] text-white shadow-lg ring-1 ring-white/20">
             <Sparkles className="h-4 w-4" />
           </span>
-          <span className="text-base font-semibold tracking-tight">EnterpriseAI</span>
+          <span className="text-lg font-semibold tracking-tight text-zinc-100">EnterpriseAI</span>
         </div>
 
-        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5 sm:p-8">
-          <div role="tablist" aria-label="Log in or sign up" className="mb-6 grid grid-cols-2 gap-1 rounded-lg bg-[var(--bg)] p-1">
+        <div className="rounded-2xl border border-white/10 bg-[var(--surface)]/95 p-5 shadow-2xl ring-1 ring-white/5 backdrop-blur-md sm:p-8">
+          <div role="tablist" aria-label="Log in or sign up" className="mb-6 grid grid-cols-2 gap-1 rounded-lg border border-white/5 bg-[var(--bg)] p-1">
             {(["login", "signup"] as Mode[]).map((m) => (
               <button
                 key={m}
@@ -45,9 +46,9 @@ export default function AuthPage() {
                 aria-selected={mode === m}
                 onClick={() => setMode(m)}
                 className={cn(
-                  "h-9 rounded-md text-sm font-medium transition-colors cursor-pointer",
+                  "h-9 rounded-md text-sm font-medium transition-all duration-150 cursor-pointer",
                   mode === m
-                    ? "bg-[var(--surface-strong)] text-[var(--text)]"
+                    ? "bg-[var(--surface-strong)] text-[var(--text)] shadow-xs"
                     : "text-[var(--text-subtle)] hover:text-[var(--text)]",
                 )}
               >
@@ -56,10 +57,12 @@ export default function AuthPage() {
             ))}
           </div>
 
-          <h1 className="text-xl font-semibold tracking-tight">{COPY[mode].title}</h1>
-          <p className="mt-1 mb-6 text-sm text-[var(--text-muted)]">{COPY[mode].sub}</p>
+          <div key={mode} className="animate-fade-in">
+            <h1 className="text-xl font-semibold tracking-tight">{COPY[mode].title}</h1>
+            <p className="mt-1 mb-6 text-sm text-[var(--text-muted)]">{COPY[mode].sub}</p>
 
-          {mode === "login" ? <LoginForm /> : <SignupForm />}
+            {mode === "login" ? <LoginForm /> : <SignupForm />}
+          </div>
         </div>
 
         <p className="mt-6 text-center text-sm text-[var(--text-subtle)]">

@@ -64,9 +64,9 @@ export function WorkspacePanel({ workspace, token, onClose }: { workspace: Works
   const archived = workspace.status === "archived";
 
   return (
-    <div className="fixed inset-0 z-40 flex justify-end bg-black/30" onClick={onClose}>
+    <div className="animate-fade-in fixed inset-0 z-40 flex justify-end bg-black/50 backdrop-blur-xs" onClick={onClose}>
       <aside
-        className="flex h-full w-full flex-col border-l border-zinc-200 bg-[var(--surface-raised)] shadow-xl sm:w-[460px]"
+        className="animate-slide-in-right flex h-full w-full flex-col border-l border-white/10 bg-[var(--surface-raised)] shadow-2xl sm:w-[460px]"
         onClick={(e) => e.stopPropagation()}
         aria-label={`Workspace ${workspace.name}`}
       >

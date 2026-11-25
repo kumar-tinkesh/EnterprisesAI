@@ -33,8 +33,8 @@ export function AccountPanel({ tenantId, accessToken, onClose }: { tenantId: str
   }, [onClose]);
 
   return (
-    <div className="fixed inset-0 z-40 flex justify-end bg-black/30" onClick={onClose}>
-      <aside className="flex h-full w-full flex-col border-l border-zinc-200 bg-[var(--surface-raised)] shadow-xl sm:w-[460px]" onClick={(e) => e.stopPropagation()}>
+    <div className="animate-fade-in fixed inset-0 z-40 flex justify-end bg-black/50 backdrop-blur-xs" onClick={onClose}>
+      <aside className="animate-slide-in-right flex h-full w-full flex-col border-l border-white/10 bg-[var(--surface-raised)] shadow-2xl sm:w-[460px]" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start gap-3 border-b border-zinc-200 p-4">
           <span className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-lg", a?.is_personal ? "bg-purple-50 text-purple-700" : "bg-indigo-50 text-indigo-700")}>
             {a?.is_personal ? <User className="h-4 w-4" /> : <Building2 className="h-4 w-4" />}

@@ -168,7 +168,7 @@ function Dashboard() {
   const chartDays = (ins?.series ?? []).map((d) => ({ date: d.date, good: d.succeeded, bad: d.failed }));
 
   return (
-    <section className="mx-auto max-w-6xl space-y-8 px-4 py-6 sm:px-8 sm:py-8">
+    <section className="animate-fade-up mx-auto max-w-6xl space-y-8 px-4 py-6 sm:px-8 sm:py-8">
       {/* Greeting */}
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
@@ -188,7 +188,7 @@ function Dashboard() {
                   <MessageSquare className="h-4 w-4" /> Chat <ChevronDown className="h-3.5 w-3.5 opacity-60" />
                 </>
               }
-              triggerClassName="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border-strong)] px-3 text-sm font-medium text-zinc-900 hover:bg-zinc-50 cursor-pointer"
+              triggerClassName="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border-strong)] px-3 text-sm font-medium text-zinc-900 transition-colors hover:bg-zinc-50 cursor-pointer"
               items={[
                 ...projects.slice(0, 6).map((p) => ({
                   label: `💬 ${p.name}`,
@@ -201,11 +201,11 @@ function Dashboard() {
               ]}
             />
           ) : (
-            <Link href="/user/executions" className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border-strong)] px-3 text-sm font-medium text-zinc-900 hover:bg-zinc-50">
+            <Link href="/user/executions" className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border-strong)] px-3 text-sm font-medium text-zinc-900 transition-colors hover:bg-zinc-50">
               <MessageSquare className="h-4 w-4" /> Chat
             </Link>
           )}
-          <Link href="/user/agents" className="inline-flex h-9 items-center gap-2 rounded-md bg-[var(--accent)] px-3 text-sm font-medium text-white hover:bg-[var(--accent-hover)]">
+          <Link href="/user/agents" className="inline-flex h-9 items-center gap-2 rounded-md bg-[var(--accent)] px-3 text-sm font-medium text-white shadow-[0_1px_12px_-2px_rgba(79,70,229,0.45)] transition-all duration-150 hover:bg-[var(--accent-hover)] hover:shadow-[0_2px_18px_-2px_rgba(99,102,241,0.6)] active:scale-[0.98]">
             <Plus className="h-4 w-4" /> New agent
           </Link>
         </div>
@@ -215,10 +215,10 @@ function Dashboard() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <Link
           href="/user/agents"
-          className="group flex flex-col justify-between rounded-xl border border-white/10 bg-[var(--surface)] p-4 transition-all hover:border-[var(--accent-border)] hover:bg-white/[0.04]"
+          className="card-lift animate-fade-up stagger-1 group flex flex-col justify-between rounded-xl border border-white/10 bg-[var(--surface)] p-4 hover:border-[var(--accent-border)] hover:bg-white/[0.04]"
         >
           <div className="flex items-center gap-3">
-            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--accent-wash)] text-[var(--link)] group-hover:bg-[var(--accent)] group-hover:text-white transition-colors">
+            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--accent-wash)] text-[var(--link)] transition-all duration-200 group-hover:scale-105 group-hover:bg-[var(--accent)] group-hover:text-white">
               <Sparkles className="h-4 w-4" />
             </span>
             <div>
@@ -226,17 +226,17 @@ function Dashboard() {
               <p className="text-xs text-zinc-500">Prompt to agent in seconds</p>
             </div>
           </div>
-          <span className="mt-3 flex items-center gap-1 text-[11px] font-medium text-zinc-400 group-hover:text-white">
-            Build agent <ArrowRight className="h-3 w-3" />
+          <span className="mt-3 flex items-center gap-1 text-[11px] font-medium text-zinc-400 transition-colors group-hover:text-white">
+            Build agent <ArrowRight className="h-3 w-3 transition-transform duration-200 group-hover:translate-x-1" />
           </span>
         </Link>
 
         <Link
           href="/user/knowledge"
-          className="group flex flex-col justify-between rounded-xl border border-white/10 bg-[var(--surface)] p-4 transition-all hover:border-[var(--accent-border)] hover:bg-white/[0.04]"
+          className="card-lift animate-fade-up stagger-2 group flex flex-col justify-between rounded-xl border border-white/10 bg-[var(--surface)] p-4 hover:border-amber-500/40 hover:bg-white/[0.04]"
         >
           <div className="flex items-center gap-3">
-            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-500/10 text-amber-400 group-hover:bg-amber-500 group-hover:text-white transition-colors">
+            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-500/10 text-amber-400 transition-all duration-200 group-hover:scale-105 group-hover:bg-amber-500 group-hover:text-white">
               <Brain className="h-4 w-4" />
             </span>
             <div>
@@ -244,17 +244,17 @@ function Dashboard() {
               <p className="text-xs text-zinc-500">Enterprise docs & vector RAG</p>
             </div>
           </div>
-          <span className="mt-3 flex items-center gap-1 text-[11px] font-medium text-zinc-400 group-hover:text-white">
-            Manage docs <ArrowRight className="h-3 w-3" />
+          <span className="mt-3 flex items-center gap-1 text-[11px] font-medium text-zinc-400 transition-colors group-hover:text-white">
+            Manage docs <ArrowRight className="h-3 w-3 transition-transform duration-200 group-hover:translate-x-1" />
           </span>
         </Link>
 
         <Link
           href="/user/connectors"
-          className="group flex flex-col justify-between rounded-xl border border-white/10 bg-[var(--surface)] p-4 transition-all hover:border-[var(--accent-border)] hover:bg-white/[0.04]"
+          className="card-lift animate-fade-up stagger-3 group flex flex-col justify-between rounded-xl border border-white/10 bg-[var(--surface)] p-4 hover:border-sky-500/40 hover:bg-white/[0.04]"
         >
           <div className="flex items-center gap-3">
-            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-sky-500/10 text-sky-400 group-hover:bg-sky-500 group-hover:text-white transition-colors">
+            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-sky-500/10 text-sky-400 transition-all duration-200 group-hover:scale-105 group-hover:bg-sky-500 group-hover:text-white">
               <Plug className="h-4 w-4" />
             </span>
             <div>
@@ -262,17 +262,17 @@ function Dashboard() {
               <p className="text-xs text-zinc-500">Slack, GitHub & custom MCPs</p>
             </div>
           </div>
-          <span className="mt-3 flex items-center gap-1 text-[11px] font-medium text-zinc-400 group-hover:text-white">
-            Configure tools <ArrowRight className="h-3 w-3" />
+          <span className="mt-3 flex items-center gap-1 text-[11px] font-medium text-zinc-400 transition-colors group-hover:text-white">
+            Configure tools <ArrowRight className="h-3 w-3 transition-transform duration-200 group-hover:translate-x-1" />
           </span>
         </Link>
 
         <Link
           href="/user/analytics"
-          className="group flex flex-col justify-between rounded-xl border border-white/10 bg-[var(--surface)] p-4 transition-all hover:border-[var(--accent-border)] hover:bg-white/[0.04]"
+          className="card-lift animate-fade-up stagger-4 group flex flex-col justify-between rounded-xl border border-white/10 bg-[var(--surface)] p-4 hover:border-emerald-500/40 hover:bg-white/[0.04]"
         >
           <div className="flex items-center gap-3">
-            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-400 group-hover:bg-emerald-500 group-hover:text-white transition-colors">
+            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-400 transition-all duration-200 group-hover:scale-105 group-hover:bg-emerald-500 group-hover:text-white">
               <BarChart3 className="h-4 w-4" />
             </span>
             <div>
@@ -280,8 +280,8 @@ function Dashboard() {
               <p className="text-xs text-zinc-500">Cost & latency intelligence</p>
             </div>
           </div>
-          <span className="mt-3 flex items-center gap-1 text-[11px] font-medium text-zinc-400 group-hover:text-white">
-            View metrics <ArrowRight className="h-3 w-3" />
+          <span className="mt-3 flex items-center gap-1 text-[11px] font-medium text-zinc-400 transition-colors group-hover:text-white">
+            View metrics <ArrowRight className="h-3 w-3 transition-transform duration-200 group-hover:translate-x-1" />
           </span>
         </Link>
       </div>
@@ -580,8 +580,8 @@ function OldWaits({ groups, token }: { groups: WaitGroup[]; token: string }) {
 /** A bordered block with a heading row: the dashboard's one container. */
 function Panel({ title, aside, children }: { title: string; aside?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <section className="overflow-hidden rounded-lg border border-zinc-200">
-      <div className="flex items-center justify-between gap-2 border-b border-zinc-100 px-4 py-3">
+    <section className="overflow-hidden rounded-xl border border-white/10 bg-[var(--surface)]">
+      <div className="flex items-center justify-between gap-2 border-b border-white/5 px-4 py-3">
         <h2 className="text-base font-semibold text-zinc-900">{title}</h2>
         {typeof aside === "string" ? <span className="text-xs text-zinc-500">{aside}</span> : aside}
       </div>
@@ -592,11 +592,11 @@ function Panel({ title, aside, children }: { title: string; aside?: React.ReactN
 
 function SkeletonRows() {
   return (
-    <ul className="divide-y divide-zinc-100" aria-busy="true">
+    <ul className="divide-y divide-white/5" aria-busy="true">
       {[0, 1, 2].map((i) => (
         <li key={i} className="space-y-2 px-4 py-3">
-          <div className="h-3 w-1/3 animate-pulse rounded bg-zinc-100" />
-          <div className="h-3 w-2/3 animate-pulse rounded bg-zinc-100" />
+          <div className="h-3 w-1/3 animate-pulse rounded bg-white/[0.06]" />
+          <div className="h-3 w-2/3 animate-pulse rounded bg-white/[0.04]" />
         </li>
       ))}
     </ul>

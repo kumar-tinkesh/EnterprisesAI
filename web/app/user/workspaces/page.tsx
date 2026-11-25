@@ -46,12 +46,15 @@ export default function WorkspacesPage() {
         ) : (
           <>
             <ul className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {workspaces.map((w) => (
+              {workspaces.map((w, idx) => (
                 <li
                   key={w.id}
+                  style={{ animationDelay: `${Math.min(idx * 40, 200)}ms` }}
                   className={cn(
-                    "flex flex-col justify-between rounded-lg border p-4",
-                    w.is_current ? "border-[var(--accent-border)] bg-[var(--accent-wash)]" : "border-zinc-200 bg-white",
+                    "card-lift animate-fade-up flex flex-col justify-between rounded-xl border p-4",
+                    w.is_current
+                      ? "border-[var(--accent-border)] bg-[var(--accent-wash)] shadow-[0_0_24px_-6px_rgba(99,102,241,0.35)]"
+                      : "border-white/10 bg-[var(--surface)] hover:border-white/20",
                   )}
                 >
                   <div className="flex items-start gap-3">
