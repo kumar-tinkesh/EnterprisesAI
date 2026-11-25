@@ -992,6 +992,8 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
                         token={token}
                         workflowId={id}
                         lastRunId={resultRunId}
+                        inputText={inputText}
+                        onInputText={setInputText}
                         onChange={(patch) => change((d) => ({ ...d, nodes: updateStep(d.nodes, selectedNode.id, patch) }), `patch:${selectedNode.id}`)}
                         onEdgeChange={(edgeId, patch) => change((d) => ({ ...d, edges: d.edges.map((e) => (e.id === edgeId ? { ...e, ...patch } : e)) }))}
                         onDelete={() => {

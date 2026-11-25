@@ -108,6 +108,8 @@ export function StepInspector({
   token,
   workflowId,
   lastRunId,
+  inputText,
+  onInputText,
   onChange,
   onEdgeChange,
   onDelete,
@@ -123,6 +125,8 @@ export function StepInspector({
   standaloneAgents: Agent[];
   problems: Problem[];
   token: string;
+  inputText?: string;
+  onInputText?: (text: string) => void;
   onChange: (patch: Partial<WorkflowNode>) => void;
   onEdgeChange: (edgeId: string, patch: Partial<WorkflowEdge>) => void;
   onDelete: () => void;
@@ -193,7 +197,23 @@ export function StepInspector({
         {node.type === "schedule_trigger" && (
           <WorkflowScheduleFields node={node} token={token} workflowId={workflowId} onChange={onChange} />
         )}
-        {node.type === "input" && <InputFields node={node} onChange={onChange} />}
+        {node.type === "input" && (
+          <>
+            {onInputText && (
+              <Section title="Run prompt">
+                <Field label="What should it work on?" hint="Used when you press Run on the canvas.">
+                  <Textarea
+                    rows={3}
+                    placeholder="Enter prompt or input text to start run…"
+                    value={inputText ?? ""}
+                    onChange={(e) => onInputText(e.target.value)}
+                  />
+                </Field>
+              </Section>
+            )}
+            <InputFields node={node} onChange={onChange} />
+          </>
+        )}
         {node.type === "agent" && (
           <AgentStepConfig node={node} agents={agents} standaloneAgents={standaloneAgents} token={token} onChange={onChange} />
         )}

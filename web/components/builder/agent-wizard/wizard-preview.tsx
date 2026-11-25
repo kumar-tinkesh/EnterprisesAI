@@ -35,16 +35,16 @@ type PreviewProps = {
 };
 
 const COL = 270;
-const ROW = 100;
+const ROW = 128;
 
 /** Where each kind of node sits. Wide: documents | agent | tools, left to right. Narrow: top to bottom. */
 function place(vertical: boolean, tools: number, kbs: number) {
   if (!vertical) {
     const tall = Math.max(tools, kbs, 1);
     return {
-      agent: { x: 320, y: (tall - 1) * 55 },
-      tool: (i: number) => ({ x: 680, y: i * 110 }),
-      kb: (i: number) => ({ x: 0, y: i * 110 }),
+      agent: { x: 320, y: (tall - 1) * 60 },
+      tool: (i: number) => ({ x: 680, y: i * 128 }),
+      kb: (i: number) => ({ x: 0, y: i * 128 }),
     };
   }
   const centre = tools > 1 || kbs > 1 ? COL / 2 : 0;
@@ -106,7 +106,11 @@ function Preview({
   const nodes: StepNodeType[] = useMemo(() => {
     if (!draft) {
       return generating
-        ? [{ id: "agent", type: "step", position: { x: 0, y: 0 }, data: { type: "agent", title: "Designing your agent…", subtitle: "Reading your description", problems: [], state: "running" } }]
+        ? [
+            { id: "agent", type: "step", position: { x: 0, y: 60 }, data: { type: "agent", title: "Designing your agent…", subtitle: "Analyzing goal & instructions", problems: [], state: "running", detail: "Drafting blueprint", vertical } },
+            { id: "gen-srv", type: "step", position: vertical ? { x: 0, y: 190 } : { x: 320, y: 0 }, data: { type: "server", title: "Matching connectors", subtitle: "Finding required apps", problems: [], state: "running", vertical } },
+            { id: "gen-tool", type: "step", position: vertical ? { x: 0, y: 310 } : { x: 320, y: 120 }, data: { type: "tool", title: "Selecting tools", subtitle: "Configuring permissions", problems: [], state: "running", vertical } },
+          ]
         : [];
     }
     const at = place(vertical, toolIds.length, kbIds.length);
@@ -132,11 +136,17 @@ function Preview({
   }, [draft, generating, toolIds, kbIds, kbNames, profileLabel, checks, runView, active, sizes, vertical, toolGraphFor]);
 
   const edges: Edge[] = useMemo(
-    () => [
-      ...toolGraphFor(place(vertical, toolIds.length, kbIds.length).agent).edges,
-      ...kbIds.map((kid) => ({ id: `k:${kid}`, source: `kb:${kid}`, target: "agent", style: { stroke: "#c4b5fd", strokeDasharray: "4 4" } })),
-    ],
-    [toolGraphFor, toolIds.length, kbIds, vertical],
+    () =>
+      !draft && generating
+        ? [
+            { id: "gen-1", source: "agent", target: "gen-srv", animated: true, style: { stroke: "#38bdf8", strokeWidth: 2 } },
+            { id: "gen-2", source: "agent", target: "gen-tool", animated: true, style: { stroke: "#34d399", strokeWidth: 2 } },
+          ]
+        : [
+            ...toolGraphFor(place(vertical, toolIds.length, kbIds.length).agent).edges,
+            ...kbIds.map((kid) => ({ id: `k:${kid}`, source: `kb:${kid}`, target: "agent", animated: true, style: { stroke: "#a78bfa", strokeDasharray: "4 4" } })),
+          ],
+    [draft, generating, toolGraphFor, toolIds.length, kbIds, vertical],
   );
 
   // Re-frame whenever something is added or removed, or the preview comes

@@ -1,24 +1,23 @@
 "use client";
 
-import { createContext, memo, useContext, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { createContext, memo, useContext, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Handle, NodeToolbar, Position, type Node, type NodeProps } from "@xyflow/react";
 import {
-  AlertTriangle, BookOpen, Bot, CalendarClock, CheckCircle2, CircleDot, Code2, Copy, FileText, GitBranch, Hand, Loader2, LogIn, Merge,
-  Play, PlayCircle, Plus, RotateCcw, Send, Settings2, Trash2, Unplug, Wrench, XCircle,
+  AlertTriangle, Bot, CalendarClock, CheckCircle2, CircleDot, Code2, Copy, FileText, GitBranch, Hand, Loader2, LogIn, Merge,
+  Play, PlayCircle, Plus, Send, Settings2, Trash2, Wrench, XCircle,
 } from "lucide-react";
 
 import { ConnectButton, useMissingServers } from "@/components/connections/connect-button";
-import { SystemsChip } from "@/components/builder/tool-needs";
+import { ConnectorIcon } from "@/components/connections/connector-icon";
 import { builderApi } from "@/lib/builder/api";
-import { PALETTE, canAddAfter, isTrigger, overriddenParams, serverIdOf, toolName } from "@/lib/builder/graph";
+import { PALETTE, canAddAfter, isTrigger, serverIdOf, toolName } from "@/lib/builder/graph";
 import type { StepState } from "@/lib/builder/run-state";
 import { describeSchedule } from "@/lib/builder/schedule";
 import type { Agent, NodeType, Problem, ToolNeed, WorkflowEdge, WorkflowNode } from "@/lib/builder/types";
 import { cn } from "@/lib/utils";
 
-/** What the canvas shares with its nodes (so node cards can edit in place). */
+/** What the canvas shares with its nodes (so node bubbles stay clean and actions stay interactive). */
 export interface CanvasCtx {
   token: string;
   readOnly: boolean;
@@ -52,269 +51,147 @@ export type FlowNodeData = {
 };
 export type FlowNodeType = Node<FlowNodeData, "flow">;
 
-/** Each kind of step has its own colour on the canvas — the card's tint, border, header and badge —
- *  so an agent, a tool call or an approval can be told apart at a glance. */
-type Look = { label: string; badge: string; hint: string; Icon: typeof Bot; head: string };
-// One hue per kind, on its icon only (the cards are all the same quiet surface), far enough apart
-// to tell at a glance: triggers in blues/teal, agent violet, tool orange, condition yellow,
-// join slate, approval rose, output green.
+type Look = {
+  label: string;
+  badge: string;
+  hint: string;
+  Icon: typeof Bot;
+  head: string;
+  ring: string;
+  glow: string;
+};
+
 const LOOK: Record<NodeType, Look> = {
   input: {
-    label: "Input", badge: "Trigger", hint: "Entry point for workflow run", Icon: LogIn, head: "from-sky-400 to-sky-600",
+    label: "Input",
+    badge: "Trigger",
+    hint: "Entry point for workflow run",
+    Icon: LogIn,
+    head: "from-sky-400 to-sky-600",
+    ring: "border-sky-400/50",
+    glow: "shadow-[0_0_24px_-4px_rgba(56,189,248,0.45)]",
   },
   manual_trigger: {
-    label: "Manual Trigger", badge: "Trigger", hint: "Starts when Run is clicked", Icon: PlayCircle, head: "from-blue-500 to-indigo-600",
+    label: "Manual Trigger",
+    badge: "Trigger",
+    hint: "Starts when Run is clicked",
+    Icon: PlayCircle,
+    head: "from-blue-500 to-indigo-600",
+    ring: "border-blue-400/50",
+    glow: "shadow-[0_0_24px_-4px_rgba(96,165,250,0.45)]",
   },
   schedule_trigger: {
-    label: "Schedule Trigger", badge: "Trigger", hint: "Starts on a schedule", Icon: CalendarClock, head: "from-teal-400 to-teal-600",
+    label: "Schedule Trigger",
+    badge: "Schedule",
+    hint: "Starts on a schedule",
+    Icon: CalendarClock,
+    head: "from-teal-400 to-teal-600",
+    ring: "border-teal-400/50",
+    glow: "shadow-[0_0_24px_-4px_rgba(45,212,191,0.45)]",
   },
   agent: {
-    label: "Agent", badge: "Agent", hint: "AI agent performs processing", Icon: Bot, head: "from-violet-500 to-purple-600",
+    label: "Agent",
+    badge: "Agent",
+    hint: "AI agent performs processing",
+    Icon: Bot,
+    head: "from-violet-500 to-purple-600",
+    ring: "border-violet-400/55",
+    glow: "shadow-[0_0_26px_-4px_rgba(139,92,246,0.5)]",
   },
   tool: {
-    label: "Tool Call", badge: "Tool", hint: "Calls one tool of a connector", Icon: Wrench, head: "from-orange-400 to-orange-600",
+    label: "Tool Call",
+    badge: "Tool",
+    hint: "Calls one tool of a connector",
+    Icon: Wrench,
+    head: "from-orange-400 to-orange-600",
+    ring: "border-orange-400/50",
+    glow: "shadow-[0_0_24px_-4px_rgba(251,146,60,0.45)]",
   },
   condition: {
-    label: "Condition", badge: "Condition", hint: "Branches logic", Icon: GitBranch, head: "from-yellow-400 to-amber-500",
+    label: "Condition",
+    badge: "Router",
+    hint: "Branches logic",
+    Icon: GitBranch,
+    head: "from-amber-400 to-amber-600",
+    ring: "border-amber-400/50",
+    glow: "shadow-[0_0_24px_-4px_rgba(251,191,36,0.45)]",
   },
   join: {
-    label: "Join", badge: "Join", hint: "Waits for parallel branches", Icon: Merge, head: "from-slate-400 to-slate-600",
+    label: "Join",
+    badge: "Join",
+    hint: "Waits for parallel branches",
+    Icon: Merge,
+    head: "from-slate-400 to-slate-600",
+    ring: "border-slate-400/45",
+    glow: "shadow-[0_0_20px_-4px_rgba(148,163,184,0.35)]",
   },
   human_approval: {
-    label: "Human Approval", badge: "Approval", hint: "Pauses for a person to approve", Icon: Hand, head: "from-rose-500 to-red-600",
+    label: "Human Approval",
+    badge: "Approval",
+    hint: "Pauses for a person to approve",
+    Icon: Hand,
+    head: "from-rose-500 to-red-600",
+    ring: "border-rose-400/50",
+    glow: "shadow-[0_0_24px_-4px_rgba(244,63,94,0.45)]",
   },
   output: {
-    label: "Output", badge: "Output", hint: "Final answer", Icon: Send, head: "from-emerald-400 to-green-600",
+    label: "Output",
+    badge: "Output",
+    hint: "Final answer",
+    Icon: Send,
+    head: "from-emerald-400 to-green-600",
+    ring: "border-emerald-400/50",
+    glow: "shadow-[0_0_24px_-4px_rgba(52,211,153,0.45)]",
   },
   code: {
-    label: "Code", badge: "Code", hint: "Sorts and checks, without AI", Icon: Code2, head: "from-zinc-400 to-zinc-600",
+    label: "Code",
+    badge: "Code",
+    hint: "Sorts and checks, without AI",
+    Icon: Code2,
+    head: "from-zinc-400 to-zinc-600",
+    ring: "border-zinc-400/45",
+    glow: "shadow-[0_0_20px_-4px_rgba(161,161,170,0.35)]",
   },
 };
 export const NODE_LOOK = LOOK;
 
-const RING: Record<StepState, string> = {
-  running: "ring-2 ring-[var(--accent-hover)] shadow-[0_0_24px_rgba(99,102,241,0.35)]",
-  succeeded: "ring-2 ring-emerald-400",
-  failed: "ring-2 ring-red-500",
-  waiting: "ring-2 ring-amber-400 animate-pulse",
-  skipped: "opacity-50",
+const STATE_RING: Record<StepState, string> = {
+  running: "ring-4 ring-sky-400/50 border-sky-400 shadow-[0_0_32px_rgba(56,189,248,0.65)]",
+  succeeded: "ring-2 ring-emerald-400/80 border-emerald-400 shadow-[0_0_24px_-4px_rgba(52,211,153,0.5)]",
+  failed: "ring-2 ring-red-500/80 border-red-500 shadow-[0_0_24px_-4px_rgba(239,68,68,0.5)]",
+  waiting: "ring-4 ring-amber-400/50 border-amber-400 animate-pulse shadow-[0_0_28px_rgba(245,158,11,0.5)]",
+  skipped: "opacity-45",
 };
 const NO_INPUT: NodeType[] = ["input", "manual_trigger", "schedule_trigger"];
 
-function StateIcon({ state }: { state?: StepState }) {
-  if (state === "running") return <Loader2 className="h-4 w-4 animate-spin text-[var(--link)]" aria-label="Running" />;
-  if (state === "succeeded") return <CheckCircle2 className="h-4 w-4 text-emerald-400" aria-label="Done" />;
-  if (state === "failed") return <XCircle className="h-4 w-4 text-red-400" aria-label="Failed" />;
-  if (state === "waiting") return <CircleDot className="h-4 w-4 text-amber-400" aria-label="Waiting for you" />;
-  return null;
-}
-
-function Chip({ children, tone = "zinc", title }: { children: React.ReactNode; tone?: "zinc" | "emerald" | "amber" | "violet" | "sky"; title?: string }) {
-  const tones = {
-    zinc: "border-white/10 bg-white/5 text-zinc-300",
-    emerald: "border-emerald-400/30 bg-emerald-500/10 text-emerald-300",
-    amber: "border-amber-400/30 bg-amber-500/10 text-amber-300",
-    violet: "border-violet-400/30 bg-violet-500/10 text-violet-200",
-    sky: "border-sky-400/30 bg-sky-500/10 text-sky-300",
-  };
-  return <span title={title} className={cn("inline-flex max-w-full items-center gap-1 truncate rounded-md border px-1.5 py-0.5 text-xs", tones[tone])}>{children}</span>;
-}
-
-/** "N tools" on an agent step; click it for the list (in a layer of its own,
- *  so the node card doesn't clip it). Amber when the step changed them; red, with a Connect
- *  per system, when some belong to a system this user hasn't connected. */
-function ToolsChip({ toolIds, changed, token }: { toolIds: string[]; changed: boolean; token: string }) {
-  const [at, setAt] = useState<{ top: number; left: number } | null>(null);
-  const ref = useRef<HTMLButtonElement>(null);
-  const missing = useMissingServers(token, toolIds);
-  const offline = new Set(missing.flatMap((m) => m.tools));
-  const removed = new Set(missing.filter((m) => m.removed).flatMap((m) => m.tools));
-  const connectable = missing.filter((m) => !m.removed);
-  if (toolIds.length === 0) return null;
-  return (
-    <>
-      <button
-        ref={ref}
-        type="button"
-        title={
-          removed.size ? `${removed.size} of these tools belong to a removed system — open the step and pick its tools again`
-            : offline.size ? `${offline.size} of these tools won't run until you connect ${connectable.map((m) => m.name).join(", ")}` : "Tools this step can call"
-        }
-        aria-expanded={!!at}
-        onClick={(e) => {
-          e.stopPropagation();
-          const r = ref.current?.getBoundingClientRect();
-          setAt(at || !r ? null : { top: r.bottom + 4, left: r.left });
-        }}
-        className={cn(
-          "nodrag inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-xs cursor-pointer",
-          offline.size
-            ? "border-red-400/40 bg-red-500/10 text-red-300 hover:bg-red-500/20"
-            : changed ? "border-amber-400/30 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20" : "border-violet-400/30 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20",
-        )}
-      >
-        <Wrench className="h-3 w-3" /> {toolIds.length} tool{toolIds.length === 1 ? "" : "s"}
-        {removed.size > 0 && <span className="inline-flex items-center gap-0.5"><XCircle className="h-3 w-3" /> {removed.size} removed</span>}
-        {offline.size - removed.size > 0 && <span className="inline-flex items-center gap-0.5"><Unplug className="h-3 w-3" /> {offline.size - removed.size} not connected</span>}
-      </button>
-      {at &&
-        createPortal(
-          <>
-            <div className="fixed inset-0 z-[999]" onClick={() => setAt(null)} />
-            <div style={at} className="fixed z-[1000] max-h-72 w-64 overflow-y-auto rounded-lg border border-white/10 bg-zinc-900 p-1.5 shadow-2xl">
-              <p className="px-1.5 pb-1 text-xs font-medium text-zinc-500">Tools this step can call</p>
-              {toolIds.map((id) => (
-                <p key={id} title={id} className="flex items-center gap-1.5 truncate rounded px-1.5 py-1 text-xs text-zinc-200 hover:bg-white/5">
-                  {offline.has(id) ? <Unplug className="h-3 w-3 shrink-0 text-red-400" /> : <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-400" />}
-                  <span className="truncate">{toolName(id)}</span>
-                  {offline.has(id) && <span className="ml-auto shrink-0 text-xs text-red-300">{removed.has(id) ? "system removed" : "not connected"}</span>}
-                </p>
-              ))}
-              {connectable.length > 0 && (
-                <div className="mt-1 space-y-1 border-t border-white/10 px-1.5 pt-1.5">
-                  {connectable.map((m) => (
-                    <ConnectButton key={m.serverId} serverId={m.serverId} serverName={m.name} token={token} className="w-full justify-center px-2 py-1 text-xs" />
-                  ))}
-                </div>
-              )}
-            </div>
-          </>,
-          document.body,
-        )}
-      {/* Right on the card too, so it's clear before pressing Run. */}
-      {connectable.map((m) => (
-        <ConnectButton key={m.serverId} serverId={m.serverId} serverName={m.name} token={token} className="rounded-md px-1.5 py-0.5 text-xs" />
-      ))}
-    </>
-  );
-}
-
-function ToolBody({ node, ctx }: { node: WorkflowNode; ctx: CanvasCtx }) {
-  const serverId = serverIdOf(node.tool_id);
-  const server = useQuery({
-    queryKey: ["builder-server-tools", serverId],
-    queryFn: () => builderApi.serverTools(ctx.token, serverId!),
-    enabled: !!ctx.token && !!serverId,
-    staleTime: 60_000,
-  });
-  if (!node.tool_id) {
+function StateBadge({ state }: { state?: StepState }) {
+  if (!state || state === "skipped") return null;
+  if (state === "running") {
     return (
-      <button type="button" onClick={() => ctx.open(node.id)} className="nodrag w-full rounded-lg border border-dashed border-white/15 px-2 py-2 text-left text-xs text-zinc-400 hover:border-indigo-400/60 hover:text-zinc-200 cursor-pointer">
-        {node.need ? <>Needs a tool: <span className="text-zinc-200">{node.need}</span></> : "Pick a tool"}
-      </button>
+      <span className="absolute -right-1 -top-1 flex h-6 w-6 items-center justify-center rounded-full border border-sky-400/50 bg-zinc-950 shadow-md" aria-label="Running">
+        <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-400" />
+      </span>
     );
   }
-  const pinned = Object.keys(node.tool_args ?? {}).length;
-  return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap items-center gap-1.5">
-        {server.data ? (
-          server.data.connected ? (
-            <Chip tone="emerald"><CheckCircle2 className="h-3 w-3" /> {server.data.server_name}</Chip>
-          ) : (
-            <ConnectButton serverId={serverId!} serverName={server.data.server_name} token={ctx.token} className="rounded-full px-2 py-0.5 text-xs" />
-          )
-        ) : (
-          <Chip>…</Chip>
-        )}
-        {server.data && <Chip><Wrench className="h-3 w-3" /> {server.data.tools.length} Tools</Chip>}
-      </div>
-      <select
-        aria-label="Tool"
-        className="nodrag w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-xs text-zinc-100 focus:border-indigo-400 focus:outline-none"
-        value={toolName(node.tool_id)}
-        disabled={ctx.readOnly || !server.data}
-        onChange={(e) => ctx.patch(node.id, { tool_id: `mcp:${serverId}:${e.target.value}`, tool_args: null })}
-      >
-        {!server.data && <option>{toolName(node.tool_id)}</option>}
-        {server.data?.tools.map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
-      </select>
-      <div className="flex flex-wrap gap-x-3 text-xs">
-        <button type="button" className="nodrag text-indigo-300 hover:text-indigo-200 cursor-pointer" onClick={() => ctx.open(node.id)}>
-          {pinned ? `${pinned} pinned value${pinned === 1 ? "" : "s"}` : "+ Pin a fixed value"}
-        </button>
-        <button type="button" className="nodrag text-zinc-400 underline hover:text-zinc-200 cursor-pointer" onClick={() => ctx.open(node.id)}>
-          {node.message_template ? "Custom message set" : "Advanced: custom message"}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function Body({ node, ctx }: { node: WorkflowNode; ctx: CanvasCtx }) {
-  switch (node.type) {
-    case "input":
-      return (
-        <div>
-          <p className="mb-1.5 text-xs font-medium text-zinc-400">What should it work on?</p>
-          <textarea
-            aria-label="Start trigger query"
-            className="nodrag nowheel h-16 w-full resize-none rounded-lg border border-white/10 bg-white/5 px-2.5 py-2 text-xs text-zinc-100 placeholder:text-zinc-500 focus:border-indigo-400 focus:outline-none"
-            placeholder="Enter prompt or input text to start run…"
-            value={ctx.inputText}
-            onChange={(e) => ctx.setInputText(e.target.value)}
-          />
-          {(node.variables ?? []).length > 0 && <p className="mt-1 text-xs text-zinc-500">+ {(node.variables ?? []).length} input field(s)</p>}
-        </div>
-      );
-    case "manual_trigger":
-      return <p className="text-xs text-zinc-400">Starts when you press Run.</p>;
-    case "schedule_trigger":
-      return <Chip tone="sky"><CalendarClock className="h-3 w-3" /> {describeSchedule(node.schedule)}</Chip>;
-    case "agent": {
-      const a = node.draft_agent ?? (node.agent_id ? ctx.agents[node.agent_id] : undefined);
-      if (!a) {
-        return (
-          <button type="button" onClick={() => ctx.open(node.id)} className="nodrag w-full rounded-lg border border-dashed border-white/15 px-2 py-2 text-left text-xs text-zinc-400 hover:border-indigo-400/60 hover:text-zinc-200 cursor-pointer">
-            Set up the agent for this step
-          </button>
-        );
-      }
-      // What the step really runs with: its own overrides over the agent's.
-      const own = node.config_overrides ?? {};
-      const toolIds = (own.tool_ids as string[] | undefined) ?? a.config?.tool_ids ?? [];
-      const needs = (own.tool_needs as ToolNeed[] | undefined) ?? a.config?.tool_needs ?? [];
-      const kbs = ((own.knowledge_base_ids as string[] | undefined) ?? a.config?.knowledge_base_ids ?? []).length;
-      const attempts = node.retry?.max_attempts ?? 1;
-      const overrides = overriddenParams(node.config_overrides).length;
-      const model = (node.config_overrides?.llm_model as string | undefined) || a.llm_model;
-      return (
-        <div className="flex flex-wrap gap-1.5">
-          <Chip tone={model !== a.llm_model ? "amber" : "zinc"}><span className="font-mono">{model || "default model"}</span></Chip>
-          <ToolsChip toolIds={toolIds} changed={"tool_ids" in own} token={ctx.token} />
-          <SystemsChip token={ctx.token} needs={needs} />
-          {kbs > 0 && <Chip tone={"knowledge_base_ids" in own ? "amber" : "sky"}><BookOpen className="h-3 w-3" /> {kbs}</Chip>}
-          {attempts > 1 && <Chip title={`Tried up to ${attempts} times if it fails`}><RotateCcw className="h-3 w-3" /> {attempts}</Chip>}
-          {node.draft_agent && <Chip tone="amber">{node.agent_id ? "customized" : "new — saved with the workflow"}</Chip>}
-          {overrides > 0 && <Chip tone="amber">{overrides} setting{overrides === 1 ? "" : "s"} changed</Chip>}
-        </div>
-      );
-    }
-    case "tool":
-      return <ToolBody node={node} ctx={ctx} />;
-    case "condition": {
-      const outs = ctx.edges.filter((e) => e.source === node.id).map((e) => e.condition).filter(Boolean);
-      return (
-        <div className="space-y-1.5">
-          <p className="text-xs text-zinc-400">{node.condition_config?.mode === "rule" ? "Rules decide" : "AI decides"} the line</p>
-          <div className="flex flex-wrap gap-1">{outs.map((o) => <Chip key={o} tone="amber">{o}</Chip>)}</div>
-        </div>
-      );
-    }
-    case "human_approval":
-      return <p className="line-clamp-2 text-xs text-zinc-400">{node.approval_message || "A person approves before it continues."}</p>;
-    case "join":
-      return <p className="text-xs text-zinc-400">Waits for {node.join_policy?.mode === "any" ? "any branch" : node.join_policy?.mode === "count" ? `${node.join_policy.min_required ?? "N"} branches` : "every branch"}</p>;
-    case "output":
-      return (
-        <div className="flex flex-wrap gap-1.5">
-          <Chip>{node.output_config?.format === "text" ? "Plain text" : node.output_config?.format === "json" ? "JSON" : node.output_config?.format === "formatted" ? "Report" : "Auto"}</Chip>
-          <Chip>Sources</Chip>
-        </div>
-      );
-    case "code":
-      return <p className="text-xs text-zinc-400">Runs {node.code || "code"} – no AI</p>;
+  if (state === "succeeded") {
+    return (
+      <span className="absolute -right-1 -top-1 flex h-6 w-6 items-center justify-center rounded-full border border-emerald-400/50 bg-zinc-950 shadow-md" aria-label="Done">
+        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+      </span>
+    );
   }
+  if (state === "failed") {
+    return (
+      <span className="absolute -right-1 -top-1 flex h-6 w-6 items-center justify-center rounded-full border border-red-500/50 bg-zinc-950 shadow-md" aria-label="Failed">
+        <XCircle className="h-3.5 w-3.5 text-red-400" />
+      </span>
+    );
+  }
+  return (
+    <span className="absolute -right-1 -top-1 flex h-6 w-6 items-center justify-center rounded-full border border-amber-400/50 bg-zinc-950 shadow-md" aria-label="Waiting for you">
+      <CircleDot className="h-3.5 w-3.5 text-amber-400" />
+    </span>
+  );
 }
 
 function ToolButton({ label, danger, onClick, children }: { label: string; danger?: boolean; onClick: () => void; children: React.ReactNode }) {
@@ -328,7 +205,7 @@ function ToolButton({ label, danger, onClick, children }: { label: string; dange
         onClick();
       }}
       className={cn(
-        "nodrag flex h-7 items-center gap-1 rounded-md px-1.5 text-xs font-medium text-zinc-300 transition-colors cursor-pointer [&_svg]:h-3.5 [&_svg]:w-3.5",
+        "nodrag flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium text-zinc-300 transition-colors cursor-pointer [&_svg]:h-3.5 [&_svg]:w-3.5",
         danger ? "hover:bg-red-500/15 hover:text-red-300" : "hover:bg-white/10 hover:text-white",
       )}
     >
@@ -337,13 +214,36 @@ function ToolButton({ label, danger, onClick, children }: { label: string; dange
   );
 }
 
-/** Above the selected step: what you can do with it. */
-function StepToolbar({ node, ctx, hasResult }: { node: WorkflowNode; ctx: CanvasCtx; hasResult: boolean }) {
+/** Quick floating toolbar shown above the bubble on hover or when selected. */
+function StepToolbar({
+  node,
+  ctx,
+  hasResult,
+  visible,
+  onEnter,
+  onLeave,
+}: {
+  node: WorkflowNode;
+  ctx: CanvasCtx;
+  hasResult: boolean;
+  visible: boolean;
+  onEnter: () => void;
+  onLeave: () => void;
+}) {
   const [nextOpen, setNextOpen] = useState(false);
   const trigger = isTrigger(node.type);
+
+  useEffect(() => {
+    if (!visible) setNextOpen(false);
+  }, [visible]);
+
   return (
-    <NodeToolbar position={Position.Top} offset={8} className="relative">
-      <div className="flex items-center gap-0.5 rounded-lg border border-white/10 bg-[#1c1c21] p-0.5 shadow-lg shadow-black/40">
+    <NodeToolbar isVisible={visible} position={Position.Top} offset={10} className="relative">
+      <div
+        onMouseEnter={onEnter}
+        onMouseLeave={onLeave}
+        className="animate-scale-in flex items-center gap-0.5 rounded-xl border border-white/15 bg-[#18181d]/95 p-1 shadow-2xl shadow-black/60 backdrop-blur-md"
+      >
         {ctx.canTest(node) && (
           <ToolButton label="Test this step by itself" onClick={() => ctx.test(node.id)}>
             <Play /> Test
@@ -375,7 +275,11 @@ function StepToolbar({ node, ctx, hasResult }: { node: WorkflowNode; ctx: Canvas
         )}
       </div>
       {nextOpen && (
-        <div className="absolute left-0 top-full z-10 mt-1 w-52 rounded-lg border border-white/10 bg-[#1c1c21] p-1 shadow-xl shadow-black/50">
+        <div
+          onMouseEnter={onEnter}
+          onMouseLeave={onLeave}
+          className="animate-scale-in absolute left-0 top-full z-20 mt-1.5 w-52 rounded-xl border border-white/15 bg-[#18181d]/95 p-1.5 shadow-2xl shadow-black/70 backdrop-blur-md"
+        >
           {PALETTE.map((type) => {
             const look = LOOK[type];
             return (
@@ -387,9 +291,10 @@ function StepToolbar({ node, ctx, hasResult }: { node: WorkflowNode; ctx: Canvas
                   setNextOpen(false);
                   ctx.addAfter(node.id, type);
                 }}
-                className="nodrag flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-zinc-200 hover:bg-white/10 cursor-pointer"
+                className="nodrag flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-zinc-200 transition-colors hover:bg-white/10 cursor-pointer"
               >
-                <span className={cn("flex h-5 w-5 items-center justify-center rounded bg-gradient-to-br text-white", look.head)}><look.Icon className="h-3 w-3" /></span> {look.label}
+                <span className={cn("flex h-5 w-5 items-center justify-center rounded-md bg-gradient-to-br text-white", look.head)}><look.Icon className="h-3 w-3" /></span>
+                <span>{look.label}</span>
               </button>
             );
           })}
@@ -399,42 +304,209 @@ function StepToolbar({ node, ctx, hasResult }: { node: WorkflowNode; ctx: Canvas
   );
 }
 
+/** Compact 1-line subtitle + optional Connect action under the circular bubble. */
+function BubbleMeta({ node, ctx }: { node: WorkflowNode; ctx: CanvasCtx }) {
+  const serverId = node.type === "tool" ? serverIdOf(node.tool_id) : null;
+  const server = useQuery({
+    queryKey: ["builder-server-tools", serverId],
+    queryFn: () => builderApi.serverTools(ctx.token, serverId!),
+    enabled: !!ctx.token && !!serverId,
+    staleTime: 60_000,
+  });
+
+  const agent = node.type === "agent" ? (node.draft_agent ?? (node.agent_id ? ctx.agents[node.agent_id] : undefined)) : undefined;
+  const own = node.config_overrides ?? {};
+  const agentToolIds = agent ? ((own.tool_ids as string[] | undefined) ?? agent.config?.tool_ids ?? []) : [];
+  const missing = useMissingServers(ctx.token, agentToolIds);
+  const connectable = missing.filter((m) => !m.removed);
+  const agentNeeds = agent ? ((own.tool_needs as ToolNeed[] | undefined) ?? agent.config?.tool_needs ?? []) : [];
+
+  let sub = LOOK[node.type].badge;
+  if (node.type === "input") {
+    sub = ctx.inputText.trim() ? `"${ctx.inputText.trim()}"` : "Click to set prompt";
+  } else if (node.type === "manual_trigger") {
+    sub = "Press Run to start";
+  } else if (node.type === "schedule_trigger") {
+    sub = describeSchedule(node.schedule);
+  } else if (node.type === "tool") {
+    if (!node.tool_id) sub = node.need || "Pick a tool";
+    else sub = server.data?.server_name ? `${server.data.server_name} · ${toolName(node.tool_id)}` : toolName(node.tool_id);
+  } else if (node.type === "agent") {
+    if (!agent) sub = "Set up agent";
+    else if (agentToolIds.length) sub = `${agentToolIds.length} tool${agentToolIds.length === 1 ? "" : "s"}`;
+    else sub = (own.llm_model as string | undefined) || agent.llm_model || "AI Agent";
+  } else if (node.type === "condition") {
+    const outs = ctx.edges.filter((e) => e.source === node.id).map((e) => e.condition).filter(Boolean);
+    sub = outs.length ? outs.join(" / ") : (node.condition_config?.mode === "rule" ? "Rule branch" : "AI branch");
+  } else if (node.type === "human_approval") {
+    sub = "Waits for approval";
+  } else if (node.type === "join") {
+    sub = node.join_policy?.mode === "any" ? "Any branch" : "All branches";
+  } else if (node.type === "output") {
+    const fmt = node.output_config?.format;
+    sub = fmt === "text" ? "Plain text" : fmt === "json" ? "JSON" : fmt === "formatted" ? "Report" : "Final answer";
+  }
+
+  const disconnectedTool = node.type === "tool" && serverId && server.data && !server.data.connected;
+
+  return (
+    <>
+      <p className="mt-0.5 max-w-[168px] truncate text-[11px] text-zinc-400" title={sub}>
+        {sub}
+      </p>
+      {disconnectedTool && (
+        <div className="nodrag mt-1.5 flex justify-center" onClick={(e) => e.stopPropagation()}>
+          <ConnectButton serverId={serverId!} serverName={server.data!.server_name} token={ctx.token} className="rounded-full px-2.5 py-0.5 text-[11px]" />
+        </div>
+      )}
+      {connectable.length > 0 && (
+        <div className="nodrag mt-1.5 flex flex-wrap justify-center gap-1" onClick={(e) => e.stopPropagation()}>
+          {connectable.slice(0, 2).map((m) => (
+            <ConnectButton key={m.serverId} serverId={m.serverId} serverName={m.name} token={ctx.token} className="rounded-full px-2 py-0.5 text-[11px]" />
+          ))}
+        </div>
+      )}
+      {node.type === "agent" && agentNeeds.length > 0 && connectable.length === 0 && (
+        <span className="mt-1 inline-block rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-300">
+          Needs {agentNeeds.length} app{agentNeeds.length === 1 ? "" : "s"}
+        </span>
+      )}
+    </>
+  );
+}
+
+/** Real ConnectorIcon inside the circular bubble for tool steps when available. */
+function BubbleIcon({ node, ctx }: { node: WorkflowNode; ctx: CanvasCtx }) {
+  const look = LOOK[node.type];
+  const serverId = node.type === "tool" ? serverIdOf(node.tool_id) : null;
+  const server = useQuery({
+    queryKey: ["builder-server-tools", serverId],
+    queryFn: () => builderApi.serverTools(ctx.token, serverId!),
+    enabled: !!ctx.token && !!serverId,
+    staleTime: 60_000,
+  });
+
+  if (node.type === "tool" && server.data?.server_name) {
+    return (
+      <div className="flex h-11 w-11 items-center justify-center rounded-full bg-white/95 p-2 shadow-inner ring-1 ring-white/20">
+        <ConnectorIcon name={server.data.server_name} size="md" className="h-7 w-7 bg-transparent p-0" />
+      </div>
+    );
+  }
+
+  return (
+    <span className={cn("flex h-11 w-11 items-center justify-center rounded-full bg-gradient-to-br text-white shadow-inner ring-1 ring-white/20", look.head)}>
+      <look.Icon className="h-5 w-5" />
+    </span>
+  );
+}
+
 function FlowNodeView({ data, selected }: NodeProps<FlowNodeType>) {
   const ctx = useContext(CanvasContext);
+  const [hovered, setHovered] = useState(false);
+  const leaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  if (!ctx) return null;
   const { node } = data;
   const look = LOOK[node.type];
-  if (!ctx) return null;
   const hasProblems = data.problems.length > 0;
+  const isRunning = data.state === "running" || data.state === "waiting";
+  const displayTitle = data.title !== look.label ? data.title : look.label;
+
+  const enter = () => {
+    if (leaveTimer.current) {
+      clearTimeout(leaveTimer.current);
+      leaveTimer.current = null;
+    }
+    setHovered(true);
+  };
+  const leave = () => {
+    if (leaveTimer.current) clearTimeout(leaveTimer.current);
+    leaveTimer.current = setTimeout(() => setHovered(false), 160);
+  };
+
   return (
     <div
-      className={cn(
-        "w-[270px] overflow-hidden rounded-xl border bg-[var(--surface)] text-left shadow-lg shadow-black/30 transition-shadow",
-        // A problem turns the border red; selection adds an outline around it.
-        hasProblems ? "border-red-500/70" : "border-[var(--border-strong)]",
-        selected && "outline outline-2 outline-offset-2 outline-[var(--accent-hover)]",
-        data.state && RING[data.state],
-      )}
+      onMouseEnter={enter}
+      onMouseLeave={leave}
+      className="animate-scale-in group relative flex w-44 flex-col items-center text-center select-none"
       title={hasProblems ? data.problems.map((p) => p.message).join("\n") : undefined}
     >
-      <StepToolbar node={node} ctx={ctx} hasResult={!!data.output} />
-      {!NO_INPUT.includes(node.type) && <Handle type="target" position={Position.Left} className="!h-3 !w-3 !border-2 !border-[#141418] !bg-indigo-400" />}
-      {/* The step's kind: its coloured icon and, under its name, what kind it is. */}
-      <div className="flex items-center gap-2.5 px-3 pt-3">
-        <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br text-white", look.head)}><look.Icon className="h-4 w-4" /></span>
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold text-zinc-100">{data.title !== look.label ? data.title : look.label}</p>
-          <p className="truncate text-xs text-zinc-400">{data.title !== look.label ? look.label : look.hint}</p>
+      <StepToolbar
+        node={node}
+        ctx={ctx}
+        hasResult={!!data.output}
+        visible={!!selected || hovered}
+        onEnter={enter}
+        onLeave={leave}
+      />
+
+      {/* Circular Make.com-style orb with left/right ports anchored to the circle perimeter */}
+      <div className="relative flex items-center justify-center">
+        {/* Glowing animated halo when running/waiting */}
+        {isRunning && (
+          <span
+            aria-hidden
+            className={cn(
+              "pointer-events-none absolute -inset-1.5 rounded-full opacity-55 blur-md animate-pulse bg-gradient-to-tr",
+              look.head,
+            )}
+          />
+        )}
+
+        {!NO_INPUT.includes(node.type) && (
+          <Handle
+            type="target"
+            position={Position.Left}
+            className="!-left-1.5 !h-3 !w-3 !border-2 !border-[var(--surface)] !bg-indigo-400 transition-transform hover:scale-125"
+          />
+        )}
+
+        <div
+          className={cn(
+            "relative flex h-20 w-20 items-center justify-center rounded-full border-2 bg-[var(--surface-raised)] transition-all duration-200 group-hover:scale-105",
+            hasProblems ? "border-red-500/80 shadow-[0_0_20px_-4px_rgba(239,68,68,0.45)]" : cn(look.ring, look.glow),
+            selected && "ring-4 ring-[var(--accent-hover)]/45 border-[var(--accent-hover)] scale-105",
+            data.state && STATE_RING[data.state],
+          )}
+        >
+          {/* Subtle inner gradient sheen */}
+          <span aria-hidden className={cn("pointer-events-none absolute inset-1 rounded-full bg-gradient-to-b opacity-15", look.head)} />
+          <BubbleIcon node={node} ctx={ctx} />
+
+          <StateBadge state={data.state} />
+
+          {hasProblems && (
+            <span className="absolute -left-1 -top-1 flex h-6 min-w-6 items-center justify-center gap-0.5 rounded-full border border-red-500/50 bg-zinc-950 px-1 text-[11px] font-bold text-red-400 shadow-md">
+              <AlertTriangle className="h-3 w-3" />
+              {data.problems.length > 1 && data.problems.length}
+            </span>
+          )}
         </div>
-        {hasProblems && (
-          <span className="flex items-center gap-0.5 rounded-full bg-red-500/15 px-1.5 py-0.5 text-xs font-semibold text-red-300">
-            <AlertTriangle className="h-3 w-3" /> {data.problems.length}
+
+        {node.type !== "output" && (
+          <Handle
+            type="source"
+            position={Position.Right}
+            className="!-right-1.5 !h-3 !w-3 !border-2 !border-[var(--surface)] !bg-indigo-400 transition-transform hover:scale-125"
+          />
+        )}
+      </div>
+
+      {/* Clean label & 1-line subtitle underneath the circle */}
+      <div className="mt-2 flex w-full flex-col items-center px-1">
+        <p className="max-w-[168px] truncate text-xs font-semibold text-zinc-100 group-hover:text-white transition-colors">
+          {displayTitle}
+        </p>
+        <BubbleMeta node={node} ctx={ctx} />
+
+        {data.detail && (
+          <span className="mt-1.5 inline-flex max-w-[168px] items-center gap-1 truncate rounded-full border border-sky-400/30 bg-sky-500/15 px-2 py-0.5 text-[10px] font-medium text-sky-300">
+            {data.state === "running" && <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-sky-400" />}
+            <span className="truncate">{data.detail}</span>
           </span>
         )}
-        <StateIcon state={data.state} />
-      </div>
-      <div className="px-3 py-2.5">
-        <Body node={node} ctx={ctx} />
-        {data.detail && <p className="mt-2 truncate rounded-md bg-[var(--accent-wash)] px-2 py-1 text-xs text-zinc-200">{data.detail}</p>}
+
         {data.output && !data.detail && (
           <button
             type="button"
@@ -442,14 +514,13 @@ function FlowNodeView({ data, selected }: NodeProps<FlowNodeType>) {
               e.stopPropagation();
               ctx.showResult(node.id);
             }}
-            className="nodrag mt-2 line-clamp-2 w-full rounded-md bg-white/5 px-2 py-1 text-left text-xs text-zinc-400 hover:bg-white/10 hover:text-zinc-200 cursor-pointer"
-            title="See the whole answer"
+            className="nodrag mt-1.5 inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-0.5 text-[10px] font-medium text-zinc-300 transition-colors hover:border-indigo-400/40 hover:bg-indigo-500/15 hover:text-white cursor-pointer"
+            title={data.output}
           >
-            {data.output}
+            <FileText className="h-2.5 w-2.5 text-indigo-400" /> View result
           </button>
         )}
       </div>
-      {node.type !== "output" && <Handle type="source" position={Position.Right} className="!h-3 !w-3 !border-2 !border-[#141418] !bg-indigo-400" />}
     </div>
   );
 }

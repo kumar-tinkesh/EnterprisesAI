@@ -222,7 +222,7 @@ function Editor({ id, onBack, onOpen, onChat }: EditorProps) {
       nodes.push({
         id: `kb:${kid}`,
         type: "step",
-        position: at(`kb:${kid}`, { x: 0, y: i * 110 }),
+        position: at(`kb:${kid}`, { x: 0, y: i * 128 }),
         data: { type: "knowledge", title: kbName(kid), subtitle: "Searched when it needs facts", problems: [] },
       });
     });
@@ -230,7 +230,7 @@ function Editor({ id, onBack, onOpen, onChat }: EditorProps) {
     const agentAt = nodes[0].position;
     // Beside the agent, in the connectors' column, under the lowest one.
     const firstCol = tools.nodes.filter((n) => n.data.type === "server" || n.position.x < agentAt.x + 400);
-    const teamY = firstCol.length ? Math.max(...firstCol.map((n) => n.position.y)) + 110 : agentAt.y + 110;
+    const teamY = firstCol.length ? Math.max(...firstCol.map((n) => n.position.y)) + 128 : agentAt.y + 128;
     subIds.forEach((sid, i) => {
       const sub = agents.data?.find((a) => a.id === sid);
       const name = sub?.name ?? "Agent";
@@ -241,7 +241,7 @@ function Editor({ id, onBack, onOpen, onChat }: EditorProps) {
       nodes.push({
         id: `team:${sid}`,
         type: "step",
-        position: at(`team:${sid}`, { x: agentAt.x + 360, y: teamY + i * 90 }),
+        position: at(`team:${sid}`, { x: agentAt.x + 340, y: teamY + i * 120 }),
         selected: selected?.kind === "agent" && selected.tab === "team",
         data: {
           type: "team",
@@ -259,7 +259,7 @@ function Editor({ id, onBack, onOpen, onChat }: EditorProps) {
   const flowEdges: Edge[] = useMemo(
     () => [
       ...tools.edges,
-      ...kbIds.map((kid) => ({ id: `k:${kid}`, source: `kb:${kid}`, target: "agent", style: { stroke: "#c4b5fd", strokeDasharray: "4 4" } })),
+      ...kbIds.map((kid) => ({ id: `k:${kid}`, source: `kb:${kid}`, target: "agent", animated: true, style: { stroke: "#a78bfa", strokeWidth: 1.75, strokeDasharray: "4 4" } })),
       ...subIds.map((sid) => {
         const on = active === `Ask ${agents.data?.find((a) => a.id === sid)?.name}`;
         return { id: `t:${sid}`, source: "agent", target: `team:${sid}`, animated: on, style: { stroke: on ? "#e879f9" : "#d8b4fe", strokeWidth: on ? 2.5 : 1.5, strokeDasharray: on ? undefined : "6 4" } };

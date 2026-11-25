@@ -26,8 +26,8 @@ export function toolGraph({
   token,
   agent,
   vertical = false,
-  col = 360,
-  row = 110,
+  col = 340,
+  row = 128,
   at = (_key, fallback) => fallback,
 }: {
   toolIds: string[];
@@ -46,7 +46,11 @@ export function toolGraph({
 }): { nodes: StepNodeType[]; edges: Edge[] } {
   const nodes: StepNodeType[] = [];
   const edges: Edge[] = [];
-  const line = (on: boolean) => ({ animated: on, markerEnd: { type: MarkerType.ArrowClosed }, style: { stroke: on ? "#38bdf8" : "#a1a1aa", strokeWidth: on ? 2.5 : 1.5 } });
+  const line = (on: boolean, done = false) => ({
+    animated: on,
+    markerEnd: { type: MarkerType.ArrowClosed, width: 15, height: 15, color: on ? "#38bdf8" : done ? "#34d399" : "#6366f1" },
+    style: { stroke: on ? "#38bdf8" : done ? "#34d399" : "#6366f1", strokeWidth: on ? 2.5 : 1.75, opacity: on || done ? 1 : 0.7 },
+  });
   const groups = groupByServer(toolIds);
   let slot = 0; // tool rows used so far (wide layout)
 
@@ -54,6 +58,7 @@ export function toolGraph({
     const known = g.serverId !== "unknown" ? server(g.serverId) : undefined;
     const names = g.toolIds.map(toolName);
     const groupOn = !!active && names.includes(active);
+    const groupUsed = names.some((n) => usedTools.includes(n));
     const toolPos = (j: number): XY =>
       vertical
         ? { x: agent.x + (gi - (groups.length - 1) / 2) * col, y: agent.y + row * (known ? 2 : 1) + j * row }
@@ -74,19 +79,21 @@ export function toolGraph({
           vertical,
           type: "server",
           title: known.name,
+          serverName: known.name,
           subtitle: known.connected === undefined ? "Checking connection…" : needsConnecting ? "Not connected yet" : `Connected · ${g.toolIds.length} tool${g.toolIds.length === 1 ? "" : "s"}`,
           problems: needsConnecting ? [{ code: "not_connected", message: `Connect ${known.name} before it can run.` }] : [],
           connect: needsConnecting ? { serverId: g.serverId, serverName: known.name, token } : undefined,
-          state: groupOn ? "running" : names.some((n) => usedTools.includes(n)) ? "succeeded" : undefined,
+          state: groupOn ? "running" : groupUsed ? "succeeded" : undefined,
         },
       });
-      edges.push({ id: `e:${sid}`, source: "agent", target: sid, ...line(groupOn) });
+      edges.push({ id: `e:${sid}`, source: "agent", target: sid, ...line(groupOn, groupUsed) });
       parent = sid;
     }
 
     g.toolIds.forEach((tid, j) => {
       const name = toolName(tid);
       const id = `tool:${tid}`;
+      const isUsed = usedTools.includes(name);
       nodes.push({
         id,
         type: "step",
@@ -95,12 +102,13 @@ export function toolGraph({
           vertical,
           type: "tool",
           title: name,
+          serverName: known?.name,
           subtitle: toolSubtitle(tid),
           problems: [],
-          state: active === name ? "running" : usedTools.includes(name) ? "succeeded" : undefined,
+          state: active === name ? "running" : isUsed ? "succeeded" : undefined,
         },
       });
-      edges.push({ id: `e:${tid}`, source: parent, target: id, ...line(active === name) });
+      edges.push({ id: `e:${tid}`, source: parent, target: id, ...line(active === name, isUsed) });
     });
     slot += g.toolIds.length;
   });
