@@ -22,6 +22,12 @@ def _resolve_role(row) -> str:
     return getattr(row, "role", "tenant_user")
 
 
+def _wid(tokens: dict[str, str]) -> str | None:
+    from src.core.security import decode_token
+
+    return decode_token(tokens["access_token"], expected_type="access").get("wid")
+
+
 @router.post(
     "/signup", response_model=sc.AuthResponse, status_code=status.HTTP_201_CREATED
 )
@@ -43,6 +49,7 @@ async def signup(payload: sc.SignupRequest, db: AsyncSession = Depends(get_db)):
             full_name=account.full_name,
             role=_resolve_role(account),
             tenant_id=getattr(account, "tenant_id", None),
+            workspace_id=_wid(tokens),
         ),
     )
 
@@ -65,6 +72,7 @@ async def login(payload: sc.LoginRequest, db: AsyncSession = Depends(get_db)):
             full_name=account.full_name,
             role=_resolve_role(account),
             tenant_id=getattr(account, "tenant_id", None),
+            workspace_id=_wid(tokens),
         ),
     )
 
@@ -81,7 +89,10 @@ async def logout(payload: sc.RefreshRequest, db: AsyncSession = Depends(get_db))
 
 
 @router.get("/me", response_model=sc.MeResponse)
-async def me(current: CurrentUser = Depends(get_current_user)):
+async def me(current: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    from src.models.workspace import Workspace
+
+    ws = await db.get(Workspace, current.workspace_id) if current.workspace_id else None
     return sc.MeResponse(
         id=current.id,
         email=current.email,
@@ -89,6 +100,8 @@ async def me(current: CurrentUser = Depends(get_current_user)):
         role=current.role,
         tenant_id=current.tenant_id,
         is_active=current.is_active,
+        workspace_id=current.workspace_id,
+        workspace_name=ws.name if ws else None,
     )
 
 

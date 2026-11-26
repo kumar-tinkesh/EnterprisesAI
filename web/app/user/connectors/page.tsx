@@ -174,12 +174,19 @@ function Connectors() {
                 </h2>
                 {g.hint && <p className="mt-0.5 text-xs text-zinc-500">{g.hint}</p>}
               </div>
-              <ul className="divide-y divide-zinc-100 overflow-hidden rounded-lg border border-zinc-200">
-                {g.items.map((s) => {
+              <ul className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                {g.items.map((s, idx) => {
                   const uses = usedBy[s.id] ?? 0;
                   const app = appLabel(s.name, s.description);
                   return (
-                    <li key={s.id} className={cn("flex items-center gap-3 px-3 py-2.5 transition-colors sm:px-4", open === s.id ? "bg-zinc-50" : "hover:bg-zinc-50")}>
+                    <li
+                      key={s.id}
+                      style={{ animationDelay: `${Math.min(idx * 25, 200)}ms` }}
+                      className={cn(
+                        "card-lift animate-fade-up flex items-center gap-3 rounded-xl border bg-[var(--surface)] px-4 py-3.5",
+                        open === s.id ? "border-[var(--accent-border)] bg-white/[0.05]" : "border-white/10 hover:border-white/20",
+                      )}
+                    >
                       <button type="button" onClick={() => setOpen(s.id)} className="flex min-w-0 flex-1 items-center gap-3 text-left cursor-pointer" title={`See what ${app.title} can do`}>
                         <ConnectorIcon name={s.name} size="sm" />
                         <span className="min-w-0 flex-1">
@@ -195,10 +202,10 @@ function Connectors() {
                       </button>
                       {s.connected ? (
                         <span className="flex shrink-0 items-center gap-3">
-                          <span className="hidden items-center gap-1.5 text-xs text-zinc-500 sm:flex">
-                            <span className="h-1.5 w-1.5 rounded-full bg-[var(--success)]" aria-hidden /> Connected
+                          <span className="hidden items-center gap-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400 sm:flex">
+                            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--success)]" aria-hidden /> Connected
                           </span>
-                          <button type="button" onClick={() => setOpen(s.id)} className="text-sm font-medium text-zinc-700 hover:text-zinc-900 cursor-pointer">Manage</button>
+                          <button type="button" onClick={() => setOpen(s.id)} className="text-xs font-medium text-zinc-300 transition-colors hover:text-white cursor-pointer">Manage</button>
                         </span>
                       ) : (
                         <Button size="sm" variant={uses ? "default" : "outline"} className="shrink-0" onClick={() => setConnecting(s.id)} aria-label={`Connect ${app.title}`}>
@@ -274,8 +281,8 @@ function ToolsPanel({
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-label={`${server.name}: tools and capabilities`}>
-      <button type="button" aria-label="Close" className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div className="relative flex h-dvh w-full max-w-lg flex-col border-l border-zinc-200 bg-[var(--surface)] shadow-2xl">
+      <button type="button" aria-label="Close" className="animate-fade-in absolute inset-0 bg-black/60 backdrop-blur-xs" onClick={onClose} />
+      <div className="animate-slide-in-right relative flex h-dvh w-full max-w-lg flex-col border-l border-white/10 bg-[var(--surface)] shadow-2xl">
         <div className="flex items-start gap-3 border-b border-zinc-100 p-4 sm:p-5">
           <ConnectorIcon name={server.name} size="sm" />
           <div className="min-w-0 flex-1">

@@ -128,8 +128,10 @@ class AgentContext:
     # Use the agent's long-term memory (if it has it on): a run a person
     # started for themselves, not a public or workflow one.
     memory: bool = False
-    # Files sent with the request (BuilderAttachment ids, the run user's own).
+    # Files sent with the request (BuilderAttachment ids, the run user's own —
+    # or, on a share link that runs as its publisher, the visitor's who sent them).
     attachment_ids: list[str] = field(default_factory=list)
+    attachment_owner_id: str | None = None
     # Workspace its knowledge bases are searched in, when that isn't the run
     # user's: a visitor's share-link run of someone else's agent.
     knowledge_tenant_id: str | None = None
@@ -609,7 +611,10 @@ async def _attachments(ctx: AgentContext) -> tuple[str, list[dict]]:
     async with session_factory() as db:
         rows = (
             await db.execute(
-                select(BuilderAttachment).where(BuilderAttachment.id.in_(ctx.attachment_ids), BuilderAttachment.owner_id == ctx.user.id)
+                select(BuilderAttachment).where(
+                    BuilderAttachment.id.in_(ctx.attachment_ids),
+                    BuilderAttachment.owner_id == (ctx.attachment_owner_id or ctx.user.id),
+                )
             )
         ).scalars().all()
     by_id = {a.id: a for a in rows}

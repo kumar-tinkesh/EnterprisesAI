@@ -39,6 +39,8 @@ class BuilderWorkflow(Base, TimestampMixin):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
     tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    # The workspace it was made in; lists and lookups only show the current one.
+    workspace_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     owner_id: Mapped[str] = mapped_column(String(36), index=True)
     name: Mapped[str] = mapped_column(String(255))
     description: Mapped[str] = mapped_column(Text, default="")
@@ -62,6 +64,8 @@ class BuilderAgent(Base, TimestampMixin):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
     tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    # The workspace it was made in; lists and lookups only show the current one.
+    workspace_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     owner_id: Mapped[str] = mapped_column(String(36), index=True)
     workflow_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey("builder_workflows.id", ondelete="CASCADE"), nullable=True, index=True
@@ -96,6 +100,8 @@ class BuilderRun(Base, TimestampMixin):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
     tenant_id: Mapped[str] = mapped_column(String(36), index=True)
+    # The workspace it was made in; lists and lookups only show the current one.
+    workspace_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     # The user the run executes as (their own tool connections).
     owner_id: Mapped[str] = mapped_column(String(36), index=True)
     kind: Mapped[str] = mapped_column(String(20))  # agent | workflow
@@ -156,6 +162,8 @@ class BuilderConversation(Base, TimestampMixin):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
     tenant_id: Mapped[str] = mapped_column(String(36), index=True)
+    # The workspace it was made in; lists and lookups only show the current one.
+    workspace_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     owner_id: Mapped[str] = mapped_column(String(36), index=True)
     kind: Mapped[str] = mapped_column(String(20))  # agent | workflow
     # No foreign keys: like runs, a chat outlives a deleted agent/workflow.
@@ -239,6 +247,8 @@ class BuilderApproval(Base, TimestampMixin):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
     run_id: Mapped[str] = mapped_column(ForeignKey("builder_runs.id", ondelete="CASCADE"), index=True)
     tenant_id: Mapped[str] = mapped_column(String(36), index=True)
+    # The workspace it was made in; lists and lookups only show the current one.
+    workspace_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     owner_id: Mapped[str] = mapped_column(String(36), index=True)
     kind: Mapped[str] = mapped_column(String(20))
     node_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -278,6 +288,8 @@ class BuilderSchedule(Base, TimestampMixin):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
     tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    # The workspace it was made in; lists and lookups only show the current one.
+    workspace_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     owner_id: Mapped[str] = mapped_column(String(36), index=True)
     kind: Mapped[str] = mapped_column(String(20))  # agent | workflow
     agent_id: Mapped[Optional[str]] = mapped_column(
@@ -437,6 +449,8 @@ class BuilderPublicKey(Base, TimestampMixin):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
     tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    # The workspace it was made in; lists and lookups only show the current one.
+    workspace_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     owner_id: Mapped[str] = mapped_column(String(36), index=True)
     kind: Mapped[str] = mapped_column(String(20))  # agent | workflow
     agent_id: Mapped[Optional[str]] = mapped_column(
@@ -524,6 +538,8 @@ class BuilderWebhook(Base, TimestampMixin):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
     tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    # The workspace it was made in; lists and lookups only show the current one.
+    workspace_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     owner_id: Mapped[str] = mapped_column(String(36), index=True)
     agent_id: Mapped[str] = mapped_column(ForeignKey("builder_agents.id", ondelete="CASCADE"), index=True)
     name: Mapped[str] = mapped_column(String(120))

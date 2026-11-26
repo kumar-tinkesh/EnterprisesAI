@@ -2,10 +2,12 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { AlertTriangle, ChevronDown, ChevronRight, Plus, Trash2, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, ChevronRight, Copy, Pin, PinOff, Play, Plus, Trash2, X } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AgentStepConfig } from "@/components/builder/agent-step-config";
+import { MarkdownView } from "@/components/builder/chat/markdown-view";
 import { NODE_LOOK } from "@/components/builder/flow-node";
 import { OutputSettings } from "@/components/builder/output-settings";
 import { Field, JsonField, RiskBadge, Section, Select, Textarea, Toggle } from "@/components/builder/fields";
@@ -29,9 +31,9 @@ const RULE_OPS = ["contains", "not_contains", "equals", "not_equals", "starts_wi
 function Problems({ problems }: { problems: Problem[] }) {
   if (!problems.length) return null;
   return (
-    <div className="space-y-1 border-b border-red-100 bg-red-50 px-3.5 py-2.5">
+    <div className="space-y-1 border-b border-red-500/25 bg-red-500/10 px-3.5 py-2.5">
       {problems.map((p, i) => (
-        <p key={i} className="flex gap-1.5 text-xs text-red-700">
+        <p key={i} className="flex gap-1.5 text-xs text-red-300">
           <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
           {p.message}
         </p>
@@ -108,6 +110,8 @@ export function StepInspector({
   token,
   workflowId,
   lastRunId,
+  inputText,
+  onInputText,
   onChange,
   onEdgeChange,
   onDelete,
@@ -123,6 +127,8 @@ export function StepInspector({
   standaloneAgents: Agent[];
   problems: Problem[];
   token: string;
+  inputText?: string;
+  onInputText?: (text: string) => void;
   onChange: (patch: Partial<WorkflowNode>) => void;
   onEdgeChange: (edgeId: string, patch: Partial<WorkflowEdge>) => void;
   onDelete: () => void;
@@ -193,7 +199,23 @@ export function StepInspector({
         {node.type === "schedule_trigger" && (
           <WorkflowScheduleFields node={node} token={token} workflowId={workflowId} onChange={onChange} />
         )}
-        {node.type === "input" && <InputFields node={node} onChange={onChange} />}
+        {node.type === "input" && (
+          <>
+            {onInputText && (
+              <Section title="Run prompt">
+                <Field label="What should it work on?" hint="Used when you press Run on the canvas.">
+                  <Textarea
+                    rows={3}
+                    placeholder="Enter prompt or input text to start run…"
+                    value={inputText ?? ""}
+                    onChange={(e) => onInputText(e.target.value)}
+                  />
+                </Field>
+              </Section>
+            )}
+            <InputFields node={node} onChange={onChange} />
+          </>
+        )}
         {node.type === "agent" && (
           <AgentStepConfig node={node} agents={agents} standaloneAgents={standaloneAgents} token={token} onChange={onChange} />
         )}
@@ -392,27 +414,150 @@ function ConditionStep({
 
 export function EdgeInspector({
   edge,
+  sourceTitle,
+  targetTitle,
   fromCondition,
+  payload,
+  isPinned,
+  fromRun,
+  canTestTarget,
+  onPinSource,
+  onTestTarget,
   onChange,
   onDelete,
   onClose,
 }: {
   edge: WorkflowEdge;
+  sourceTitle?: string;
+  targetTitle?: string;
   fromCondition: boolean;
+  payload?: string | null;
+  isPinned?: boolean;
+  fromRun?: boolean;
+  canTestTarget?: boolean;
+  onPinSource?: (text: string | null) => void;
+  onTestTarget?: () => void;
   onChange: (patch: Partial<WorkflowEdge>) => void;
   onDelete: () => void;
   onClose: () => void;
 }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(payload ?? "");
+  const [copied, setCopied] = useState(false);
+  const srcName = sourceTitle || edge.source;
+  const tgtName = targetTitle || edge.target;
+
   return (
     <div className="flex max-h-full min-h-0 flex-col">
-      <PanelHeader title="Line" subtitle={`${edge.source} → ${edge.target}`} onDelete={onDelete} deleteLabel="Remove line" onClose={onClose} />
-      {fromCondition && (
-        <Section title="Branch label">
-          <Input className="h-9" value={edge.condition ?? ""} onChange={(e) => onChange({ condition: e.target.value || null })} />
-          <p className="text-xs text-zinc-400">In AI mode the condition picks a line by this label.</p>
+      <PanelHeader title="Connection" subtitle={`${srcName} → ${tgtName}`} onDelete={onDelete} deleteLabel="Remove line" onClose={onClose} />
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {fromCondition && (
+          <Section title="Branch label">
+            <Input className="h-9" value={edge.condition ?? ""} onChange={(e) => onChange({ condition: e.target.value || null })} />
+            <p className="text-xs text-zinc-400">In AI mode the condition picks a line by this label.</p>
+          </Section>
+        )}
+
+        <Section
+          title={`Payload from ${srcName}`}
+          action={
+            <div className="flex items-center gap-1.5">
+              {payload && !editing && (
+                <button
+                  type="button"
+                  title="Copy payload"
+                  onClick={() => {
+                    void navigator.clipboard?.writeText(payload).then(() => {
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 1500);
+                    });
+                  }}
+                  className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-zinc-400 hover:bg-white/5 hover:text-zinc-200 cursor-pointer"
+                >
+                  {copied ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+                </button>
+              )}
+              {onPinSource && !editing && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDraft(payload ?? "");
+                    setEditing(true);
+                  }}
+                  className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-indigo-400 hover:bg-indigo-500/15 hover:text-indigo-300 cursor-pointer"
+                >
+                  <Pin className="h-3 w-3" /> {isPinned ? "Edit pin" : "Pin / Mock"}
+                </button>
+              )}
+            </div>
+          }
+        >
+          <div className="flex flex-wrap items-center gap-1.5">
+            {isPinned ? (
+              <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/35 bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-300">
+                <Pin className="h-2.5 w-2.5" /> Pinned sample output
+              </span>
+            ) : fromRun && payload ? (
+              <span className="inline-flex items-center gap-1 rounded-full border border-emerald-400/30 bg-emerald-500/15 px-2 py-0.5 text-[11px] font-medium text-emerald-300">
+                From last run
+              </span>
+            ) : payload ? (
+              <span className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[11px] font-medium text-zinc-300">
+                Prompt / draft
+              </span>
+            ) : null}
+            {isPinned && onPinSource && !editing && (
+              <button
+                type="button"
+                onClick={() => onPinSource(null)}
+                className="inline-flex items-center gap-1 rounded-full border border-white/10 px-2 py-0.5 text-[11px] text-zinc-400 hover:border-red-400/40 hover:text-red-300 cursor-pointer"
+              >
+                <PinOff className="h-2.5 w-2.5" /> Unpin
+              </button>
+            )}
+          </div>
+
+          {editing && onPinSource ? (
+            <div className="space-y-2">
+              <Textarea
+                rows={5}
+                placeholder={`Paste sample output from ${srcName}…`}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+              />
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  className="flex-1"
+                  onClick={() => {
+                    onPinSource(draft.trim() ? draft : null);
+                    setEditing(false);
+                  }}
+                >
+                  <Pin className="h-3.5 w-3.5" /> Save pin
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => setEditing(false)}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : payload ? (
+            <div className="max-h-56 overflow-y-auto rounded-lg border border-white/10 bg-zinc-950/70 p-2.5 text-xs text-zinc-200">
+              <MarkdownView text={payload} />
+            </div>
+          ) : (
+            <p className="rounded-lg border border-dashed border-white/10 px-3 py-2.5 text-xs text-zinc-400">
+              No captured data on this line yet. Run the workflow once or click <strong className="text-zinc-200">Pin / Mock</strong> to supply sample input for <strong className="text-zinc-200">{tgtName}</strong>.
+            </p>
+          )}
+
+          {canTestTarget && onTestTarget && (
+            <Button size="sm" variant="outline" className="w-full" onClick={onTestTarget}>
+              <Play className="h-3.5 w-3.5" /> Test “{tgtName}” with this input
+            </Button>
+          )}
         </Section>
-      )}
-      {!fromCondition && <p className="px-3.5 py-3 text-xs text-zinc-500">A plain line: the next step gets this one&apos;s output.</p>}
+      </div>
     </div>
   );
 }

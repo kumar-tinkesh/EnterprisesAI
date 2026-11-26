@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Circle, ExternalLink, Paperclip, Plus, SlidersHorizontal, Sparkles, Square, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Circle, ExternalLink, PanelLeftClose, PanelLeftOpen, Paperclip, Plus, SlidersHorizontal, Sparkles, Square, X } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
 import { Menu } from "@/components/ui/menu";
@@ -11,6 +11,7 @@ import { Field, Select } from "@/components/builder/fields";
 import { ApprovalCard } from "@/components/builder/approval-card";
 import { AnswerMessage, Avatar, AvatarKind, FileChip, GuardrailNotes, ThinkingBlock, ThinkingWords, UserMessage } from "@/components/builder/chat/chat-message";
 import { ChatHistory } from "@/components/builder/chat/chat-history";
+import { ChatSessionSidebar } from "@/components/builder/chat/chat-session-sidebar";
 import { MarkdownView } from "@/components/builder/chat/markdown-view";
 import { AnswerView } from "@/components/builder/run-output";
 import { coerce } from "@/components/builder/playground";
@@ -140,6 +141,7 @@ export function ChatPanel({
   onClose,
   onEdit,
   embedded = false,
+  showSessionSidebar = true,
 }: {
   target: ChatTarget;
   token: string;
@@ -148,9 +150,12 @@ export function ChatPanel({
   embedded?: boolean;
   /** Open this agent/workflow in the editor beside the chat. */
   onEdit: () => void;
+  /** Whether to show the full left session history sidebar (defaults to true). */
+  showSessionSidebar?: boolean;
 }) {
   const queryClient = useQueryClient();
   const { kind, id } = target;
+  const [sessionsOpen, setSessionsOpen] = useState(true);
 
   const detail = useQuery({
     queryKey: ["builder-chat-target", kind, id],
@@ -390,54 +395,97 @@ export function ChatPanel({
 
   return (
     <AvatarKind.Provider value={kind}>
-    <div className="flex h-full min-h-0 flex-col bg-[var(--bg)]">
-      {/* Header */}
-      <header className="flex shrink-0 items-center gap-2 border-b border-zinc-200 px-3 py-2 sm:px-4">
-        {!embedded && <Avatar name={name} size={32} />}
-        <div className="min-w-0 flex-1">
-          {!embedded && <p className="truncate text-sm font-semibold text-zinc-900">{name}</p>}
-          <p className={cn("truncate", embedded ? "text-sm font-medium text-zinc-900" : "text-xs text-zinc-500")}>{chat ? chat.title : "New chat"}</p>
-        </div>
-        {/* Already in a new, empty chat: nothing for "New chat" to do. */}
-        {(chatId || pendingText !== null) && (
-          <button
-            type="button"
-            onClick={newChat}
-            aria-label="New chat"
-            title="New chat — this one stays in your history"
-            className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-sm text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer"
-          >
-            <Plus className="h-4 w-4" /> <span className="hidden sm:inline">New chat</span>
-          </button>
-        )}
-        <ChatHistory
+    <div className="flex h-full min-h-0 bg-[var(--bg)]">
+      {/* Collapsible Session History Sidebar */}
+      {showSessionSidebar && (
+        <ChatSessionSidebar
           chats={chats.data ?? []}
           loading={chats.isLoading}
           currentId={chatId}
+          open={sessionsOpen}
+          onToggle={() => setSessionsOpen(false)}
           onOpen={openChat}
           onNew={newChat}
           onRename={renameChat}
           onDelete={removeChat}
         />
-        {!embedded && (
-          <>
+      )}
+
+      {/* Main Chat Conversation Area */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        {/* Header */}
+        <header className="flex h-12 shrink-0 items-center gap-2 border-b border-white/10 px-3 sm:px-4">
+          {showSessionSidebar && !sessionsOpen && (
             <button
               type="button"
-              onClick={onEdit}
-              aria-label={editorTitle}
-              title={editorTitle}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer"
+              onClick={() => setSessionsOpen(true)}
+              title="Show chat sessions"
+              aria-label="Show chat sessions"
+              className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-zinc-300 hover:bg-white/[0.08] hover:text-white cursor-pointer transition-colors"
             >
-              <ExternalLink className="h-4 w-4" />
+              <PanelLeftOpen className="h-4 w-4 text-indigo-400" />
+              <span className="hidden sm:inline">Sessions</span>
+              {chats.data && chats.data.length > 0 && (
+                <span className="rounded-full bg-white/[0.08] px-1.5 py-0.2 text-[10px] text-zinc-400 tabular-nums">
+                  {chats.data.length}
+                </span>
+              )}
             </button>
-            <button type="button" onClick={onClose} aria-label="Close chat" className="inline-flex h-8 w-8 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer">
-              <X className="h-4 w-4" />
+          )}
+          {!embedded && <Avatar name={name} size={32} />}
+          <div className="min-w-0 flex-1">
+            {!embedded && <p className="truncate text-sm font-semibold text-zinc-100">{name}</p>}
+            <p className={cn("truncate", embedded ? "text-sm font-medium text-zinc-200" : "text-xs text-zinc-400")}>
+              {chat ? chat.title : "New chat"}
+            </p>
+          </div>
+          {/* Already in a new, empty chat, or sidebar New Chat is visible: avoid duplicate button. */}
+          {(chatId || pendingText !== null) && (!showSessionSidebar || !sessionsOpen) && (
+            <button
+              type="button"
+              onClick={newChat}
+              aria-label="New chat"
+              title="New chat — this one stays in your history"
+              className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-zinc-300 hover:bg-white/[0.08] hover:text-white cursor-pointer transition-colors"
+            >
+              <Plus className="h-3.5 w-3.5 text-indigo-400" /> <span className="hidden sm:inline">New chat</span>
             </button>
-          </>
-        )}
-      </header>
+          )}
+          {!showSessionSidebar && (
+            <ChatHistory
+              chats={chats.data ?? []}
+              loading={chats.isLoading}
+              currentId={chatId}
+              onOpen={openChat}
+              onNew={newChat}
+              onRename={renameChat}
+              onDelete={removeChat}
+            />
+          )}
+          {!embedded && (
+            <>
+              <button
+                type="button"
+                onClick={onEdit}
+                aria-label={editorTitle}
+                title={editorTitle}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-zinc-400 hover:bg-white/[0.08] hover:text-white cursor-pointer transition-colors"
+              >
+                <ExternalLink className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                aria-label="Close chat"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-zinc-400 hover:bg-white/[0.08] hover:text-white cursor-pointer transition-colors"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </>
+          )}
+        </header>
 
-      {/* Thread */}
+        {/* Thread */}
       <div className="relative min-h-0 flex-1">
         <div
           ref={scroller}
@@ -447,12 +495,12 @@ export function ChatPanel({
           }}
           className="absolute inset-0 overflow-y-auto overscroll-contain px-4 py-6 sm:px-6"
         >
-          <div className="mx-auto flex max-w-[720px] flex-col gap-8">
+          <div className="mx-auto flex max-w-[860px] flex-col gap-8">
             {chatId && runs.isLoading && <div className="flex justify-center py-8"><Spinner className="h-5 w-5 text-zinc-400" /></div>}
             {runs.isError && <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">Couldn&apos;t load this chat.</p>}
 
             {empty && (
-              <div className="mx-auto flex max-w-lg flex-col items-center py-10 text-center">
+              <div className="animate-fade-up mx-auto flex max-w-lg flex-col items-center py-10 text-center">
                 <Avatar name={name} size={56} />
                 <h2 className="mt-4 text-xl font-semibold text-zinc-900">{name}</h2>
                 {sub && <p className={cn("mt-1.5 line-clamp-3", welcome ? "text-sm text-zinc-700" : "text-sm text-zinc-500")}>{sub}</p>}
@@ -490,10 +538,10 @@ export function ChatPanel({
                           type="button"
                           disabled={busy}
                           onClick={() => submit(s.prompt)}
-                          className="group flex h-full w-full items-center justify-between gap-2 rounded-lg border border-zinc-200 p-3 text-left text-sm text-zinc-700 transition-colors hover:border-zinc-300 hover:bg-zinc-50 hover:text-zinc-900 disabled:opacity-50 cursor-pointer"
+                          className="card-lift group flex h-full w-full items-center justify-between gap-2 rounded-xl border border-white/10 bg-[var(--surface)] p-3 text-left text-sm text-zinc-300 hover:border-[var(--accent-border)] hover:bg-[var(--surface-raised)] hover:text-white disabled:opacity-50 cursor-pointer"
                         >
-                          <span className="flex items-center gap-2"><Sparkles className="h-4 w-4 shrink-0 text-zinc-400" /> {s.label}</span>
-                          <ChevronRight className="h-4 w-4 shrink-0 text-zinc-400 group-hover:text-zinc-900" />
+                          <span className="flex items-center gap-2"><Sparkles className="h-4 w-4 shrink-0 text-[var(--link)]" /> {s.label}</span>
+                          <ChevronRight className="h-4 w-4 shrink-0 text-zinc-400 transition-transform group-hover:translate-x-0.5 group-hover:text-white" />
                         </button>
                       </li>
                     ))}
@@ -550,7 +598,7 @@ export function ChatPanel({
           <button
             type="button"
             onClick={() => end.current?.scrollIntoView({ behavior: "smooth", block: "end" })}
-            className="absolute bottom-3 left-1/2 z-10 inline-flex -translate-x-1/2 items-center gap-1 rounded-full border border-zinc-200 bg-[var(--surface-raised)] px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-lg hover:text-zinc-900 cursor-pointer"
+            className="animate-fade-up absolute bottom-3 left-1/2 z-10 inline-flex -translate-x-1/2 items-center gap-1 rounded-full border border-white/15 bg-[var(--surface-raised)] px-3 py-1.5 text-xs font-medium text-zinc-200 shadow-xl transition-colors hover:text-white cursor-pointer"
           >
             <ArrowDown className="h-3 w-3" /> Jump to latest
           </button>
@@ -627,7 +675,7 @@ export function ChatPanel({
               e.preventDefault();
               submit();
             }}
-            className="rounded-2xl border border-[var(--border-strong)] bg-[var(--surface)] px-3 pb-2 pt-3 transition focus-within:border-[var(--accent-hover)]"
+            className="rounded-2xl border border-[var(--border-strong)] bg-[var(--surface)] px-3 pb-2 pt-3 shadow-sm transition-all duration-200 focus-within:border-[var(--accent-hover)] focus-within:shadow-[0_0_24px_-6px_rgba(99,102,241,0.3)]"
           >
             {(files.length > 0 || uploading > 0 || fileError) && (
               <div className="mb-2 flex flex-wrap items-center gap-1.5">
@@ -651,7 +699,7 @@ export function ChatPanel({
                   submit();
                 }
               }}
-              className="block max-h-40 min-h-[36px] w-full resize-none bg-transparent px-1 py-1 text-sm text-zinc-900 outline-none placeholder:text-zinc-500"
+              className="block max-h-40 min-h-[36px] w-full resize-none bg-transparent px-1 py-1 text-sm text-zinc-100 outline-none placeholder:text-zinc-500"
             />
             <div className="mt-1 flex items-center gap-1">
               <input
@@ -715,6 +763,7 @@ export function ChatPanel({
             </div>
           </form>
         </div>
+      </div>
       </div>
     </div>
     </AvatarKind.Provider>

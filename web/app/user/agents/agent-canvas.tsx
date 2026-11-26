@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -61,9 +61,11 @@ const CHIP =
 export default function BuilderHome({
   hasAnyConnectedServer,
   onOpen,
+  onOpenWorkspace,
 }: {
   hasAnyConnectedServer: boolean;
   onOpen: (target: BuildTarget) => void;
+  onOpenWorkspace?: (target: BuildTarget, tab?: "overview" | "chat" | "simulate" | "health") => void;
 }) {
   const token = useAuthStore((s) => s.accessToken) || "";
   const builder = useBuilderActions({ open: onOpen });
@@ -76,6 +78,12 @@ export default function BuilderHome({
     try {
       const saved = window.localStorage.getItem(MODE_KEY);
       if (saved === "agent" || saved === "workflow") setMode(saved);
+      const params = new URLSearchParams(window.location.search);
+      const p = params.get("prompt");
+      if (p) {
+        setText(p);
+        setIsFocused(true);
+      }
     } catch {
       /* default */
     }
@@ -136,8 +144,8 @@ export default function BuilderHome({
   return (
     <div
       className={cn(
-        "mx-auto flex h-full w-full max-w-6xl flex-col px-4 py-6 transition-all duration-300 sm:px-8 sm:py-8",
-        isActive ? "items-center justify-center" : "justify-start"
+        "animate-fade-up mx-auto flex h-full w-full max-w-6xl flex-col px-4 py-6 transition-all duration-300 sm:px-8 sm:py-8",
+        isActive ? "bg-ambient-grid items-center justify-center" : "justify-start"
       )}
     >
       {/* Header: Centered in active mode, top-aligned in idle mode */}
@@ -358,15 +366,28 @@ export default function BuilderHome({
       {/* Main Workspace Dashboard: Unified Library & Templates (Hidden when active) */}
       {!isActive && (
         <div className="min-h-0 flex-1 overflow-hidden">
-          <AgentLibrary onOpen={onOpen} />
+          <AgentLibrary onOpen={onOpen} onOpenWorkspace={onOpenWorkspace} />
         </div>
       )}
     </div>
   );
 }
 
+const HEALTH_META: Record<string, { label: string; dot: string; text: string }> = {
+  needs_attention: { label: "Needs attention", dot: "bg-amber-400", text: "text-amber-300" },
+  testing: { label: "In testing", dot: "bg-sky-400", text: "text-sky-300" },
+  not_tested: { label: "Not tested", dot: "bg-zinc-500", text: "text-zinc-500" },
+  production_ready: { label: "Ready", dot: "bg-emerald-400", text: "text-emerald-400" },
+};
+
 /** Unified Dashboard for Agents, Workflows & Templates with modern card grid */
-function AgentLibrary({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
+function AgentLibrary({
+  onOpen,
+  onOpenWorkspace,
+}: {
+  onOpen: (target: BuildTarget) => void;
+  onOpenWorkspace?: (target: BuildTarget, tab?: "overview" | "chat" | "simulate" | "health") => void;
+}) {
   const token = useAuthStore((s) => s.accessToken) || "";
   const [tab, setTab] = useState<"all" | "agent" | "workflow" | "templates">("all");
   const [query, setQuery] = useState("");
@@ -386,6 +407,16 @@ function AgentLibrary({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
     queryFn: () => builderApi.listTemplates(token),
     enabled: !!token,
   });
+  const overview = useQuery({
+    queryKey: ["builder-overview"],
+    queryFn: () => builderApi.overview(token, 7),
+    enabled: !!token,
+  });
+
+  const statsMap = useMemo(
+    () => new Map((overview.data?.items ?? []).map((i) => [`${i.kind}:${i.id}`, i])),
+    [overview.data]
+  );
 
   const agentItems = (agents.data ?? []).map((a) => ({
     kind: "agent" as const,
@@ -393,6 +424,7 @@ function AgentLibrary({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
     name: a.name,
     sub: a.role || a.goal || "Autonomous Agent",
     updated: a.updated_at,
+    stats: statsMap.get(`agent:${a.id}`),
   }));
 
   const workflowItems = (workflows.data ?? []).map((w) => ({
@@ -401,6 +433,7 @@ function AgentLibrary({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
     name: w.name,
     sub: w.description || `${w.node_count} steps`,
     updated: w.updated_at,
+    stats: statsMap.get(`workflow:${w.id}`),
   }));
 
   const templateList = templates.data ?? [];
@@ -425,6 +458,15 @@ function AgentLibrary({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
       t.summary.toLowerCase().includes(needle) ||
       t.description.toLowerCase().includes(needle)
   );
+
+  const isLoading =
+    tab === "templates"
+      ? templates.isLoading
+      : tab === "agent"
+        ? agents.isLoading
+        : tab === "workflow"
+          ? workflows.isLoading
+          : agents.isLoading || workflows.isLoading;
 
   return (
     <section className="space-y-4" aria-labelledby="library-heading">
@@ -507,8 +549,28 @@ function AgentLibrary({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
 
       {/* Scrollable Container for Cards & Templates */}
       <div className="max-h-[calc(100dvh-370px)] min-h-[300px] overflow-y-auto pr-1.5 pb-4 pt-1 [scrollbar-width:thin] [scrollbar-color:rgba(255,255,255,0.15)_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-white/10 hover:[&::-webkit-scrollbar-thumb]:bg-white/20">
-        {/* View: Templates Tab */}
-        {tab === "templates" ? (
+        {/* Loading Skeleton */}
+        {isLoading ? (
+          <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2 lg:grid-cols-3" aria-busy="true">
+            {[0, 1, 2, 3, 4, 5].map((i) => (
+              <div key={i} className="flex flex-col justify-between rounded-xl border border-white/10 bg-[var(--surface)] p-4">
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="h-8 w-8 animate-pulse rounded-lg bg-white/[0.06]" />
+                    <div className="h-4 w-1/2 animate-pulse rounded bg-white/[0.06]" />
+                  </div>
+                  <div className="h-3 w-full animate-pulse rounded bg-white/[0.04]" />
+                  <div className="h-3 w-2/3 animate-pulse rounded bg-white/[0.04]" />
+                </div>
+                <div className="mt-4 flex justify-end gap-2 border-t border-white/5 pt-3">
+                  <div className="h-7 w-20 animate-pulse rounded-md bg-white/[0.05]" />
+                  <div className="h-7 w-16 animate-pulse rounded-md bg-white/[0.05]" />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : /* View: Templates Tab */
+        tab === "templates" ? (
           shownTemplates.length === 0 ? (
             <p className="rounded-xl border border-dashed border-white/10 px-4 py-12 text-center text-xs text-zinc-400">
               No templates match &ldquo;{query}&rdquo;.
@@ -556,10 +618,11 @@ function AgentLibrary({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
         ) : (
           /* Modern Cards Grid */
           <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2 lg:grid-cols-3">
-            {shown.map((it) => (
+            {shown.map((it, idx) => (
               <div
                 key={`${it.kind}:${it.id}`}
-                className="group flex flex-col justify-between rounded-xl border border-white/10 bg-[var(--surface)] p-4 shadow-xs transition-all hover:border-white/20 hover:bg-[var(--surface-raised)]"
+                style={{ animationDelay: `${Math.min(idx * 35, 240)}ms` }}
+                className="card-lift animate-fade-up group flex flex-col justify-between rounded-xl border border-white/10 bg-[var(--surface)] p-4 shadow-xs hover:border-indigo-500/35 hover:bg-[var(--surface-raised)]"
               >
                 {/* Card Header & Content */}
                 <div className="space-y-2.5">
@@ -583,18 +646,42 @@ function AgentLibrary({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
                   <p className="line-clamp-2 text-xs leading-relaxed text-zinc-400">
                     {it.sub}
                   </p>
+
+                  {it.stats && (
+                    <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px]">
+                      <span className={cn("inline-flex items-center gap-1 font-medium", HEALTH_META[it.stats.health_status]?.text)}>
+                        <span className={cn("h-1.5 w-1.5 rounded-full", HEALTH_META[it.stats.health_status]?.dot)} />
+                        {HEALTH_META[it.stats.health_status]?.label}
+                      </span>
+                      {it.stats.last_run_at && (
+                        <span className="text-zinc-500">
+                          · {timeAgo(it.stats.last_run_at)}
+                        </span>
+                      )}
+                      {it.stats.runs ? (
+                        <span className="text-zinc-500 tabular-nums">
+                          · {it.stats.runs} run{it.stats.runs === 1 ? "" : "s"}
+                        </span>
+                      ) : null}
+                    </div>
+                  )}
                 </div>
 
                 {/* Card Action Footer */}
                 <div className="mt-4 flex items-center justify-end gap-2 border-t border-white/5 pt-3">
-                  <Link
-                    href={`/user/executions?chat=${it.kind}:${encodeURIComponent(it.id)}&tab=chat`}
-                    className="inline-flex h-7 items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.04] px-2.5 text-xs font-medium text-zinc-300 hover:bg-white/[0.08] hover:text-white transition-colors"
-                    title="Open Chat with this agent/workflow"
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onOpenWorkspace
+                        ? onOpenWorkspace({ kind: it.kind, id: it.id }, "chat")
+                        : onOpen({ kind: it.kind, id: it.id })
+                    }
+                    className="inline-flex h-7 items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.04] px-2.5 text-xs font-medium text-zinc-200 hover:bg-white/[0.08] hover:text-white transition-colors cursor-pointer"
+                    title="Open Workspace with this agent/workflow"
                   >
-                    <MessageSquare className="h-3 w-3 text-zinc-400" />
-                    <span>Chat</span>
-                  </Link>
+                    <MessageSquare className="h-3 w-3 text-indigo-400" />
+                    <span>Playground</span>
+                  </button>
                   <button
                     type="button"
                     onClick={() => onOpen({ kind: it.kind, id: it.id })}
@@ -602,7 +689,7 @@ function AgentLibrary({ onOpen }: { onOpen: (target: BuildTarget) => void }) {
                     title="Edit in visual canvas"
                   >
                     <Layers className="h-3 w-3" />
-                    <span>Edit Canvas</span>
+                    <span>Canvas</span>
                   </button>
                 </div>
               </div>
@@ -649,13 +736,14 @@ function TemplatesGrid({
 
   return (
     <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2 lg:grid-cols-3">
-      {templates.map((t) => {
+      {templates.map((t, idx) => {
         const sum = needsSummary(t.systems);
         const isBusy = create.isPending && create.variables === t.key;
         return (
           <div
             key={t.key}
-            className="flex flex-col justify-between rounded-xl border border-white/10 bg-[var(--surface)] p-4 shadow-xs transition-all hover:border-white/20 hover:bg-[var(--surface-raised)]"
+            style={{ animationDelay: `${Math.min(idx * 35, 240)}ms` }}
+            className="card-lift animate-fade-up flex flex-col justify-between rounded-xl border border-white/10 bg-[var(--surface)] p-4 shadow-xs hover:border-indigo-500/35 hover:bg-[var(--surface-raised)]"
           >
             <div className="space-y-2">
               <div className="flex items-center gap-2">

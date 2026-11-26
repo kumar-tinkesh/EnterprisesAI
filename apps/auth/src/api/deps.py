@@ -28,6 +28,10 @@ class CurrentUser(BaseModel):
     role: str
     tenant_id: str | None = None
     is_active: bool = True
+    # The workspace this request works in: the token's ``wid`` when the person
+    # may still enter it, else their first workspace. None for vendor admins
+    # (and for a tenant with no workspace at all).
+    workspace_id: str | None = None
 
 
 async def get_current_user(
@@ -81,7 +85,11 @@ async def get_current_user(
 
         await set_tenant_context(db, row.tenant_id)
 
+    from src.api.v1.workspaces.service import resolve_workspace
 
+    workspace_id = await resolve_workspace(
+        db, user_id=row.id, role=row.role, tenant_id=row.tenant_id, requested=claims.get("wid")
+    )
 
     return CurrentUser(
         id=row.id,
@@ -90,6 +98,7 @@ async def get_current_user(
         role=row.role,
         tenant_id=row.tenant_id,
         is_active=row.is_active,
+        workspace_id=workspace_id,
     )
 
 

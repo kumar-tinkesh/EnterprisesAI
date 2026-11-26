@@ -94,7 +94,6 @@ export function PublishPanel({
   const [perUser, setPerUser] = useState("");
   const [toolMode, setToolMode] = useState<ToolMode>("publisher");
   const [keepMine, setKeepMine] = useState<string[]>([]);
-  const [showOutline, setShowOutline] = useState(true);
   const [created, setCreated] = useState<{ key: PublicKeyCreated; way: Way } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -138,7 +137,7 @@ export function PublishPanel({
         per_user_daily_limit: w === "link" && perUser.trim() ? Number(perUser) : null,
         tool_mode: toolMode,
         publisher_server_ids: toolMode === "mixed" ? keepMine : [],
-        show_outline: w === "link" ? showOutline : true,
+        show_outline: true,
       }),
     onSuccess: (k, w) => {
       setCreated({ key: k, way: w });
@@ -230,15 +229,6 @@ export function PublishPanel({
                 if (c.tool_mode) setToolMode(c.tool_mode);
                 if (c.publisher_server_ids) setKeepMine(c.publisher_server_ids);
               }} />
-            )}
-            {way === "link" && (
-              <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-zinc-200 p-3">
-                <input type="checkbox" className="mt-0.5 h-4 w-4 accent-[var(--accent)]" checked={showOutline} onChange={(e) => setShowOutline(e.target.checked)} />
-                <span>
-                  <span className="block text-sm font-medium text-zinc-900">Show how it works</span>
-                  <span className="block text-xs text-zinc-500">People see its steps and the apps each uses — never your instructions.</span>
-                </span>
-              </label>
             )}
             {way === "website" && (
               <Field label="Your website" hint="Only these sites can show the chat. One per line. Leave empty to allow any site.">
@@ -415,7 +405,6 @@ function PublishedItem({
               ...(k.share_enabled
                 ? [
                     { label: "Whose accounts it uses", onClick: () => setAccounts((v) => !v) },
-                    { label: "Show how it works", checked: k.show_outline, onClick: () => onUpdate({ show_outline: !k.show_outline }) },
                   ]
                 : []),
               { label: k.share_enabled ? "Turn off share link" : "Turn on share link", onClick: () => onUpdate({ share: !k.share_enabled }) },

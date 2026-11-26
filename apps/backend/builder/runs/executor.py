@@ -186,6 +186,8 @@ async def _execute_agent(run: BuilderRun, user: CurrentUser, worker_id: str, too
         # wrote the request: they don't get to read or fill that person's memory.
         memory=run.purpose in ("run", "test") and not run.webhook_id,
         attachment_ids=[a["id"] for a in (run.input or {}).get("attachments") or [] if a.get("id")],
+        # A share-link run's files are its visitor's, even when it runs as the publisher.
+        attachment_owner_id=run.caller_user_id,
         knowledge_tenant_id=run.definition.get("home_tenant_id"),
         tool_owners=tool_owners or {},
         # Unless the person turned it off; a test case has nobody watching.

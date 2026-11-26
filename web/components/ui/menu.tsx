@@ -6,8 +6,16 @@ import { Check, MoreHorizontal } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
-/** ``divided``: a line above it, to start a new group. */
-export type MenuItem = { label: string; onClick: () => void; danger?: boolean; checked?: boolean; divided?: boolean };
+/** ``divided``: a line above it, to start a new group. ``header``: category heading above it. */
+export type MenuItem = {
+  label: string;
+  onClick: () => void;
+  danger?: boolean;
+  checked?: boolean;
+  divided?: boolean;
+  header?: string;
+  icon?: React.ReactNode;
+};
 
 const WIDTH = 208;
 const GAP = 4;
@@ -19,12 +27,25 @@ const EDGE = 8;
  * container around the button can't cut it off; it flips up when there's no
  * room below.
  */
-export function Menu({ label, items, trigger, triggerClassName }: { label: string; items: MenuItem[]; trigger?: React.ReactNode; triggerClassName?: string }) {
+export function Menu({
+  label,
+  items,
+  trigger,
+  triggerClassName,
+  width,
+}: {
+  label: string;
+  items: MenuItem[];
+  trigger?: React.ReactNode;
+  triggerClassName?: string;
+  width?: number;
+}) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const button = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const alignStart = !!trigger;
+  const menuWidth = width ?? WIDTH;
 
   // Under the button (a text trigger lines up on the left, ⋯ on the right), inside the screen; up when there's no room below.
   const place = useCallback(() => {
@@ -33,10 +54,10 @@ export function Menu({ label, items, trigger, triggerClassName }: { label: strin
     const h = list.current.offsetHeight;
     const below = r.bottom + GAP;
     setPos({
-      left: Math.max(EDGE, Math.min(alignStart ? r.left : r.right - WIDTH, window.innerWidth - WIDTH - EDGE)),
+      left: Math.max(EDGE, Math.min(alignStart ? r.left : r.right - menuWidth, window.innerWidth - menuWidth - EDGE)),
       top: below + h > window.innerHeight - EDGE && r.top - GAP - h > EDGE ? r.top - GAP - h : below,
     });
-  }, [alignStart]);
+  }, [alignStart, menuWidth]);
 
   useLayoutEffect(() => {
     if (open) place();
@@ -71,7 +92,7 @@ export function Menu({ label, items, trigger, triggerClassName }: { label: strin
           setPos(null);
           setOpen((v) => !v);
         }}
-        className={triggerClassName ?? "shrink-0 rounded-md p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer"}
+        className={triggerClassName ?? "shrink-0 rounded-md p-1.5 text-zinc-400 hover:bg-white/[0.08] hover:text-white cursor-pointer transition-colors"}
       >
         {trigger ?? <MoreHorizontal className="h-4 w-4" />}
       </button>
@@ -81,24 +102,41 @@ export function Menu({ label, items, trigger, triggerClassName }: { label: strin
             ref={list}
             role="menu"
             aria-label={label}
-            style={{ top: pos?.top ?? 0, left: pos?.left ?? 0, width: WIDTH, visibility: pos ? "visible" : "hidden" }}
-            className="fixed z-[60] rounded-lg border border-zinc-200 bg-[var(--surface-raised)] p-1 shadow-lg"
+            style={{ top: pos?.top ?? 0, left: pos?.left ?? 0, width: menuWidth, visibility: pos ? "visible" : "hidden" }}
+            className="animate-scale-in fixed z-[60] max-h-[75vh] overflow-y-auto rounded-lg border border-white/10 bg-[var(--surface-raised)] p-1.5 shadow-2xl ring-1 ring-white/5 [scrollbar-width:thin]"
           >
-            {items.map((it) => (
-              <div key={it.label} className={cn(it.divided && "mt-1 border-t border-zinc-200 pt-1")}>
-                <button
-                  type="button"
-                  role={it.checked === undefined ? "menuitem" : "menuitemradio"}
-                  aria-checked={it.checked}
-                  onClick={() => {
-                    setOpen(false);
-                    it.onClick();
-                  }}
-                  className={cn("flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left text-sm hover:bg-zinc-100 cursor-pointer", it.danger ? "text-red-600" : "text-zinc-700")}
-                >
-                  {it.label}
-                  {it.checked && <Check className="h-4 w-4 shrink-0 text-zinc-900" />}
-                </button>
+            {items.map((it, idx) => (
+              <div key={`${it.label}-${idx}`}>
+                {it.header && (
+                  <div className={cn("px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 select-none", idx > 0 && "mt-1.5 border-t border-white/10 pt-2")}>
+                    {it.header}
+                  </div>
+                )}
+                <div className={cn(it.divided && !it.header && "mt-1 border-t border-white/10 pt-1")}>
+                  <button
+                    type="button"
+                    role={it.checked === undefined ? "menuitem" : "menuitemradio"}
+                    aria-checked={it.checked}
+                    onClick={() => {
+                      setOpen(false);
+                      it.onClick();
+                    }}
+                    className={cn(
+                      "flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left text-xs transition-colors cursor-pointer",
+                      it.danger
+                        ? "text-red-400 hover:bg-red-500/10"
+                        : it.checked
+                          ? "bg-indigo-500/15 text-indigo-200"
+                          : "text-zinc-300 hover:bg-white/[0.08] hover:text-white"
+                    )}
+                  >
+                    <span className="flex min-w-0 items-center gap-2">
+                      {it.icon}
+                      <span className="truncate">{it.label}</span>
+                    </span>
+                    {it.checked && <Check className="h-3.5 w-3.5 shrink-0 text-indigo-400" />}
+                  </button>
+                </div>
               </div>
             ))}
           </div>,

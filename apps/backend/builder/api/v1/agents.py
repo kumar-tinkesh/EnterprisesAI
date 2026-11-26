@@ -27,6 +27,7 @@ from builder.models import (
     BuilderWebhook, BuilderWorkflow,
 )
 from builder.quality.cleanup import delete_tests
+from builder.scope import in_workspace, workspace_of
 from builder.versions.service import ensure_baseline, record_version
 from builder.services.references import agent_config_problems
 
@@ -55,7 +56,10 @@ def agent_out(agent: BuilderAgent, user: CurrentUser) -> AgentOut:
 async def get_agent(db: AsyncSession, agent_id: str, user: CurrentUser) -> BuilderAgent:
     agent = (
         await db.execute(
-            select(BuilderAgent).where(BuilderAgent.id == agent_id, BuilderAgent.tenant_id == user.tenant_id)
+            select(BuilderAgent).where(
+                BuilderAgent.id == agent_id, BuilderAgent.tenant_id == user.tenant_id,
+                in_workspace(BuilderAgent.workspace_id, user),
+            )
         )
     ).scalars().first()
     if agent is None:
@@ -83,7 +87,7 @@ async def list_agents(
     user: CurrentUser = Depends(get_end_user),
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(BuilderAgent).where(BuilderAgent.tenant_id == user.tenant_id)
+    query = select(BuilderAgent).where(BuilderAgent.tenant_id == user.tenant_id, in_workspace(BuilderAgent.workspace_id, user))
     query = query.where(BuilderAgent.workflow_id == workflow_id if workflow_id else BuilderAgent.workflow_id.is_(None))
     agents = (await db.execute(query.order_by(BuilderAgent.updated_at.desc()))).scalars().all()
     return [agent_out(a, user) for a in agents]
@@ -99,7 +103,8 @@ async def create_agent(
         workflow = (
             await db.execute(
                 select(BuilderWorkflow).where(
-                    BuilderWorkflow.id == payload.workflow_id, BuilderWorkflow.tenant_id == user.tenant_id
+                    BuilderWorkflow.id == payload.workflow_id, BuilderWorkflow.tenant_id == user.tenant_id,
+                    in_workspace(BuilderWorkflow.workspace_id, user),
                 )
             )
         ).scalars().first()
@@ -114,6 +119,7 @@ async def create_agent(
 
     agent = BuilderAgent(
         tenant_id=user.tenant_id,
+        workspace_id=workspace_of(user),
         owner_id=user.id,
         workflow_id=payload.workflow_id,
         name=payload.name.strip(),

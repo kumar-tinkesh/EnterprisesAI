@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { COLUMN_GAP, ROW_GAP, arrange } from "@/lib/builder/arrange";
+import { COLUMN_GAP, ROW_GAP, arrange, computeEdgeDetours } from "@/lib/builder/arrange";
 import type { WorkflowEdge, WorkflowNode } from "@/lib/builder/types";
 
 const n = (id: string, type: WorkflowNode["type"] = "agent"): WorkflowNode => ({ id, type, position: { x: 999, y: -42 } });
@@ -26,5 +26,16 @@ describe("arrange", () => {
   it("ignores a loop back to an earlier step", () => {
     const out = arrange([n("in", "input"), n("a"), n("c", "condition")], [e("in", "a"), e("a", "c"), e("c", "a")]);
     expect(out.map((x) => x.position!.x)).toEqual([0, COLUMN_GAP, 2 * COLUMN_GAP]);
+  });
+
+  it("assigns bypass detour rails for skip-edges blocked by intermediate nodes", () => {
+    const layout = arrange(
+      [n("in", "input"), n("a"), n("b"), n("out", "output")],
+      [e("in", "a"), e("a", "b"), e("b", "out"), e("in", "out")],
+    );
+    const detours = computeEdgeDetours(layout, [e("in", "a"), e("a", "b"), e("b", "out"), e("in", "out")]);
+    expect(detours["in-out"]).toBeTypeOf("number");
+    expect(detours["in-a"]).toBeUndefined();
+    expect(detours["a-b"]).toBeUndefined();
   });
 });

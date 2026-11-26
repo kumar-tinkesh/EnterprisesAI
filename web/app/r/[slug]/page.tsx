@@ -4,7 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUp, Check, ChevronRight, Circle, History, Info, LogIn, Paperclip, RotateCw, ShieldAlert, Square, UserPlus, X, XCircle } from "lucide-react";
+import { ArrowUp, Check, CheckCircle2, ChevronRight, Circle, History, Info, LogIn, Paperclip, Plug, RotateCw, ShieldAlert, Square, UserPlus, X, XCircle } from "lucide-react";
 
 import { buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,13 +16,15 @@ import { CopyButton, FileChip, ThinkingBlock, ThinkingWords } from "@/components
 import { ACCEPT, MAX_FILES } from "@/components/builder/chat/chat-panel";
 import { MarkdownView } from "@/components/builder/chat/markdown-view";
 import { AnswerView } from "@/components/builder/run-output";
-import { NeedsList } from "@/components/builder/tool-needs";
+import { SharedFlowPreview } from "@/components/builder/shared-flow-preview";
+import { ConnectButton } from "@/components/connections/connect-button";
+import { ConnectorIcon } from "@/components/connections/connector-icon";
 import { TypeIcon } from "@/components/builder/type-icon";
 import { ApiError } from "@/lib/api";
 import { builderApi, sharedApi } from "@/lib/builder/api";
 import { formatCost, formatDuration, formatTokens } from "@/lib/builder/chat";
 import { addThought, thinkingText, type ThoughtPart } from "@/lib/builder/run-state";
-import type { Attachment, InputVariable, SharedInfo, SharedNeeds, SharedRun, SharedStep, ToolMode } from "@/lib/builder/types";
+import type { Attachment, InputVariable, SharedInfo, SharedNeeds, SharedOutline, SharedRun, SharedStep, ToolMode } from "@/lib/builder/types";
 import { useStreamPref } from "@/lib/builder/stream-pref";
 import { useAuthStore } from "@/stores/auth-store";
 import { cn } from "@/lib/utils";
@@ -79,7 +81,7 @@ function errorText(err: unknown): string {
 
 /** Whose accounts it runs with, in one sentence (the details live under How it works). */
 function accountsNote(mode: ToolMode): string {
-  if (mode === "publisher") return "It runs with the sharer's accounts; anything that would change data waits for their OK.";
+  if (mode === "publisher") return "It runs with the sharer's accounts; anything that would change data waits for their OK. What you send, files included, is in their run.";
   if (mode === "mixed") return "It runs as you, with your accounts — except a few apps that stay the sharer's. It asks before changing anything.";
   return "It runs as you, with your own accounts, and asks you before it changes anything. Whoever shared it sees that you used it, not what was in it.";
 }
@@ -155,9 +157,10 @@ export default function SharedPage() {
             <Runner slug={slug} token={token!} shared={shared} panel={panel} setPanel={setPanel} />
           ) : (
             <div className="h-full overflow-y-auto px-4 py-10">
-              <div className="mx-auto max-w-[720px]">
+              <div className="mx-auto max-w-[720px] space-y-6">
                 <Intro shared={shared} />
-                <div className="mx-auto mt-8 max-w-sm rounded-xl border border-zinc-200 p-5 text-center">
+                {shared.show_outline && <SharedFlowIntro slug={slug} kind={shared.kind} name={shared.name} />}
+                <div className="mx-auto max-w-sm rounded-xl border border-zinc-200 p-5 text-center">
                   <p className="text-base font-semibold text-zinc-900">Sign in to use it</p>
                   <p className="mt-1 text-sm text-zinc-500">It&apos;s free. You&apos;ll come straight back here.</p>
                   <div className="mt-4 flex justify-center gap-2">
@@ -171,7 +174,7 @@ export default function SharedPage() {
         </main>
         {panel === "outline" && shared.show_outline && (
           <Drawer title="How it works" onClose={() => setPanel(null)}>
-            <Outline slug={slug} mode={shared.tool_mode} />
+            <Outline slug={slug} name={shared.name} mode={shared.tool_mode} />
           </Drawer>
         )}
       </div>
@@ -197,14 +200,14 @@ function HeaderButton({ on, onClick, label, children }: { on: boolean; onClick: 
 /** A side panel: beside the page from md, over it on a phone. */
 function Drawer({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   return (
-    <aside className="fixed inset-0 z-40 flex flex-col bg-[var(--surface)] md:static md:z-auto md:w-96 md:shrink-0 md:border-l md:border-zinc-200" aria-label={title}>
-      <div className="flex shrink-0 items-center justify-between px-4 py-3">
+    <aside className="animate-slide-in-right fixed inset-0 z-40 flex flex-col bg-[var(--surface)] md:static md:z-auto md:w-96 md:shrink-0 md:border-l md:border-white/10" aria-label={title}>
+      <div className="flex shrink-0 items-center justify-between border-b border-white/5 px-4 py-3">
         <h2 className="text-base font-semibold text-zinc-900">{title}</h2>
-        <button type="button" aria-label="Close" onClick={onClose} className="rounded-md p-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer">
+        <button type="button" aria-label="Close" onClick={onClose} className="rounded-md p-1 text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer">
           <X className="h-4 w-4" />
         </button>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6">{children}</div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 pb-6">{children}</div>
     </aside>
   );
 }
@@ -212,17 +215,27 @@ function Drawer({ title, onClose, children }: { title: string; onClose: () => vo
 /** What it is: shown until the first answer. */
 function Intro({ shared }: { shared: SharedInfo }) {
   return (
-    <div className="flex flex-col items-center text-center">
-      <TypeIcon kind={shared.kind} size="lg" />
+    <div className="animate-fade-up relative flex flex-col items-center pt-4 text-center">
+      <div className="pointer-events-none absolute -top-2 h-24 w-24 rounded-full bg-[var(--accent)]/20 blur-2xl" aria-hidden />
+      <div className="relative">
+        <TypeIcon kind={shared.kind} size="lg" />
+      </div>
       <h2 className="mt-4 text-xl font-semibold text-zinc-900">{shared.name}</h2>
       {shared.description && <p className="mt-1.5 line-clamp-4 max-w-lg text-sm text-zinc-500">{shared.description}</p>}
-      {shared.shared_by && <p className="mt-2 text-xs text-zinc-500">Shared by {shared.shared_by}</p>}
+      {shared.shared_by && <p className="mt-2 rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-0.5 text-xs text-zinc-400">Shared by {shared.shared_by}</p>}
     </div>
   );
 }
 
+/** Interactive animated canvas preview fetched via shared outline when permitted. */
+function SharedFlowIntro({ slug, kind, name }: { slug: string; kind: "agent" | "workflow"; name: string }) {
+  const outline = useQuery({ queryKey: ["shared-outline", slug], queryFn: () => sharedApi.outline(slug), retry: false });
+  if (outline.isLoading || outline.isError || !outline.data) return null;
+  return <SharedFlowPreview kind={kind} name={name} outline={outline.data} compact />;
+}
+
 /** The steps and their apps, read-only — the sharer's instructions are never part of it. */
-function Outline({ slug, mode }: { slug: string; mode: ToolMode }) {
+function Outline({ slug, name, mode }: { slug: string; name: string; mode: ToolMode }) {
   const outline = useQuery({ queryKey: ["shared-outline", slug], queryFn: () => sharedApi.outline(slug), retry: false });
   if (outline.isLoading) return <Spinner className="h-5 w-5 text-zinc-400" />;
   if (outline.isError || !outline.data) return <p className="text-sm text-zinc-500">{outline.error instanceof ApiError ? outline.error.message : "Couldn't load it."}</p>;
@@ -230,6 +243,7 @@ function Outline({ slug, mode }: { slug: string; mode: ToolMode }) {
   let n = 0;
   return (
     <div className="space-y-5">
+      <SharedFlowPreview kind={outline.data.kind} name={name} outline={outline.data} compact />
       <ol className="space-y-3">
         {levels.map((level) => {
           const steps = outline.data!.steps.filter((s) => s.level === level);
@@ -377,7 +391,7 @@ function Runner({
     return out;
   };
 
-  // Files go with the run only on a link that runs with the visitor's own apps (the run is theirs).
+  // Files go with the run on any link; one run with the sharer's apps reads them as the visitor's.
   const attach = async (list: FileList | null) => {
     setFileError(null);
     setFieldsChoice(null); // a file usually answers the fields: fold them away
@@ -478,6 +492,14 @@ function Runner({
   const running = !!current && !DONE.has(current.status);
   const canSend = !busy && !running && uploading === 0 && missing.length === 0 && !blocked && (kind === "workflow" || !!text.trim() || files.length > 0);
 
+  const outlineQuery = useQuery({
+    queryKey: ["shared-outline", slug],
+    queryFn: () => sharedApi.outline(slug),
+    enabled: shared.show_outline,
+    retry: false,
+  });
+  const outline = outlineQuery.data ?? null;
+
   return (
     <div className="flex h-full">
       <div className="flex min-w-0 flex-1 flex-col">
@@ -492,6 +514,9 @@ function Runner({
             {!current && sending === null && earlier.length === 0 && (
               <>
                 <Intro shared={shared} />
+                {shared.show_outline && outline && (
+                  <SharedFlowPreview kind={shared.kind} name={shared.name} outline={outline} compact />
+                )}
                 <Accounts own={own} mode={toolMode} needs={needs.data} loading={needs.isLoading} error={needs.isError ? errorText(needs.error) : null} token={token} />
               </>
             )}
@@ -499,7 +524,7 @@ function Runner({
               <p className="text-center text-xs text-zinc-500">Earlier in this visit · each question is answered on its own</p>
             )}
             {earlier.map((r) => (
-              <Turn key={r.run_id} run={r} live={null} doing={null} kind={kind} own={own} token={token} onDecided={() => undefined} />
+              <Turn key={r.run_id} run={r} live={null} doing={null} kind={kind} name={shared.name} outline={outline} own={own} token={token} onDecided={() => undefined} />
             ))}
             {sending !== null && (
               <Turn
@@ -508,6 +533,8 @@ function Runner({
                 live={null}
                 doing={null}
                 kind={kind}
+                name={shared.name}
+                outline={outline}
                 own={own}
                 token={token}
                 onDecided={() => undefined}
@@ -521,6 +548,8 @@ function Runner({
                 thought={thought?.runId === current.run_id ? thought.parts : []}
                 doing={doing?.runId === current.run_id ? doing.what : null}
                 kind={kind}
+                name={shared.name}
+                outline={outline}
                 own={own}
                 token={token}
                 onRetry={!busy && !running && !blocked && missing.length === 0 ? () => void submit(current.input) : undefined}
@@ -540,7 +569,7 @@ function Runner({
         <div className="shrink-0 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 sm:px-4">
           <div className="mx-auto max-w-[720px] space-y-2">
             {current && own && blocked && needs.data && (
-              <p className="rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-sm text-zinc-700">{needs.data.problems.join(" ")}</p>
+              <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-2.5 text-sm text-amber-200">{needs.data.problems.join(" ")}</p>
             )}
             {inputs.length > 0 && (
               <div className="rounded-xl border border-zinc-200 bg-[var(--surface)]">
@@ -571,7 +600,7 @@ function Runner({
                 e.preventDefault();
                 if (canSend) void submit();
               }}
-              className="rounded-2xl border border-[var(--border-strong)] bg-[var(--surface)] px-3 pb-2 pt-2.5 transition focus-within:border-[var(--accent-hover)]"
+              className="rounded-2xl border border-[var(--border-strong)] bg-[var(--surface)] px-3 pb-2 pt-2.5 shadow-sm transition-all duration-200 focus-within:border-[var(--accent-hover)] focus-within:shadow-[0_0_24px_-6px_rgba(99,102,241,0.3)]"
             >
               {(files.length > 0 || uploading > 0 || fileError) && (
                 <div className="mb-2 flex flex-wrap items-center gap-1.5">
@@ -599,30 +628,25 @@ function Runner({
                 className="block max-h-40 min-h-[36px] w-full resize-none bg-transparent px-1 py-1 text-sm text-zinc-900 outline-none placeholder:text-zinc-500"
               />
               <div className="mt-1 flex items-center gap-2">
-                {own && (
-                  <input
-                    ref={picker}
-                    type="file"
-                    multiple
-                    accept={ACCEPT}
-                    className="hidden"
-                    onChange={(e) => {
-                      void attach(e.target.files);
-                      e.target.value = "";
-                    }}
-                  />
-                )}
-                {/* On a link that runs with the sharer's apps the run can't read your file: say so instead of hiding the button. */}
+                <input
+                  ref={picker}
+                  type="file"
+                  multiple
+                  accept={ACCEPT}
+                  className="hidden"
+                  onChange={(e) => {
+                    void attach(e.target.files);
+                    e.target.value = "";
+                  }}
+                />
+                {/* Files work on every link: even a run with the sharer's apps reads the file as yours. */}
                 <button
                   type="button"
-                  onClick={() => (own ? picker.current?.click() : setFileError("Files can't be added here: this link runs with the sharer's apps, which can't read your files."))}
-                  disabled={own && (busy || running || files.length >= MAX_FILES)}
+                  onClick={() => picker.current?.click()}
+                  disabled={busy || running || files.length >= MAX_FILES}
                   aria-label="Attach files"
-                  title={own ? "Attach a document (PDF, Word, Excel, CSV, text) or an image (JPG, PNG)" : "Files work only on links that run with your own apps"}
-                  className={cn(
-                    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-40 cursor-pointer",
-                    !own && "opacity-40",
-                  )}
+                  title={own ? "Attach a document (PDF, Word, Excel, CSV, text) or an image (JPG, PNG)" : "Attach a document or an image. It's read in the sharer's run, so they can see it."}
+                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-40 cursor-pointer"
                 >
                   <Paperclip className="h-4 w-4" />
                 </button>
@@ -705,7 +729,7 @@ function Runner({
   );
 }
 
-/** The accounts it needs, as one line of chips; only what's missing asks for anything. */
+/** Connected & needed accounts shown cleanly right on the landing page with 1-click Connect. */
 function Accounts({
   own, mode, needs, loading, error, token,
 }: {
@@ -718,35 +742,114 @@ function Accounts({
 }) {
   if (!own) return <p className="text-center text-xs text-zinc-500">{accountsNote(mode)}</p>;
   if (loading) return <div className="flex justify-center"><Spinner className="h-4 w-4 text-zinc-400" /></div>;
-  if (error || !needs) return <p className="text-center text-sm text-red-600">{error}</p>;
+  if (error || !needs) return <p className="text-center text-sm text-red-400">{error}</p>;
   const mine = needs.systems.filter((s) => s.owner === "you");
   const theirs = needs.systems.filter((s) => s.owner === "publisher");
+  const readyCount = mine.filter((s) => s.status === "ready").length;
   const toConnect = mine.filter((s) => s.status !== "ready");
+
+  if (needs.systems.length === 0) {
+    return <p className="text-center text-xs text-zinc-500">{accountsNote(mode)}</p>;
+  }
+
   return (
-    <div className="space-y-3">
-      {needs.systems.length > 0 && (
-        <div className="flex flex-wrap items-center justify-center gap-1.5 text-xs">
-          <span className="text-zinc-500">Uses your accounts:</span>
-          {mine.map((s) => (
-            <span key={s.system} className="inline-flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-0.5 text-zinc-700">
-              {s.status === "ready" ? <Check className="h-3 w-3 text-emerald-700" /> : <Circle className="h-2.5 w-2.5 text-zinc-400" />}
-              {s.server_name || s.system}
-            </span>
-          ))}
-          {theirs.map((s) => (
-            <span key={s.system} className="inline-flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-0.5 text-zinc-500" title="Uses the sharer's account">
-              {s.server_name || s.system} · sharer&apos;s
-            </span>
-          ))}
+    <div className="rounded-2xl border border-white/10 bg-[#0d0d11]/90 p-3.5 shadow-lg space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="flex h-6 w-6 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-zinc-300">
+            <Plug className="h-3.5 w-3.5" />
+          </span>
+          <div>
+            <p className="text-xs font-semibold text-zinc-100">Connected apps</p>
+            <p className="text-[11px] text-zinc-400">
+              {toConnect.length > 0
+                ? `Connect ${toConnect.length} app${toConnect.length === 1 ? "" : "s"} below before running`
+                : "All required accounts are ready"}
+            </p>
+          </div>
         </div>
+        {mine.length > 0 && (
+          <span
+            className={cn(
+              "inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-medium",
+              toConnect.length > 0
+                ? "border-amber-500/35 bg-amber-500/15 text-amber-200"
+                : "border-emerald-500/30 bg-emerald-500/15 text-emerald-300",
+            )}
+          >
+            {toConnect.length === 0 ? <CheckCircle2 className="h-3 w-3" /> : <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />}
+            {readyCount}/{mine.length} ready
+          </span>
+        )}
+      </div>
+
+      <div className="grid gap-2 sm:grid-cols-2">
+        {mine.map((s) => {
+          const name = s.server_name || s.system;
+          const ready = s.status === "ready";
+          return (
+            <div
+              key={s.system}
+              className={cn(
+                "flex items-center gap-2.5 rounded-xl border px-3 py-2 transition-colors",
+                ready
+                  ? "border-white/10 bg-white/[0.02]"
+                  : "border-amber-500/30 bg-amber-500/[0.06]",
+              )}
+            >
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/95 p-1 shadow-inner">
+                <ConnectorIcon name={name} size="sm" className="h-5 w-5 bg-transparent p-0" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs font-semibold text-zinc-100">{name}</p>
+                <p className={cn("truncate text-[11px]", ready ? "text-emerald-400" : "text-amber-300/90")}>
+                  {ready
+                    ? "Connected · your account"
+                    : s.status === "not_connected"
+                      ? "Not connected"
+                      : s.status === "not_verified"
+                        ? "Waiting for admin setup"
+                        : "Ask admin to add app"}
+                </p>
+              </div>
+              {ready ? (
+                <Check className="h-4 w-4 shrink-0 text-emerald-400" />
+              ) : s.status === "not_connected" && s.server_id ? (
+                <ConnectButton
+                  serverId={s.server_id}
+                  serverName={name}
+                  token={token}
+                  className="shrink-0 rounded-full px-3 py-1 text-xs font-medium"
+                />
+              ) : null}
+            </div>
+          );
+        })}
+
+        {theirs.map((s) => {
+          const name = s.server_name || s.system;
+          return (
+            <div
+              key={s.system}
+              className="flex items-center gap-2.5 rounded-xl border border-white/10 bg-white/[0.02] px-3 py-2"
+              title="Uses the sharer's connected account"
+            >
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/95 p-1 shadow-inner">
+                <ConnectorIcon name={name} size="sm" className="h-5 w-5 bg-transparent p-0" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs font-semibold text-zinc-100">{name}</p>
+                <p className="truncate text-[11px] text-zinc-400">Sharer&apos;s account</p>
+              </div>
+              <Check className="h-4 w-4 shrink-0 text-zinc-500" />
+            </div>
+          );
+        })}
+      </div>
+
+      {needs.problems.length > 0 && toConnect.length === 0 && (
+        <p className="text-xs text-amber-300">{needs.problems.join(" ")}</p>
       )}
-      {toConnect.length > 0 && (
-        <div className="mx-auto max-w-md rounded-lg border border-amber-200 bg-amber-50 p-3">
-          <p className="mb-2 text-sm font-medium text-zinc-900">Connect first</p>
-          <NeedsList token={token} statuses={toConnect} light />
-        </div>
-      )}
-      {needs.problems.length > 0 && toConnect.length === 0 && <p className="text-center text-sm text-amber-700">{needs.problems.join(" ")}</p>}
     </div>
   );
 }
@@ -776,9 +879,24 @@ function StatusDot({ run }: { run: SharedRun }) {
 /** How many of the newest progress lines stay in view while it runs; the rest fold away. */
 const LIVE_NOTES = 3;
 
-/** Where the run is: while it runs, the newest progress lines; once done, one line that opens to all of it. */
-function Steps({ steps, running, ms }: { steps: SharedStep[]; running: boolean; ms?: number | null }) {
+/** Where the run is: while it runs, live animated flow + newest progress lines; once done, toggleable flow & details. */
+function Steps({
+  steps,
+  running,
+  ms,
+  kind,
+  name,
+  outline,
+}: {
+  steps: SharedStep[];
+  running: boolean;
+  ms?: number | null;
+  kind: "agent" | "workflow";
+  name: string;
+  outline?: SharedOutline | null;
+}) {
   const [open, setOpen] = useState(false);
+  const [showFlow, setShowFlow] = useState(running);
   // Every step skipped: it answered directly (a greeting, a general question) — nothing to show.
   if (!steps.length || (!running && steps.every((s) => s.status === "skipped"))) return null;
   const now = steps.find((s) => s.status === "running" || s.status === "waiting");
@@ -792,17 +910,34 @@ function Steps({ steps, running, ms }: { steps: SharedStep[]; running: boolean; 
   const shown = open ? notes : running ? notes.slice(-LIVE_NOTES) : [];
   const hidden = notes.length - shown.length;
   return (
-    <div className="mb-3">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        aria-expanded={open}
-        className="inline-flex max-w-full items-center gap-1.5 rounded-md py-0.5 text-xs text-zinc-500 hover:text-zinc-900 cursor-pointer"
-      >
-        {running ? <Spinner className="h-3.5 w-3.5 shrink-0" /> : <ChevronRight className={cn("h-3.5 w-3.5 shrink-0 transition-transform", open && "rotate-90")} />}
-        <span className="truncate">{summary}</span>
-        {running && <ChevronRight className={cn("h-3.5 w-3.5 shrink-0 transition-transform", open && "rotate-90")} />}
-      </button>
+    <div className="mb-3 space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-expanded={open}
+          className="inline-flex max-w-full items-center gap-1.5 rounded-md py-0.5 text-xs text-zinc-500 hover:text-zinc-900 cursor-pointer"
+        >
+          {running ? <Spinner className="h-3.5 w-3.5 shrink-0" /> : <ChevronRight className={cn("h-3.5 w-3.5 shrink-0 transition-transform", open && "rotate-90")} />}
+          <span className="truncate">{summary}</span>
+          {running && <ChevronRight className={cn("h-3.5 w-3.5 shrink-0 transition-transform", open && "rotate-90")} />}
+        </button>
+        <button
+          type="button"
+          onClick={() => setShowFlow((v) => !v)}
+          className={cn(
+            "rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors cursor-pointer",
+            showFlow
+              ? "border-indigo-400/40 bg-indigo-500/15 text-indigo-300"
+              : "border-white/10 bg-white/[0.03] text-zinc-400 hover:text-zinc-200",
+          )}
+        >
+          {showFlow ? "Hide flow" : "Visual flow"}
+        </button>
+      </div>
+      {showFlow && (
+        <SharedFlowPreview kind={kind} name={name} outline={outline} liveSteps={steps} running={running} compact />
+      )}
       {shown.length > 0 && (
         <ul className="mt-1.5 space-y-1 rounded-lg border border-zinc-200 bg-[var(--surface)] px-3 py-2" aria-label="Progress">
           {hidden > 0 && (
@@ -840,7 +975,7 @@ function Steps({ steps, running, ms }: { steps: SharedStep[]; running: boolean; 
 
 /** One question and its answer, the way a chat shows it. */
 function Turn({
-  run, question, live, thought = [], doing, kind, own, token, onRetry, onDecided,
+  run, question, live, thought = [], doing, kind, name, outline, own, token, onRetry, onDecided,
 }: {
   /** null: just sent, the run is still being started (``question`` is what was asked). */
   run: SharedRun | null;
@@ -850,6 +985,8 @@ function Turn({
   thought?: ThoughtPart[];
   doing: Doing["what"] | null;
   kind: "agent" | "workflow";
+  name: string;
+  outline?: SharedOutline | null;
   own: boolean;
   token: string;
   onRetry?: () => void;
@@ -869,7 +1006,7 @@ function Turn({
   const thinking = run?.status === "succeeded" || run?.output ? (run.reasoning ?? "") : thinkingText(thought, stepName);
   const asked = run ? run.input : (question ?? "");
   return (
-    <div className="space-y-6" aria-live="polite">
+    <div className="animate-fade-up space-y-6" aria-live="polite">
       <div className="flex justify-end">
         <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-[var(--surface-strong)] px-4 py-2.5 text-sm text-zinc-900">
           {asked || "(ran with its inputs)"}
@@ -882,7 +1019,7 @@ function Turn({
             <p className="flex items-center gap-2 text-sm text-zinc-500"><Spinner className="h-4 w-4" /> Starting…</p>
           ) : (
           <>
-          <Steps steps={run.steps ?? []} running={running} ms={run.duration_ms} />
+          <Steps steps={run.steps ?? []} running={running} ms={run.duration_ms} kind={kind} name={name} outline={outline} />
           {/* Live until the answer starts being written; then it folds away above it. */}
           {thinking && <div className="mb-2"><ThinkingBlock text={thinking} live={running && !run.output && !writing} /></div>}
           {run.status === "succeeded" ? (

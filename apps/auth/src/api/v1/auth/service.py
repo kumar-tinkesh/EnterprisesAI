@@ -218,7 +218,9 @@ async def login(
     if user.auth_provider != "local":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This account signs in via SSO")
 
-    wid = workspace_id or await _first_workspace_id(db, user.tenant_id)
+    from src.api.v1.workspaces.service import resolve_workspace
+
+    wid = await resolve_workspace(db, user_id=user.id, role=role, tenant_id=user.tenant_id, requested=workspace_id)
     tokens = await _issue_pair(db, user.id, role, user.tenant_id, wid)
     await log_audit_event(db, action="login", user_id=user.id, tenant_id=user.tenant_id, resource="auth")
     await db.commit()
@@ -263,7 +265,12 @@ async def refresh_tokens(db: AsyncSession, *, refresh_token: str) -> dict[str, s
         if account is None:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Account not found")
         tenant_id = account.tenant_id
-        wid = await _first_workspace_id(db, tenant_id)
+        # Stay in the workspace the person switched to, while they still may.
+        from src.api.v1.workspaces.service import resolve_workspace
+
+        wid = await resolve_workspace(
+            db, user_id=account.id, role=account.role, tenant_id=tenant_id, requested=claims.get("wid")
+        )
 
     new = await _issue_pair(db, account.id, role, tenant_id, wid)
     stored.revoked = True

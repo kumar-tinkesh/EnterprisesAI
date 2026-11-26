@@ -94,8 +94,10 @@ h1, h2, h3 { letter-spacing: -0.01em; line-height: 1.25; }
 /* surfaces */
 .builder-dark .bg-white { background-color: var(--surface); }
 .builder-dark .bg-white\/90 { background-color: rgb(17 17 19 / 0.9); }
-.builder-dark .bg-zinc-50, .builder-dark .bg-zinc-50\/60, .builder-dark .bg-zinc-50\/75, .builder-dark .bg-zinc-50\/80 { background-color: var(--surface-raised); }
+.builder-dark .bg-zinc-50, .builder-dark .bg-zinc-50\/60, .builder-dark .bg-zinc-50\/70, .builder-dark .bg-zinc-50\/75, .builder-dark .bg-zinc-50\/80 { background-color: var(--surface-raised); }
 .builder-dark .bg-zinc-100, .builder-dark .bg-zinc-200 { background-color: var(--surface-strong); }
+.builder-dark input, .builder-dark textarea, .builder-dark select { background-color: var(--surface-raised); color: var(--text); border-color: var(--border-strong); }
+.builder-dark input::placeholder, .builder-dark textarea::placeholder { color: var(--text-subtle); }
 .builder-dark .hover\:bg-zinc-50:hover, .builder-dark .hover\:bg-zinc-50\/50:hover, .builder-dark .hover\:bg-zinc-50\/80:hover { background-color: var(--hover) !important; }
 .builder-dark .hover\:bg-zinc-100:hover, .builder-dark .hover\:bg-zinc-200:hover { background-color: var(--hover) !important; }
 .builder-dark select option { background-color: var(--surface-raised); color: var(--text); }
@@ -181,7 +183,124 @@ h1, h2, h3 { letter-spacing: -0.01em; line-height: 1.25; }
 .thinking-word { display: inline-block; animation: thinking-word 0.35s ease-out; }
 @keyframes thinking-shimmer { from { background-position: 100% 0; } to { background-position: -150% 0; } }
 @keyframes thinking-word { from { opacity: 0; transform: translateY(0.35em); filter: blur(2px); } to { opacity: 1; transform: none; filter: none; } }
+
+/* ── UI Motion & Polish ───────────────────────────────────────────────────────
+   Subtle, hardware-accelerated entrances and interactions across every page. */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.96) translateY(4px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes slide-in-right {
+  from { opacity: 0; transform: translateX(24px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes slide-in-left {
+  from { opacity: 0; transform: translateX(-24px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes bar-grow {
+  from { transform: scaleY(0); opacity: 0.4; }
+  to { transform: scaleY(1); opacity: 1; }
+}
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgb(99 102 241 / 0.35); }
+  50% { box-shadow: 0 0 24px 2px rgb(99 102 241 / 0.25); }
+}
+
+.animate-fade-in { animation: fade-in 200ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+.animate-fade-up { animation: fade-up 340ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+.animate-scale-in { animation: scale-in 220ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+.animate-slide-in-right { animation: slide-in-right 260ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+.animate-slide-in-left { animation: slide-in-left 260ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+.animate-bar-grow { transform-origin: bottom; animation: bar-grow 520ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+.animate-pulse-glow { animation: pulse-glow 3s ease-in-out infinite; }
+
+.stagger-1 { animation-delay: 40ms; }
+.stagger-2 { animation-delay: 80ms; }
+.stagger-3 { animation-delay: 120ms; }
+.stagger-4 { animation-delay: 160ms; }
+.stagger-5 { animation-delay: 200ms; }
+.stagger-6 { animation-delay: 240ms; }
+
+/* Subtle interactive card lift */
+.card-lift {
+  transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1), border-color 200ms ease, background-color 200ms ease, box-shadow 220ms ease;
+}
+.card-lift:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 28px -10px rgb(0 0 0 / 0.65), 0 0 0 1px rgb(255 255 255 / 0.06);
+}
+
+/* Ambient subtle background textures for hero / auth sections */
+.bg-ambient-grid {
+  background-image:
+    radial-gradient(circle at 50% 0%, rgb(99 102 241 / 0.14), transparent 55%),
+    linear-gradient(to right, rgb(255 255 255 / 0.025) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(255 255 255 / 0.025) 1px, transparent 1px);
+  background-size: 100% 100%, 40px 40px, 40px 40px;
+}
+
+/* Sleek dark scrollbars across the workspace */
+.builder-dark * {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 0.14) transparent;
+}
+.builder-dark *::-webkit-scrollbar { width: 6px; height: 6px; }
+.builder-dark *::-webkit-scrollbar-track { background: transparent; }
+.builder-dark *::-webkit-scrollbar-thumb { background: rgb(255 255 255 / 0.14); border-radius: 9999px; }
+.builder-dark *::-webkit-scrollbar-thumb:hover { background: rgb(255 255 255 / 0.25); }
+
+/* Appearance preferences controlled via Settings */
+[data-theme="midnight"] {
+  --bg: #030305;
+  --surface: #0a0a0f;
+  --surface-raised: #11111a;
+  --surface-strong: #1b1b29;
+  --accent: #7c3aed;
+  --accent-hover: #8b5cf6;
+  --accent-wash: rgb(139 92 246 / 0.15);
+  --accent-wash-strong: rgb(139 92 246 / 0.3);
+  --accent-border: rgb(139 92 246 / 0.45);
+  --link: #a78bfa;
+}
+[data-theme="zinc"] {
+  --bg: #090b0b;
+  --surface: #111414;
+  --surface-raised: #181c1c;
+  --surface-strong: #232828;
+  --accent: #059669;
+  --accent-hover: #10b981;
+  --accent-wash: rgb(16 185 129 / 0.14);
+  --accent-wash-strong: rgb(16 185 129 / 0.28);
+  --accent-border: rgb(16 185 129 / 0.4);
+  --link: #34d399;
+}
+[data-density="compact"] body,
+[data-density="compact"] {
+  font-size: 13px;
+}
+[data-reduce-motion="true"] *,
+[data-reduce-motion="true"] *::before,
+[data-reduce-motion="true"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .thinking-shimmer { animation: none; color: var(--text-muted); background: none; }
   .thinking-word { animation: none; }
+  .animate-fade-in, .animate-fade-up, .animate-scale-in,
+  .animate-slide-in-right, .animate-slide-in-left, .animate-bar-grow, .animate-pulse-glow {
+    animation: none !important;
+  }
+  .card-lift:hover { transform: none; }
 }

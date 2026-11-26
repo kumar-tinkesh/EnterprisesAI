@@ -5,7 +5,9 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft,
   Activity,
   AlertTriangle,
+  Bot,
   CheckCircle2,
+  ChevronDown,
   Clock,
   Eye,
   FlaskConical,
@@ -13,6 +15,8 @@ import { ArrowLeft,
   Loader2,
   MessageSquare,
   Minus,
+  Network,
+  PanelLeftOpen,
   RefreshCw,
   ShieldAlert,
   X,
@@ -20,7 +24,9 @@ import { ArrowLeft,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Menu, type MenuItem } from "@/components/ui/menu";
 import { Spinner } from "@/components/ui/spinner";
+import { TypeIcon } from "@/components/builder/type-icon";
 import { ChatPanel, type ChatTarget } from "@/components/builder/chat/chat-panel";
 import { TestsPanel } from "@/components/builder/tests-panel";
 import { useServers } from "@/components/builder/agent-wizard/wizard-ui";
@@ -79,6 +85,10 @@ export function ProjectDetail({
   onTab,
   onClose,
   onOpenCanvas,
+  onSwitchTarget,
+  isWorkspace = false,
+  isListCollapsed = false,
+  onToggleList,
 }: {
   target: ChatTarget;
   token: string;
@@ -87,6 +97,14 @@ export function ProjectDetail({
   onClose: () => void;
   /** Open it on the full canvas editor. */
   onOpenCanvas: () => void;
+  /** Quick switcher between agents and workflows */
+  onSwitchTarget?: (target: ChatTarget) => void;
+  /** Whether displayed as a dedicated full-width workspace */
+  isWorkspace?: boolean;
+  /** Whether the sibling master list is collapsed */
+  isListCollapsed?: boolean;
+  /** Toggle the sibling master list */
+  onToggleList?: () => void;
 }) {
   const { kind, id } = target;
   const agentQ = useQuery({ queryKey: ["builder-agent", id], queryFn: () => builderApi.getAgent(token, id), enabled: !!token && kind === "agent" });
@@ -96,6 +114,42 @@ export function ProjectDetail({
   const loadError = kind === "agent" ? agentQ.error : workflowQ.error;
   const canManage = !!item?.can_manage;
 
+  const agentsQ = useQuery({ queryKey: ["builder-agents"], queryFn: () => builderApi.listAgents(token), enabled: !!token && !!onSwitchTarget });
+  const workflowsQ = useQuery({ queryKey: ["builder-workflows"], queryFn: () => builderApi.listWorkflows(token), enabled: !!token && !!onSwitchTarget });
+
+  const switcherItems: MenuItem[] = useMemo(() => {
+    const agents = agentsQ.data ?? [];
+    const workflows = workflowsQ.data ?? [];
+    const items: MenuItem[] = [];
+
+    if (agents.length > 0) {
+      agents.forEach((a, idx) => {
+        items.push({
+          header: idx === 0 ? `Agents (${agents.length})` : undefined,
+          label: a.name,
+          icon: <Bot className="h-3.5 w-3.5 text-indigo-400 shrink-0" />,
+          checked: kind === "agent" && a.id === id,
+          onClick: () => onSwitchTarget?.({ kind: "agent", id: a.id }),
+        });
+      });
+    }
+
+    if (workflows.length > 0) {
+      workflows.forEach((w, idx) => {
+        items.push({
+          header: idx === 0 ? `Workflows (${workflows.length})` : undefined,
+          divided: idx === 0 && agents.length > 0,
+          label: w.name,
+          icon: <Network className="h-3.5 w-3.5 text-sky-400 shrink-0" />,
+          checked: kind === "workflow" && w.id === id,
+          onClick: () => onSwitchTarget?.({ kind: "workflow", id: w.id }),
+        });
+      });
+    }
+
+    return items;
+  }, [agentsQ.data, workflowsQ.data, kind, id, onSwitchTarget]);
+
   // Health moves with what's done on the other tabs: refetch on every visit.
   const queryClient = useQueryClient();
   useEffect(() => {
@@ -103,29 +157,66 @@ export function ProjectDetail({
   }, [tab, kind, id, queryClient]);
 
   const health = healthQ.data;
-  // The list beside it already says who this is; these are the only controls up here.
-  const controls = (
-    <>
-      <Button size="sm" variant="outline" className="h-8 shrink-0" onClick={onOpenCanvas} title="Open it on the canvas editor">
-        <Layers /> <span className="hidden sm:inline">Canvas</span>
-      </Button>
-      <button type="button" onClick={onClose} aria-label="Close" className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 md:inline-flex cursor-pointer">
-        <X className="h-4 w-4" />
-      </button>
-    </>
-  );
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--bg)]">
-      {/* A phone shows the details alone, so say whose they are and how to get back. */}
-      <div className="flex shrink-0 items-center gap-2 border-b border-zinc-200 px-2 py-2 md:hidden">
-        <button type="button" onClick={onClose} aria-label="Back to the list" className="rounded-md p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 cursor-pointer">
-          <ArrowLeft className="h-4 w-4" />
-        </button>
-        <span className="min-w-0 truncate text-sm font-semibold text-zinc-900">{item?.name ?? (kind === "agent" ? "Agent" : "Workflow")}</span>
-      </div>
-      <header className="flex shrink-0 items-center gap-2 border-b border-zinc-200 px-3 sm:px-4">
-        <nav className="no-scrollbar flex min-w-0 flex-1 gap-1 overflow-x-auto" role="tablist" aria-label={`${item?.name ?? kind} views`}>
+      {/* Top Workspace Header */}
+      <header className="flex min-h-14 shrink-0 flex-wrap items-center justify-between gap-3 border-b border-white/10 px-3 py-2 sm:px-4">
+        {/* Left: Breadcrumbs & Quick Switcher */}
+        <div className="flex items-center gap-2 min-w-0">
+          {onToggleList && isListCollapsed && (
+            <button
+              type="button"
+              onClick={onToggleList}
+              title="Show Agents & Workflows list"
+              aria-label="Show Agents & Workflows list"
+              className="inline-flex items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.04] px-2 py-1 text-xs font-medium text-zinc-300 hover:bg-white/[0.08] hover:text-white cursor-pointer transition-colors"
+            >
+              <PanelLeftOpen className="h-3.5 w-3.5 text-indigo-400" />
+              <span className="hidden sm:inline">Agents</span>
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-zinc-400 hover:bg-white/[0.08] hover:text-white cursor-pointer transition-colors"
+            title="Back to Agents & Workflows"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Agents & Workflows</span>
+          </button>
+          <span className="text-zinc-600">/</span>
+
+          {switcherItems.length > 0 && onSwitchTarget ? (
+            <Menu
+              label="Switch agent or workflow"
+              width={260}
+              trigger={
+                <span className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-semibold text-zinc-100 hover:bg-white/[0.08] cursor-pointer transition-colors">
+                  <TypeIcon kind={kind} />
+                  <span className="max-w-[130px] sm:max-w-[180px] truncate">{item?.name ?? (kind === "agent" ? "Agent" : "Workflow")}</span>
+                  <ChevronDown className="h-3.5 w-3.5 text-zinc-400" />
+                </span>
+              }
+              items={switcherItems}
+            />
+          ) : (
+            <div className="flex items-center gap-1.5 px-2 py-1 text-xs font-semibold text-zinc-100">
+              <TypeIcon kind={kind} />
+              <span className="max-w-[180px] truncate">{item?.name ?? (kind === "agent" ? "Agent" : "Workflow")}</span>
+            </div>
+          )}
+
+          {health && (
+            <span className={cn("hidden items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium lg:inline-flex", HEALTH_STATUS[health.status].text)}>
+              <span className={cn("h-1.5 w-1.5 rounded-full", HEALTH_STATUS[health.status].dot)} />
+              {HEALTH_STATUS[health.status].label}
+            </span>
+          )}
+        </div>
+
+        {/* Center: Tabs */}
+        <nav className="no-scrollbar flex items-center gap-1 overflow-x-auto" role="tablist" aria-label={`${item?.name ?? kind} views`}>
           {TABS.map((t) => (
             <button
               key={t.id}
@@ -134,19 +225,35 @@ export function ProjectDetail({
               aria-selected={tab === t.id}
               onClick={() => onTab(t.id)}
               className={cn(
-                "-mb-px inline-flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-3 text-sm font-medium transition-colors cursor-pointer",
-                tab === t.id ? "border-[var(--accent-hover)] text-zinc-900" : "border-transparent text-zinc-500 hover:text-zinc-900",
+                "inline-flex shrink-0 items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer",
+                tab === t.id ? "bg-white/[0.1] text-white shadow-xs" : "text-zinc-400 hover:bg-white/[0.04] hover:text-zinc-200",
               )}
             >
               <t.Icon className="h-3.5 w-3.5" /> {t.label}
-              {t.id === "health" && health?.blockers.some((b) => b.severity === "critical") && <span className="h-1.5 w-1.5 rounded-full bg-red-500" aria-label="Has blockers" />}
+              {t.id === "health" && health?.blockers.some((b) => b.severity === "critical") && (
+                <span className="h-1.5 w-1.5 rounded-full bg-red-500" aria-label="Has blockers" />
+              )}
             </button>
           ))}
         </nav>
-        {controls}
+
+        {/* Right: Actions */}
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" className="h-8 shrink-0 text-xs gap-1.5 border-white/10 bg-white/[0.04] hover:bg-white/[0.08]" onClick={onOpenCanvas} title="Open it on the canvas editor">
+            <Layers className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Canvas</span>
+          </Button>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-zinc-400 hover:bg-white/[0.08] hover:text-white cursor-pointer transition-colors"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
       </header>
 
-      <div className="min-h-0 flex-1">
+      <div key={tab} className="animate-fade-in min-h-0 flex-1">
         {loadError ? (
           <p className="m-5 rounded-lg bg-red-50 p-3 text-sm text-red-700">{loadError instanceof Error ? loadError.message : "Couldn't load it."}</p>
         ) : !item ? (

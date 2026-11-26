@@ -31,6 +31,7 @@ from sqlalchemy import select
 
 from src.api.deps import CurrentUser
 
+from builder.scope import run_workspace
 from builder.agents.tools import AgentTool
 from builder.graph.schema import ToolApprovalPolicy
 from builder.models import BuilderApproval, BuilderToolCall
@@ -103,6 +104,7 @@ async def _ask(db, site: CallSite, ledger: BuilderToolCall, tool: AgentTool, kin
     approval = BuilderApproval(
         run_id=site.run_id,
         tenant_id=decider.tenant_id,
+        workspace_id=run_workspace(site.run_id),
         owner_id=decider.id,
         kind=kind,
         node_id=site.node_id,

@@ -3,9 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { Background, BackgroundVariant, Controls, ReactFlow, ReactFlowProvider, useReactFlow, type Edge, type NodeChange } from "@xyflow/react";
+import { Background, BackgroundVariant, Controls, MarkerType, ReactFlow, ReactFlowProvider, useReactFlow, type Edge, type NodeChange } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { AlertTriangle, ArrowLeft, CalendarClock, Check, ChevronDown, MessagesSquare, Play, Save, Settings2, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, CalendarClock, Check, ChevronDown, LayoutGrid, MessagesSquare, Play, Save, Settings2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -184,9 +184,16 @@ function Editor({ id, onBack, onOpen, onChat }: EditorProps) {
   const kbName = (kid: string) => kbs.data?.find((k) => k.id === kid)?.name ?? "Knowledge base";
   const active = runView.activeTool["agent"];
 
+  const AGENT_ROW_GAP = 148;
   const { sizes, track } = useNodeSizes();
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+  const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
   const serverIds = useMemo(() => groupByServer(toolIds).map((g) => g.serverId), [toolIds]);
   const servers = useServers(token, serverIds, {});
+  const agentDefaultPos = useMemo(
+    () => ({ x: 320, y: Math.max(0, (Math.max(toolIds.length, kbIds.length, 1) - 1) * (AGENT_ROW_GAP / 2)) }),
+    [toolIds.length, kbIds.length],
+  );
   // agent → connector (connect it there, once) → its tools.
   const tools = useMemo(
     () =>
@@ -200,11 +207,58 @@ function Editor({ id, onBack, onOpen, onChat }: EditorProps) {
         active,
         usedTools: runView.usedTools,
         token,
-        agent: positions["agent"] ?? { x: 320, y: Math.max(0, (Math.max(toolIds.length, kbIds.length, 1) - 1) * 55) },
+        agent: positions["agent"] ?? agentDefaultPos,
+        row: AGENT_ROW_GAP,
         at: (key, fallback) => positions[key] ?? fallback,
       }),
-    [toolIds, kbIds.length, servers, active, runView.usedTools, token, positions],
+    [toolIds, servers, active, runView.usedTools, token, positions, agentDefaultPos],
   );
+  const baseEdges: Edge[] = useMemo(
+    () => [
+      ...tools.edges,
+      ...kbIds.map((kid) => ({
+        id: `k:${kid}`,
+        source: `kb:${kid}`,
+        target: "agent",
+        type: "smoothstep" as const,
+        animated: true,
+        markerEnd: { type: MarkerType.ArrowClosed, width: 15, height: 15, color: "#a78bfa" },
+        style: { stroke: "#a78bfa", strokeWidth: 1.75, strokeDasharray: "4 4" },
+      })),
+      ...subIds.map((sid) => {
+        const on = active === `Ask ${agents.data?.find((a) => a.id === sid)?.name}`;
+        return {
+          id: `t:${sid}`,
+          source: "agent",
+          target: `team:${sid}`,
+          type: "smoothstep" as const,
+          animated: on,
+          markerEnd: { type: MarkerType.ArrowClosed, width: 15, height: 15, color: on ? "#e879f9" : "#d8b4fe" },
+          style: { stroke: on ? "#e879f9" : "#d8b4fe", strokeWidth: on ? 2.5 : 1.6, strokeDasharray: on ? undefined : "6 4" },
+        };
+      }),
+    ],
+    [tools.edges, kbIds, subIds, agents.data, active],
+  );
+  const focusInfo = useMemo(() => {
+    if (hoveredEdgeId) {
+      const edge = baseEdges.find((e) => e.id === hoveredEdgeId);
+      if (edge) return { focused: true, nodes: new Set([edge.source, edge.target]), edges: new Set([edge.id]) };
+    }
+    if (hoveredNodeId) {
+      const connected = baseEdges.filter((e) => e.source === hoveredNodeId || e.target === hoveredNodeId);
+      const nodes = new Set<string>([hoveredNodeId]);
+      const edges = new Set<string>();
+      for (const e of connected) {
+        nodes.add(e.source);
+        nodes.add(e.target);
+        edges.add(e.id);
+      }
+      return { focused: true, nodes, edges };
+    }
+    return { focused: false, nodes: new Set<string>(), edges: new Set<string>() };
+  }, [baseEdges, hoveredNodeId, hoveredEdgeId]);
+
   const flowNodes: StepNodeType[] = useMemo(() => {
     if (!form) return [];
     const at = (key: string, fallback: { x: number; y: number }) => positions[key] ?? fallback;
@@ -212,25 +266,26 @@ function Editor({ id, onBack, onOpen, onChat }: EditorProps) {
       {
         id: "agent",
         type: "step",
-        position: at("agent", { x: 320, y: Math.max(0, (Math.max(toolIds.length, kbIds.length, 1) - 1) * 55) }),
+        position: at("agent", agentDefaultPos),
         selected: selected?.kind === "agent" && selected.tab !== "abilities" && selected.tab !== "team",
         data: { type: "agent", title: form.name || "Agent", subtitle: form.goal, problems: [], state: runView.steps["agent"], detail: active ? `Calling ${active}…` : null },
       },
     ];
     nodes.push(...tools.nodes.map((n) => ({ ...n, selected: selected?.kind === "agent" && selected.tab === "abilities" })));
+    const agentAt = nodes[0].position;
     kbIds.forEach((kid, i) => {
+      const y = agentAt.y + (i - (kbIds.length - 1) / 2) * AGENT_ROW_GAP;
       nodes.push({
         id: `kb:${kid}`,
         type: "step",
-        position: at(`kb:${kid}`, { x: 0, y: i * 110 }),
+        position: at(`kb:${kid}`, { x: 0, y }),
         data: { type: "knowledge", title: kbName(kid), subtitle: "Searched when it needs facts", problems: [] },
       });
     });
     // Its team: agents it may hand work to, under it. Lit while it's asking one, with what that one is calling.
-    const agentAt = nodes[0].position;
     // Beside the agent, in the connectors' column, under the lowest one.
     const firstCol = tools.nodes.filter((n) => n.data.type === "server" || n.position.x < agentAt.x + 400);
-    const teamY = firstCol.length ? Math.max(...firstCol.map((n) => n.position.y)) + 110 : agentAt.y + 110;
+    const teamY = firstCol.length ? Math.max(...firstCol.map((n) => n.position.y)) + AGENT_ROW_GAP : agentAt.y + AGENT_ROW_GAP;
     subIds.forEach((sid, i) => {
       const sub = agents.data?.find((a) => a.id === sid);
       const name = sub?.name ?? "Agent";
@@ -241,7 +296,7 @@ function Editor({ id, onBack, onOpen, onChat }: EditorProps) {
       nodes.push({
         id: `team:${sid}`,
         type: "step",
-        position: at(`team:${sid}`, { x: agentAt.x + 360, y: teamY + i * 90 }),
+        position: at(`team:${sid}`, { x: agentAt.x + 340, y: teamY + i * AGENT_ROW_GAP }),
         selected: selected?.kind === "agent" && selected.tab === "team",
         data: {
           type: "team",
@@ -253,20 +308,41 @@ function Editor({ id, onBack, onOpen, onChat }: EditorProps) {
         },
       });
     });
-    return nodes.map((n) => (sizes[n.id] ? { ...n, measured: sizes[n.id] } : n));
-  }, [form, toolIds, kbIds, subIds, agents.data, positions, selected, runView, active, sizes, tools]); // eslint-disable-line react-hooks/exhaustive-deps
+    return nodes.map((n) => {
+      const isFocus = focusInfo.nodes.has(n.id);
+      return {
+        ...n,
+        ...(sizes[n.id] ? { measured: sizes[n.id] } : {}),
+        zIndex: focusInfo.focused && isFocus ? 10 : undefined,
+        style: focusInfo.focused ? { opacity: isFocus ? 1 : 0.22, transition: "opacity 160ms ease" } : { transition: "opacity 160ms ease" },
+      };
+    });
+  }, [form, kbIds, subIds, agents.data, positions, selected, runView, active, sizes, tools, agentDefaultPos, focusInfo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const flowEdges: Edge[] = useMemo(
-    () => [
-      ...tools.edges,
-      ...kbIds.map((kid) => ({ id: `k:${kid}`, source: `kb:${kid}`, target: "agent", style: { stroke: "#c4b5fd", strokeDasharray: "4 4" } })),
-      ...subIds.map((sid) => {
-        const on = active === `Ask ${agents.data?.find((a) => a.id === sid)?.name}`;
-        return { id: `t:${sid}`, source: "agent", target: `team:${sid}`, animated: on, style: { stroke: on ? "#e879f9" : "#d8b4fe", strokeWidth: on ? 2.5 : 1.5, strokeDasharray: on ? undefined : "6 4" } };
+    () =>
+      baseEdges.map((e) => {
+        const isFocus = focusInfo.edges.has(e.id);
+        return {
+          ...e,
+          animated: e.animated || isFocus,
+          zIndex: isFocus ? 15 : 0,
+          style: {
+            ...e.style,
+            opacity: focusInfo.focused ? (isFocus ? 1 : 0.14) : (e.style?.opacity ?? 0.85),
+            strokeWidth: isFocus ? 2.75 : e.style?.strokeWidth,
+            filter: isFocus ? "drop-shadow(0 0 6px rgba(99,102,241,0.5))" : undefined,
+            transition: "opacity 160ms ease, stroke-width 160ms ease",
+          },
+        };
       }),
-    ],
-    [tools.edges, kbIds, subIds, agents.data, active],
+    [baseEdges, focusInfo],
   );
+
+  const tidy = useCallback(() => {
+    setPositions({});
+    setTimeout(() => flow.fitView({ padding: 0.28, maxZoom: 1, duration: 300 }), 40);
+  }, [flow]);
 
   const onNodesChange = useCallback((changes: NodeChange<StepNodeType>[]) => {
     track(changes);
@@ -361,6 +437,16 @@ function Editor({ id, onBack, onOpen, onChat }: EditorProps) {
           <Button
             size="sm"
             variant="outline"
+            aria-label="Arrange"
+            title="Reset node layout and fit canvas"
+            className="px-2 lg:px-3"
+            onClick={tidy}
+          >
+            <LayoutGrid /> <span className="hidden lg:inline">Arrange</span>
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
             aria-label="Settings"
             aria-pressed={selected?.kind === "agent"}
             className={cn("px-2 lg:px-3", selected?.kind === "agent" && "bg-zinc-100")}
@@ -406,14 +492,23 @@ function Editor({ id, onBack, onOpen, onChat }: EditorProps) {
         </div>
       </header>
       {notice && (
-        <div className={cn("flex items-start gap-2 border-b px-4 py-2 text-sm", notice.tone === "ok" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : notice.tone === "warn" ? "border-amber-200 bg-amber-50 text-amber-900" : "border-red-200 bg-red-50 text-red-800")}>
-          {notice.tone === "ok" ? <Check className="mt-0.5 h-4 w-4 shrink-0" /> : <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />}
+        <div
+          className={cn(
+            "flex items-start gap-2 border-b px-4 py-2 text-sm",
+            notice.tone === "ok"
+              ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+              : notice.tone === "warn"
+                ? "border-amber-500/30 bg-amber-500/10 text-amber-200"
+                : "border-red-500/30 bg-red-500/10 text-red-200",
+          )}
+        >
+          {notice.tone === "ok" ? <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" /> : <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />}
           <div className="min-w-0 flex-1">
             <p className="font-medium">{notice.text}</p>
-            {notice.detail?.map((d, i) => <p key={i}>• {d}</p>)}
+            {notice.detail?.map((d, i) => <p key={i} className="opacity-90">• {d}</p>)}
           </div>
           {notice.reload && <button type="button" className="font-medium underline cursor-pointer" onClick={() => window.location.reload()}>Reload</button>}
-          <button type="button" aria-label="Dismiss" className="rounded p-0.5 hover:bg-black/10 cursor-pointer" onClick={() => setNotice(null)}><X className="h-4 w-4" /></button>
+          <button type="button" aria-label="Dismiss" className="rounded p-0.5 opacity-75 hover:bg-white/10 hover:opacity-100 cursor-pointer" onClick={() => setNotice(null)}><X className="h-4 w-4" /></button>
         </div>
       )}
       <div className="flex min-h-0 flex-1">
@@ -428,6 +523,10 @@ function Editor({ id, onBack, onOpen, onChat }: EditorProps) {
                   edges={flowEdges}
                   nodeTypes={nodeTypes}
                   onNodesChange={onNodesChange}
+                  onNodeMouseEnter={(_, n) => setHoveredNodeId(n.id)}
+                  onNodeMouseLeave={(_, n) => setHoveredNodeId((cur) => (cur === n.id ? null : cur))}
+                  onEdgeMouseEnter={(_, e) => setHoveredEdgeId(e.id)}
+                  onEdgeMouseLeave={(_, e) => setHoveredEdgeId((cur) => (cur === e.id ? null : cur))}
                   onPaneClick={() => setSelected(null)}
                   nodesConnectable={false}
                   deleteKeyCode={null}

@@ -27,6 +27,8 @@ class KnowledgeBase(Base, TimestampMixin):
     tenant_id: Mapped[str] = mapped_column(
         ForeignKey("tenants.id", ondelete="CASCADE"), index=True
     )
+    # The workspace it was made in; lists and lookups only show the current one.
+    workspace_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     owner_id: Mapped[str] = mapped_column(String(36), index=True)
     name: Mapped[str] = mapped_column(String(255))
     description: Mapped[str] = mapped_column(Text, default="")

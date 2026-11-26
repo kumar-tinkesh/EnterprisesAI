@@ -82,12 +82,12 @@ export function GoogleButton() {
         variant="outline"
         onClick={handleGoogleAuth}
         disabled={loading}
-        className="w-full border-zinc-300 hover:bg-zinc-50"
+        className="h-10 w-full"
       >
         {loading ? (
-          <Spinner />
+          <Spinner className="h-4 w-4" />
         ) : (
-          <svg className="mr-2 h-4 w-4" viewBox="0 0 24 24">
+          <svg className="h-4 w-4" viewBox="0 0 24 24" aria-hidden="true">
             <path
               fill="#4285F4"
               d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
@@ -108,7 +108,7 @@ export function GoogleButton() {
         )}
         Continue with Google
       </Button>
-      {error && <p className="text-xs text-red-600 text-center">{error}</p>}
+      {error && <p role="alert" className="text-center text-xs text-[var(--danger)]">{error}</p>}
     </div>
   );
 }

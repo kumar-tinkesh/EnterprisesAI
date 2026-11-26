@@ -41,6 +41,7 @@ from builder.quality.cleanup import delete_tests
 from builder.schedules.service import sync_workflow_schedules
 from builder.versions.service import ensure_baseline, record_version
 from builder.services.references import check_workflow
+from builder.scope import in_workspace, workspace_of
 
 router = APIRouter()
 
@@ -79,7 +80,10 @@ async def _workflow_out(db: AsyncSession, wf: BuilderWorkflow, user: CurrentUser
 async def _get_workflow(db: AsyncSession, workflow_id: str, user: CurrentUser) -> BuilderWorkflow:
     wf = (
         await db.execute(
-            select(BuilderWorkflow).where(BuilderWorkflow.id == workflow_id, BuilderWorkflow.tenant_id == user.tenant_id)
+            select(BuilderWorkflow).where(
+                BuilderWorkflow.id == workflow_id, BuilderWorkflow.tenant_id == user.tenant_id,
+                in_workspace(BuilderWorkflow.workspace_id, user),
+            )
         )
     ).scalars().first()
     if wf is None:
@@ -99,6 +103,7 @@ async def mint_draft_agents(db: AsyncSession, wf: BuilderWorkflow, nodes: list[W
             continue
         agent = BuilderAgent(
             tenant_id=user.tenant_id,
+            workspace_id=wf.workspace_id,
             owner_id=user.id,
             workflow_id=wf.id,
             name=draft.name.strip(),
@@ -120,7 +125,7 @@ async def list_workflows(user: CurrentUser = Depends(get_end_user), db: AsyncSes
     workflows = (
         await db.execute(
             select(BuilderWorkflow)
-            .where(BuilderWorkflow.tenant_id == user.tenant_id)
+            .where(BuilderWorkflow.tenant_id == user.tenant_id, in_workspace(BuilderWorkflow.workspace_id, user))
             .order_by(BuilderWorkflow.updated_at.desc())
         )
     ).scalars().all()
@@ -140,6 +145,7 @@ async def create_workflow(
         return problems_response("This workflow can't be saved yet.", problems)
     wf = BuilderWorkflow(
         tenant_id=user.tenant_id,
+        workspace_id=workspace_of(user),
         owner_id=user.id,
         name=payload.name.strip(),
         description=payload.description.strip(),
@@ -339,7 +345,8 @@ async def create_own_knowledge(workflow_id: str, user: CurrentUser = Depends(get
     if existing and await db.get(KnowledgeBase, existing) is not None:
         return {"knowledge_base_id": existing}
     kb = KnowledgeBase(
-        tenant_id=wf.tenant_id, owner_id=user.id, name=f"{wf.name} \u00b7 workflow knowledge"[:255],
+        tenant_id=wf.tenant_id, workspace_id=wf.workspace_id, owner_id=user.id,
+        name=f"{wf.name} \u00b7 workflow knowledge"[:255],
         description=f"Searched by every agent step of the \u201c{wf.name}\u201d workflow; deleted with it.",
     )
     db.add(kb)

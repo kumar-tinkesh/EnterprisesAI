@@ -18,7 +18,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import {
-  AlertTriangle, ArrowLeft, CalendarClock, Check, ChevronDown, Eye, MessageSquare, MessagesSquare,
+  AlertTriangle, ArrowLeft, CalendarClock, Check, ChevronDown, Eye, LayoutGrid, MessageSquare, MessagesSquare,
   Play, Plus, Redo2, RotateCcw, Save, Sparkles, Square, Undo2, Wand2, X,
 } from "lucide-react";
 
@@ -35,7 +35,7 @@ import { Playground } from "@/components/builder/playground";
 import { PublishPanel } from "@/components/builder/publish-panel";
 import { SplitPane } from "@/components/builder/split-pane";
 import { StepTest, canTestStep } from "@/components/builder/step-test";
-import { AnswerActions, AnswerView, StepRunPanel } from "@/components/builder/run-output";
+import { AnswerActions, AnswerView } from "@/components/builder/run-output";
 import { useNodeSizes } from "@/components/builder/step-node";
 import { TestsPanel } from "@/components/builder/tests-panel";
 import { VersionHistory, timeAgo } from "@/components/builder/version-history";
@@ -45,7 +45,7 @@ import { WorkflowSchedulePanel } from "@/components/builder/schedule-panel";
 import { UsagePanel } from "@/components/builder/usage-panel";
 import { ApiError } from "@/lib/api";
 import { builderApi } from "@/lib/builder/api";
-import { arrange } from "@/lib/builder/arrange";
+import { arrange, computeEdgeDetours } from "@/lib/builder/arrange";
 import { connect, draftKey, duplicateStep, forSave, inputFields, insertAfter, newNode, problemsByStep, removeSteps, stepTitle, unsavedKey, updateStep } from "@/lib/builder/graph";
 import { emptyRunView, isFinished, type RunView } from "@/lib/builder/run-state";
 import type { Agent, AgentToolReport, AnswerDepth, NodeType, Problem, RunNode, WorkflowConfig, WorkflowEdge, WorkflowNode } from "@/lib/builder/types";
@@ -149,8 +149,10 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
   const [testId, setTestId] = useState<string | null>(null);
   // The step whose last answer is showing (its Result).
   const [resultId, setResultId] = useState<string | null>(null);
+  const [pinnedOutputs, setPinnedOutputs] = useState<Record<string, string>>({});
   const loaded = useRef(false);
   const inputKey = `builder.input.${id}`;
+  const pinnedKey = `builder.pinned.${id}`;
 
   // Made by "blank" / "with AI" and never saved: delete it on the way out, so
   // only workflows someone actually saved are listed.
@@ -185,7 +187,31 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
     } catch {
       /* none */
     }
-  }, [inputKey]);
+    try {
+      const rawPinned = window.localStorage.getItem(pinnedKey);
+      setPinnedOutputs(rawPinned ? (JSON.parse(rawPinned) as Record<string, string>) : {});
+    } catch {
+      setPinnedOutputs({});
+    }
+  }, [inputKey, pinnedKey]);
+
+  const pinOutput = useCallback(
+    (nodeId: string, text: string | null) => {
+      setPinnedOutputs((prev) => {
+        const next = { ...prev };
+        if (text === null) delete next[nodeId];
+        else next[nodeId] = text;
+        try {
+          if (Object.keys(next).length) window.localStorage.setItem(pinnedKey, JSON.stringify(next));
+          else window.localStorage.removeItem(pinnedKey);
+        } catch {
+          /* ignore storage quota */
+        }
+        return next;
+      });
+    },
+    [pinnedKey],
+  );
   const setDepth = (d: AnswerDepth) => {
     setDepthState(d);
     try {
@@ -482,25 +508,107 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
   const running = !!canvasRunId && !isFinished(canvasRun.view.status);
   // ── canvas ──
   const { sizes, track } = useNodeSizes();
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+  const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
+
+  const focusInfo = useMemo(() => {
+    const edges = shown?.edges ?? [];
+    const activeEdgeId = hoveredEdgeId ?? (selection?.kind === "edge" ? selection.id : null);
+    if (activeEdgeId) {
+      const edge = edges.find((e) => e.id === activeEdgeId);
+      if (edge) {
+        return { focused: true, nodes: new Set([edge.source, edge.target]), edges: new Set([edge.id]) };
+      }
+    }
+    const activeNodeId = hoveredNodeId ?? (selection?.kind === "node" ? selection.id : null);
+    if (activeNodeId) {
+      const connected = edges.filter((e) => e.source === activeNodeId || e.target === activeNodeId);
+      const nodes = new Set<string>([activeNodeId]);
+      const edgeSet = new Set<string>();
+      for (const e of connected) {
+        nodes.add(e.source);
+        nodes.add(e.target);
+        edgeSet.add(e.id);
+      }
+      return { focused: true, nodes, edges: edgeSet };
+    }
+    return { focused: false, nodes: new Set<string>(), edges: new Set<string>() };
+  }, [shown?.edges, hoveredNodeId, hoveredEdgeId, selection]);
+
+  const titleById = useMemo(
+    () => new Map((shown?.nodes ?? []).map((n) => [n.id, stepTitle(n, shownAgents)])),
+    [shown?.nodes, shownAgents],
+  );
+  const edgeDetours = useMemo(
+    () => computeEdgeDetours(shown?.nodes ?? [], shown?.edges ?? []),
+    [shown?.nodes, shown?.edges],
+  );
+
+  const pendingApprovals = useMemo(
+    () => (liveView.runId ? liveView.approvals : (runSnapshot.data?.approvals ?? []).filter((a) => a.status === "pending")),
+    [liveView.runId, liveView.approvals, runSnapshot.data?.approvals],
+  );
+  const locateNode = useCallback(
+    (nodeId: string) => {
+      setSelection({ kind: "node", id: nodeId });
+      setTestId(null);
+      const n = flow.getNode(nodeId);
+      if (n) {
+        flow.setCenter(n.position.x + (n.measured?.width ?? 176) / 2, n.position.y + 40, {
+          zoom: Math.max(flow.getZoom(), 0.9),
+          duration: 320,
+        });
+      }
+    },
+    [flow],
+  );
+
   const flowNodes: FlowNodeType[] = useMemo(
     () =>
-      (shown?.nodes ?? []).map((n) => ({
-        id: n.id,
-        type: "flow",
-        position: n.position ?? { x: 0, y: 0 },
-        measured: sizes[n.id],
-        selected: !previewing && selection?.kind === "node" && selection.id === n.id,
-        data: {
-          node: n,
-          title: stepTitle(n, shownAgents),
-          problems: previewing ? [] : byStep[n.id] ?? [],
-          state: previewing ? undefined : liveView.steps[n.id],
-          detail: !previewing && liveView.activeTool[n.id] ? `Calling ${liveView.activeTool[n.id]}…` : null,
-          // A trigger's "output" is just the request it was given.
-          output: previewing || n.type === "input" || n.type === "manual_trigger" || n.type === "schedule_trigger" ? null : outputs[n.id] ?? null,
-        },
-      })),
-    [shown?.nodes, selection, shownAgents, byStep, liveView, sizes, previewing, outputs],
+      (shown?.nodes ?? []).map((n) => {
+        const isFocusNode = focusInfo.nodes.has(n.id);
+        const timing = liveView.stepTiming[n.id];
+        const rn = runNodes[n.id];
+        const rnDuration = rn?.started_at && rn?.finished_at ? Date.parse(rn.finished_at) - Date.parse(rn.started_at) : null;
+        const durationMs = timing?.finishedAt != null ? timing.finishedAt - timing.startedAt : rnDuration !== null && Number.isFinite(rnDuration) ? rnDuration : null;
+        const stepState = previewing ? undefined : liveView.steps[n.id];
+        const runningSince = stepState === "running" ? (timing?.startedAt ?? null) : null;
+        const hasPinned = !previewing && Object.prototype.hasOwnProperty.call(pinnedOutputs, n.id);
+        const nodeOutput = previewing
+          ? null
+          : hasPinned
+            ? pinnedOutputs[n.id]
+            : n.type === "input" || n.type === "manual_trigger" || n.type === "schedule_trigger"
+              ? null
+              : outputs[n.id] ?? null;
+        const pendingApproval = previewing ? null : pendingApprovals.find((a) => a.node_id === n.id) ?? null;
+        return {
+          id: n.id,
+          type: "flow",
+          position: n.position ?? { x: 0, y: 0 },
+          measured: sizes[n.id],
+          selected: !previewing && selection?.kind === "node" && selection.id === n.id,
+          zIndex: focusInfo.focused && isFocusNode ? 10 : undefined,
+          style: focusInfo.focused
+            ? { opacity: isFocusNode ? 1 : 0.22, transition: "opacity 160ms ease" }
+            : { transition: "opacity 160ms ease" },
+          data: {
+            node: n,
+            title: titleById.get(n.id) ?? stepTitle(n, shownAgents),
+            problems: previewing ? [] : byStep[n.id] ?? [],
+            state: stepState,
+            detail: !previewing && liveView.activeTool[n.id] ? `Calling ${liveView.activeTool[n.id]}…` : null,
+            output: nodeOutput,
+            runNode: previewing ? null : rn ?? null,
+            toolCalls: previewing ? [] : (runSnapshot.data?.tool_calls ?? []).filter((c) => c.node_id === n.id),
+            durationMs: previewing ? null : durationMs,
+            runningSince,
+            pinned: hasPinned,
+            pendingApproval,
+          },
+        };
+      }),
+    [shown?.nodes, selection, shownAgents, byStep, liveView, runNodes, runSnapshot.data?.tool_calls, sizes, previewing, outputs, pinnedOutputs, pendingApprovals, focusInfo, titleById],
   );
 
   const canEditLines = !previewing && !!wfQuery.data?.can_manage;
@@ -513,19 +621,31 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
       (shown?.edges ?? []).map((e) => {
         const flowing = !previewing && liveView.steps[e.source] === "succeeded" && liveView.steps[e.target] === "running";
         const done = !previewing && liveView.steps[e.source] === "succeeded" && !!liveView.steps[e.target];
+        const highlighted = focusInfo.edges.has(e.id);
+        const dimmed = focusInfo.focused && !highlighted;
         return {
           id: e.id,
           source: e.source,
           target: e.target,
           selected: selection?.kind === "edge" && selection.id === e.id,
-          animated: flowing,
+          animated: flowing || highlighted,
+          zIndex: highlighted ? 15 : edgeDetours[e.id] !== undefined ? 2 : 0,
           type: "flow" as const,
-          data: { branch: e.condition ?? null, onDelete: canEditLines ? removeLine : undefined },
-          markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: flowing ? "#38bdf8" : done ? "#34d399" : "#818cf8" },
-          style: { strokeWidth: flowing ? 2.5 : 2, stroke: flowing ? "#38bdf8" : done ? "#34d399" : "#6366f1" },
+          data: {
+            branch: e.condition ?? null,
+            routeLabel: `${titleById.get(e.source) ?? e.source} → ${titleById.get(e.target) ?? e.target}`,
+            detourY: edgeDetours[e.id],
+            highlighted,
+            dimmed,
+            packet: flowing,
+            onHoverChange: setHoveredEdgeId,
+            onDelete: canEditLines ? removeLine : undefined,
+          },
+          markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: flowing ? "#38bdf8" : done ? "#34d399" : highlighted ? "#a5b4fc" : "#818cf8" },
+          style: { strokeWidth: flowing || highlighted ? 2.6 : 2, stroke: flowing ? "#38bdf8" : done ? "#34d399" : highlighted ? "#818cf8" : "#6366f1" },
         };
       }),
-    [shown?.edges, selection, liveView, previewing, canEditLines, removeLine],
+    [shown?.edges, selection, liveView, previewing, canEditLines, removeLine, focusInfo, edgeDetours, titleById],
   );
 
   const onNodesChange = useCallback(
@@ -583,9 +703,10 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
     return () => clearTimeout(t);
   }, [previewVersion, preview, flow]);
 
-  // A step whose settings open off screen (or under the popup) is brought into view beside it.
+  // A step whose settings/test open off screen (or whose inline result needs top headroom) is brought cleanly into view.
   const canvasRef = useRef<HTMLDivElement>(null);
   const openId = selection?.kind === "node" && selection.open ? selection.id : testId ?? resultId;
+  const sideDrawerOpen = (selection?.kind === "node" && !!selection.open) || !!testId;
   useEffect(() => {
     if (!openId) return;
     const t = setTimeout(() => {
@@ -593,18 +714,24 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
       const box = canvasRef.current?.getBoundingClientRect();
       if (!n || !box) return;
       const zoom = flow.getZoom();
-      const w = (n.measured?.width ?? 270) * zoom;
+      const w = (n.measured?.width ?? 176) * zoom;
       const h = (n.measured?.height ?? 120) * zoom;
       const p = flow.flowToScreenPosition(n.position);
-      const popup = Math.min(372, box.width * 0.5);
-      const visible = p.x >= box.left && p.x + w <= box.right - popup && p.y >= box.top && p.y + h <= box.bottom;
-      if (visible) return;
-      // Centre it in the part of the canvas the popup leaves free.
-      const shift = popup / 2 / zoom;
-      flow.setCenter(n.position.x + w / zoom / 2 + shift, n.position.y + h / zoom / 2, { zoom, duration: 300 });
+      if (sideDrawerOpen) {
+        const popup = Math.min(372, box.width * 0.5);
+        const visible = p.x >= box.left && p.x + w <= box.right - popup && p.y >= box.top && p.y + h <= box.bottom;
+        if (visible) return;
+        const shift = popup / 2 / zoom;
+        flow.setCenter(n.position.x + w / zoom / 2 + shift, n.position.y + h / zoom / 2, { zoom, duration: 300 });
+      } else {
+        const topHeadroom = 280;
+        const visible = p.x >= box.left + 80 && p.x + w <= box.right - 80 && p.y >= box.top + topHeadroom && p.y + h <= box.bottom - 20;
+        if (visible) return;
+        flow.setCenter(n.position.x + w / zoom / 2, n.position.y + h / zoom / 2 - 120 / zoom, { zoom, duration: 300 });
+      }
     }, 60);
     return () => clearTimeout(t);
-  }, [openId, flow]);
+  }, [openId, sideDrawerOpen, flow]);
 
   const addStep = (type: NodeType, at?: { x: number; y: number }) => {
     if (!doc) return;
@@ -657,13 +784,16 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
         setTestId(nodeId);
       },
       canTest: (n) => canTestStep(n) && !previewing,
+      openResultId: previewing ? null : resultId,
       showResult: (nodeId) => {
         setSelection({ kind: "node", id: nodeId });
         setTestId(null);
-        setResultId(nodeId);
+        setResultId((cur) => (cur === nodeId ? null : nodeId));
       },
+      closeResult: () => setResultId(null),
+      pinOutput,
     }),
-    [token, previewing, wfQuery.data?.can_manage, shownAgents, shown?.edges, inputText, setInputText, change],
+    [token, previewing, wfQuery.data?.can_manage, shownAgents, shown?.edges, inputText, setInputText, change, resultId, pinOutput],
   );
   // Test stays open only while its step is the one selected (Configure, another step or the pane closes it).
   useEffect(() => {
@@ -684,10 +814,9 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
   const selectedNode = selection?.kind === "node" && selection.open ? doc.nodes.find((n) => n.id === selection.id) : undefined;
   const selectedEdge = selection?.kind === "edge" ? doc.edges.find((e) => e.id === selection.id) : undefined;
   const testNode = testId && !previewing ? doc.nodes.find((n) => n.id === testId) : undefined;
-  const resultNode = resultId && runNodes[resultId] && !testNode ? doc.nodes.find((n) => n.id === resultId) : undefined;
   const outputNodeId = doc.nodes.find((n) => n.type === "output")?.id;
-  // The popup docked right; the canvas run's card steps aside while it shows.
-  const panelOpen = !previewing && !!(selectedNode || selectedEdge || testNode || resultNode || selection?.kind === "settings");
+  // The popup docked right; step results render inline directly above their node.
+  const panelOpen = !previewing && !!(selectedNode || selectedEdge || testNode || selection?.kind === "settings");
   const standalone = (agentsQuery.data ?? []).filter((a) => !a.workflow_id);
   // A green dot on Schedule while any of its schedules is on.
   const scheduledOn = (schedulesQuery.data ?? []).filter((s) => s.enabled).map((s) => s.description).join(", ");
@@ -756,6 +885,11 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
                 <IconTool label="Redo (Ctrl+Shift+Z)" disabled={previewing || !historySize.future} onClick={redo}><Redo2 /></IconTool>
               </div>
             )}
+            {canManage && (
+              <Button size="sm" variant="outline" className="px-2 lg:px-3" disabled={previewing} onClick={tidy} aria-label="Arrange" title="Arrange steps cleanly left-to-right">
+                <LayoutGrid /> <span className="hidden lg:inline">Arrange</span>
+              </Button>
+            )}
             <Button size="sm" variant="outline" className={cn("hidden px-2 sm:inline-flex lg:px-3", playOpen && "bg-zinc-100")} onClick={() => setPlayOpen((o) => !o)} aria-label="Test in a chat" aria-pressed={playOpen}>
               <MessageSquare /> <span className="hidden lg:inline">Test</span>
             </Button>
@@ -822,23 +956,32 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
 
         {/* ── notices ── */}
         {notice && (
-          <div className={cn("flex items-start gap-2 border-b px-4 py-2 text-xs", notice.tone === "ok" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : notice.tone === "warn" ? "border-amber-200 bg-amber-50 text-amber-900" : "border-red-200 bg-red-50 text-red-800")}>
-            {notice.tone === "ok" ? <Check className="mt-0.5 h-3.5 w-3.5" /> : <AlertTriangle className="mt-0.5 h-3.5 w-3.5" />}
+          <div
+            className={cn(
+              "flex items-start gap-2 border-b px-4 py-2 text-xs",
+              notice.tone === "ok"
+                ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+                : notice.tone === "warn"
+                  ? "border-amber-500/30 bg-amber-500/10 text-amber-200"
+                  : "border-red-500/30 bg-red-500/10 text-red-200",
+            )}
+          >
+            {notice.tone === "ok" ? <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" /> : <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
             <div className="flex-1">
               <p className="font-medium">{notice.text}</p>
-              {notice.detail?.map((d, i) => <p key={i}>• {d}</p>)}
+              {notice.detail?.map((d, i) => <p key={i} className="opacity-90">• {d}</p>)}
               {notice.agents && <AgentToolsNotice token={token} reports={notice.agents} onOpen={(nodeId) => setSelection({ kind: "node", id: nodeId, open: true })} />}
             </div>
             {notice.reload && <button type="button" className="font-medium underline cursor-pointer" onClick={() => window.location.reload()}>Reload</button>}
-            <button type="button" aria-label="Dismiss" className="cursor-pointer" onClick={() => setNotice(null)}>×</button>
+            <button type="button" aria-label="Dismiss" className="rounded p-0.5 opacity-75 hover:bg-white/10 hover:opacity-100 cursor-pointer" onClick={() => setNotice(null)}>×</button>
           </div>
         )}
         {general.length > 0 && !notice && (
-          <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-xs text-red-800">{general.map((p) => p.message).join(" · ")}</div>
+          <div className="border-b border-red-500/30 bg-red-500/10 px-4 py-2 text-xs text-red-200">{general.map((p) => p.message).join(" · ")}</div>
         )}
         {previewing && (
-          <div className="flex items-center gap-3 border-b border-indigo-200 bg-indigo-50 px-4 py-2 text-xs text-indigo-800">
-            <Eye className="h-3.5 w-3.5 shrink-0" />
+          <div className="flex items-center gap-3 border-b border-indigo-500/30 bg-indigo-500/10 px-4 py-2 text-xs text-indigo-200">
+            <Eye className="h-3.5 w-3.5 shrink-0 text-indigo-300" />
             <p className="flex-1">
               {preview ? (
                 <><span className="font-semibold">Viewing version {preview.version}</span> — {preview.note.toLowerCase()} {timeAgo(preview.created_at)}{preview.author_name ? ` by ${preview.author_name}` : ""}. Look only.</>
@@ -886,6 +1029,10 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
                   onNodesChange={onNodesChange}
                   onEdgesChange={onEdgesChange}
                   onConnect={onConnect}
+                  onNodeMouseEnter={(_, n) => setHoveredNodeId(n.id)}
+                  onNodeMouseLeave={(_, n) => setHoveredNodeId((cur) => (cur === n.id ? null : cur))}
+                  onEdgeMouseEnter={(_, e) => setHoveredEdgeId(e.id)}
+                  onEdgeMouseLeave={(_, e) => setHoveredEdgeId((cur) => (cur === e.id ? null : cur))}
                   onNodeDoubleClick={(_, n) => !previewing && setSelection({ kind: "node", id: n.id, open: true })}
                   onPaneClick={() => {
                     if (previewing) return;
@@ -959,16 +1106,6 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
                         : "right-3 top-3 flex max-h-[calc(100%-1.5rem)] w-[min(360px,calc(100%-1.5rem))] flex-col overflow-hidden rounded-xl border border-zinc-200",
                     )}
                   >
-                    {resultNode && (
-                      <StepRunPanel
-                        key={resultNode.id}
-                        title={stepTitle(resultNode, agentsById)}
-                        kind={NODE_LOOK[resultNode.type].label}
-                        node={runNodes[resultNode.id]}
-                        calls={(runSnapshot.data?.tool_calls ?? []).filter((c) => c.node_id === resultNode.id)}
-                        onClose={() => setResultId(null)}
-                      />
-                    )}
                     {testNode && (
                       <StepTest
                         key={testNode.id}
@@ -977,6 +1114,24 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
                         title={stepTitle(testNode, agentsById)}
                         token={token}
                         initialInput={inputText}
+                        upstreamSources={doc.edges
+                          .filter((e) => e.target === testNode.id)
+                          .map((e) => {
+                            const src = doc.nodes.find((n) => n.id === e.source);
+                            const pinned = Object.prototype.hasOwnProperty.call(pinnedOutputs, e.source);
+                            const val = pinned
+                              ? pinnedOutputs[e.source]
+                              : outputs[e.source] ?? (src?.type === "input" ? inputText : "");
+                            return {
+                              nodeId: e.source,
+                              title: titleById.get(e.source) ?? e.source,
+                              output: val,
+                              pinned,
+                            };
+                          })
+                          .filter((s) => !!s.output.trim())}
+                        pinnedOutput={pinnedOutputs[testNode.id] ?? null}
+                        onPinOutput={(text) => pinOutput(testNode.id, text)}
                         onClose={() => setTestId(null)}
                       />
                     )}
@@ -992,6 +1147,8 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
                         token={token}
                         workflowId={id}
                         lastRunId={resultRunId}
+                        inputText={inputText}
+                        onInputText={setInputText}
                         onChange={(patch) => change((d) => ({ ...d, nodes: updateStep(d.nodes, selectedNode.id, patch) }), `patch:${selectedNode.id}`)}
                         onEdgeChange={(edgeId, patch) => change((d) => ({ ...d, edges: d.edges.map((e) => (e.id === edgeId ? { ...e, ...patch } : e)) }))}
                         onDelete={() => {
@@ -1001,18 +1158,38 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
                         onClose={() => setSelection(null)}
                       />
                     )}
-                    {selectedEdge && (
-                      <EdgeInspector
-                        edge={selectedEdge}
-                        fromCondition={doc.nodes.find((n) => n.id === selectedEdge.source)?.type === "condition"}
-                        onChange={(patch) => change((d) => ({ ...d, edges: d.edges.map((e) => (e.id === selectedEdge.id ? { ...e, ...patch } : e)) }))}
-                        onDelete={() => {
-                          change((d) => ({ ...d, edges: d.edges.filter((e) => e.id !== selectedEdge.id) }));
-                          setSelection(null);
-                        }}
-                        onClose={() => setSelection(null)}
-                      />
-                    )}
+                    {selectedEdge && (() => {
+                      const srcNode = doc.nodes.find((n) => n.id === selectedEdge.source);
+                      const tgtNode = doc.nodes.find((n) => n.id === selectedEdge.target);
+                      const isPinned = Object.prototype.hasOwnProperty.call(pinnedOutputs, selectedEdge.source);
+                      const payload = isPinned
+                        ? pinnedOutputs[selectedEdge.source]
+                        : outputs[selectedEdge.source] ?? (srcNode?.type === "input" ? inputText : null);
+                      return (
+                        <EdgeInspector
+                          key={selectedEdge.id}
+                          edge={selectedEdge}
+                          sourceTitle={titleById.get(selectedEdge.source) ?? selectedEdge.source}
+                          targetTitle={titleById.get(selectedEdge.target) ?? selectedEdge.target}
+                          fromCondition={srcNode?.type === "condition"}
+                          payload={payload}
+                          isPinned={isPinned}
+                          fromRun={!!outputs[selectedEdge.source] && !isPinned}
+                          canTestTarget={!previewing && !!tgtNode && canTestStep(tgtNode)}
+                          onPinSource={(text) => pinOutput(selectedEdge.source, text)}
+                          onTestTarget={() => {
+                            setSelection({ kind: "node", id: selectedEdge.target });
+                            setTestId(selectedEdge.target);
+                          }}
+                          onChange={(patch) => change((d) => ({ ...d, edges: d.edges.map((e) => (e.id === selectedEdge.id ? { ...e, ...patch } : e)) }))}
+                          onDelete={() => {
+                            change((d) => ({ ...d, edges: d.edges.filter((e) => e.id !== selectedEdge.id) }));
+                            setSelection(null);
+                          }}
+                          onClose={() => setSelection(null)}
+                        />
+                      );
+                    })()}
                     {selection?.kind === "settings" && (
                       <WorkflowSettings workflowId={id} config={doc.config} token={token} canManage={canManage} onChange={(config) => change((d) => ({ ...d, config }))} onClose={() => setSelection(null)} />
                     )}
@@ -1053,18 +1230,52 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
 
                 {/* ── the canvas run ── */}
                 {canvasRunId && runCardOpen && !playOpen && !panelOpen && (
-                  <div className="absolute bottom-3 right-3 z-20 w-96 max-w-[calc(100%-1.5rem)] rounded-xl border border-zinc-200 bg-[var(--surface-raised)] p-3 shadow-lg">
+                  <div
+                    className={cn(
+                      "absolute bottom-3 right-3 z-20 max-w-[calc(100%-1.5rem)] rounded-xl border bg-[var(--surface-raised)] p-3 shadow-2xl",
+                      canvasRun.view.approvals.length > 0 ? "w-[min(430px,calc(100%-1.5rem))] border-amber-500/35" : "w-96 border-white/10",
+                    )}
+                  >
                     <div className="mb-2 flex items-center gap-2">
-                      <span className={cn("rounded-full px-2 py-0.5 text-xs font-medium capitalize",
-                        canvasRun.view.status === "succeeded" ? "bg-emerald-100 text-emerald-700" : canvasRun.view.status === "failed" ? "bg-red-100 text-red-700" : canvasRun.view.status === "waiting" ? "bg-amber-100 text-amber-800" : "bg-zinc-100 text-zinc-700")}>
+                      <span
+                        className={cn(
+                          "rounded-full border px-2 py-0.5 text-xs font-medium capitalize",
+                          canvasRun.view.status === "succeeded"
+                            ? "border-emerald-500/30 bg-emerald-500/15 text-emerald-300"
+                            : canvasRun.view.status === "failed"
+                              ? "border-red-500/30 bg-red-500/15 text-red-300"
+                              : canvasRun.view.status === "waiting"
+                                ? "border-amber-500/30 bg-amber-500/15 text-amber-300"
+                                : "border-white/10 bg-white/5 text-zinc-300",
+                        )}
+                      >
                         {canvasRun.view.status ?? "starting"}
                       </span>
-                      <span className="flex-1 text-xs text-zinc-500">{running ? "Running on the canvas…" : "Last run"}</span>
+                      <span className="flex-1 text-xs text-zinc-400">
+                        {canvasRun.view.status === "waiting"
+                          ? "Waiting for your approval"
+                          : running
+                            ? "Running on the canvas…"
+                            : "Last run"}
+                      </span>
                       <StreamToggle />
-                      <button type="button" aria-label="Close run" onClick={() => setRunCardOpen(false)} className="text-zinc-400 hover:text-zinc-700 cursor-pointer"><X className="h-3.5 w-3.5" /></button>
+                      <button type="button" aria-label="Close run" onClick={() => setRunCardOpen(false)} className="text-zinc-400 hover:text-zinc-200 cursor-pointer"><X className="h-3.5 w-3.5" /></button>
                     </div>
-                    <div className="max-h-72 space-y-2 overflow-y-auto">
-                      {canvasRun.view.approvals.map((a) => <ApprovalCard key={a.id} approval={a} token={token} onDone={() => undefined} />)}
+                    <div className={cn("space-y-2 overflow-y-auto", canvasRun.view.approvals.length > 0 ? "max-h-[65vh]" : "max-h-72")}>
+                      {canvasRun.view.approvals.map((a) => {
+                        const approvalNode = a.node_id ? doc.nodes.find((n) => n.id === a.node_id) : undefined;
+                        return (
+                          <ApprovalCard
+                            key={a.id}
+                            approval={a}
+                            token={token}
+                            stepLabel={a.node_id ? titleById.get(a.node_id) ?? a.node_id : undefined}
+                            stepKind={approvalNode ? NODE_LOOK[approvalNode.type].label : undefined}
+                            onLocate={a.node_id ? () => locateNode(a.node_id!) : undefined}
+                            onDone={() => void runSnapshot.refetch()}
+                          />
+                        );
+                      })}
                       {canvasRun.view.output === null && canvasRun.view.live?.text && (
                         <div className="whitespace-pre-wrap text-sm text-zinc-900" aria-live="polite">{canvasRun.view.live.text}<span className="animate-pulse">▍</span></div>
                       )}

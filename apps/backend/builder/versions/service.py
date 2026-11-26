@@ -219,7 +219,7 @@ async def restore_workflow(db: AsyncSession, workflow: BuilderWorkflow, version:
         agent = await db.get(BuilderAgent, agent_id)
         if agent is None:
             agent = BuilderAgent(
-                id=agent_id, tenant_id=workflow.tenant_id, owner_id=fields.get("owner_id") or workflow.owner_id,
+                id=agent_id, tenant_id=workflow.tenant_id, workspace_id=workflow.workspace_id, owner_id=fields.get("owner_id") or workflow.owner_id,
                 workflow_id=workflow.id, name="", role="", goal="",
             )
             db.add(agent)

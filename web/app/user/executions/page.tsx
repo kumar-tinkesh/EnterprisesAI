@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowDown, CalendarClock, CheckCircle2, ChevronDown, Clock, Eye, Globe, Loader2, MessageSquare, Plus, RefreshCw, Search, ShieldAlert, Users, X, XCircle } from "lucide-react";
+import { ArrowDown, CalendarClock, CheckCircle2, ChevronDown, Clock, Eye, Globe, Loader2, MessageSquare, PanelLeftClose, PanelLeftOpen, Plus, RefreshCw, Search, ShieldAlert, Users, X, XCircle } from "lucide-react";
 
 import ProtectedDashboard from "@/components/protected-dashboard";
 import { Button } from "@/components/ui/button";
@@ -118,6 +119,7 @@ type Item = {
 };
 
 export default function ExecutionsPage() {
+  const router = useRouter();
   const token = useAuthStore((s) => s.accessToken) || "";
   const userId = useAuthStore((s) => s.user?.id);
   const [viewMode, setViewMode] = useState<"runs" | "inspector">(() => {
@@ -133,6 +135,7 @@ export default function ExecutionsPage() {
   // The selected one is open on the canvas, in place of the list.
   const [editing, setEditing] = useState(false);
   const [detail, setDetail] = useState<DetailTab>("overview");
+  const [listCollapsed, setListCollapsed] = useState(false);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [sort, setSort] = useState<Sort>("last_run");
@@ -264,7 +267,13 @@ export default function ExecutionsPage() {
       item={item}
       active={chat?.kind === item.kind && chat.id === item.id}
       serverNames={serverNames}
-      onOpen={(view) => openChat({ kind: item.kind, id: item.id }, view)}
+      onOpen={(view) => {
+        if (view === "chat") {
+          router.push(`/user/agents?workspace=${item.kind}:${encodeURIComponent(item.id)}&tab=chat`);
+        } else {
+          openChat({ kind: item.kind, id: item.id }, view);
+        }
+      }}
       onEdit={() => openEditor({ kind: item.kind, id: item.id })}
       onDelete={() => {
         if (window.confirm(`Delete "${item.name}"? This can't be undone.`)) {
@@ -379,8 +388,8 @@ export default function ExecutionsPage() {
             )}
           </section>
         ) : viewMode === "runs" && !chat ? (
-          <section className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-5 px-4 py-6 sm:px-8 sm:py-8 overflow-y-auto">
-            <header className="flex flex-wrap items-end justify-between gap-4">
+          <section className="animate-fade-up mx-auto flex h-full min-h-0 w-full max-w-6xl flex-1 flex-col gap-5 overflow-hidden px-4 py-6 sm:px-8 sm:py-8">
+            <header className="flex shrink-0 flex-wrap items-end justify-between gap-4">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-3">
                   <h1 className="text-xl font-semibold text-zinc-900">Executions & Logs</h1>
@@ -411,13 +420,21 @@ export default function ExecutionsPage() {
             <RunLogsView
               token={token}
               onOpenChat={(target) => {
-                openChat(target, "chat");
-                setViewMode("inspector");
+                router.push(`/user/agents?workspace=${target.kind}:${encodeURIComponent(target.id)}&tab=chat`);
               }}
             />
           </section>
         ) : (
-          <section className={cn("min-w-0 flex-col gap-5 px-4 py-6 sm:px-8 sm:py-8", chat ? "hidden md:flex md:w-2/5 md:px-4 lg:w-1/3 lg:px-6" : "mx-auto flex w-full max-w-6xl flex-1")}>
+          <section
+            className={cn(
+              "animate-fade-up min-h-0 min-w-0 flex-col gap-5 overflow-hidden px-4 py-6 sm:px-8 sm:py-8 transition-all duration-200",
+              chat
+                ? listCollapsed
+                  ? "hidden"
+                  : "hidden md:flex md:w-2/5 md:px-4 lg:w-1/3 lg:px-6"
+                : "mx-auto flex w-full max-w-6xl flex-1"
+            )}
+          >
             <header className="flex flex-wrap items-end justify-between gap-4">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-3">
@@ -447,9 +464,22 @@ export default function ExecutionsPage() {
                 </div>
                 {!chat && <p className="mt-1 text-sm text-zinc-500">Every agent and workflow, how it&apos;s doing, and a chat with it.</p>}
               </div>
-              <Button className="shrink-0" disabled={createBlank.isPending} onClick={() => createBlank.mutate(tab)}>
-                {createBlank.isPending ? <Spinner className="h-4 w-4" /> : <Plus />} New {tab}
-              </Button>
+              <div className="flex items-center gap-2 shrink-0">
+                <Button className="shrink-0" disabled={createBlank.isPending} onClick={() => createBlank.mutate(tab)}>
+                  {createBlank.isPending ? <Spinner className="h-4 w-4" /> : <Plus />} New {tab}
+                </Button>
+                {chat && (
+                  <button
+                    type="button"
+                    onClick={() => setListCollapsed(true)}
+                    title="Collapse agents list"
+                    aria-label="Collapse agents list"
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-white/10 bg-white/[0.04] text-zinc-400 hover:bg-white/[0.08] hover:text-white cursor-pointer transition-colors"
+                  >
+                    <PanelLeftClose className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
             </header>
             {error && <p className="text-sm text-red-600">{error}</p>}
             {list}
@@ -465,6 +495,9 @@ export default function ExecutionsPage() {
               onTab={pickDetail}
               onClose={() => openChat(null)}
               onOpenCanvas={() => openEditor(chat)}
+              onSwitchTarget={(newTarget) => openChat(newTarget, detail)}
+              isListCollapsed={listCollapsed}
+              onToggleList={() => setListCollapsed(false)}
             />
           </section>
         )}
@@ -695,9 +728,9 @@ function RunLogsView({
   }, [runs]);
 
   return (
-    <div className="space-y-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-4">
       {/* Controls row */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex shrink-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="relative min-w-0 flex-1 sm:max-w-sm">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
           <Input
@@ -722,7 +755,7 @@ function RunLogsView({
       </div>
 
       {/* Filter Chips */}
-      <div className="no-scrollbar -mx-4 flex items-center gap-1 overflow-x-auto px-4 sm:mx-0 sm:px-0" role="tablist">
+      <div className="no-scrollbar -mx-4 flex shrink-0 items-center gap-1 overflow-x-auto px-4 sm:mx-0 sm:px-0" role="tablist">
         {(["all", "succeeded", "failed", "running", "waiting", "cancelled"] as const).map((st) => {
           const count = statusCounts[st] ?? 0;
           if (st !== "all" && count === 0) return null;
@@ -753,21 +786,21 @@ function RunLogsView({
           {runs.length === 0 ? "No execution runs recorded yet. Chat with an agent to start a run." : `No runs match filter "${filter}".`}
         </div>
       ) : (
-        <div className="overflow-hidden rounded-lg border border-white/10 bg-[var(--surface)] shadow-xs">
-          <div className="w-full overflow-hidden">
-            <table className="w-full table-fixed text-left text-xs">
-              <thead className="border-b border-white/10 bg-white/[0.02] text-zinc-400 font-medium">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-white/10 bg-[var(--surface)] shadow-xs">
+          <div className="min-h-0 flex-1 overflow-y-auto overflow-x-auto">
+            <table className="w-full table-fixed border-separate border-spacing-0 text-left text-xs">
+              <thead className="sticky top-0 z-10 bg-[var(--surface-raised)] text-zinc-400 font-medium">
                 <tr>
-                  <th className="w-28 px-3.5 py-2.5">Status</th>
-                  <th className="w-40 sm:w-48 px-3.5 py-2.5">Target</th>
-                  <th className="px-3.5 py-2.5">Input / Query</th>
-                  <th className="hidden w-20 px-3.5 py-2.5 sm:table-cell">Duration</th>
-                  <th className="hidden w-20 px-3.5 py-2.5 lg:table-cell">Cost</th>
-                  <th className="hidden w-24 px-3.5 py-2.5 md:table-cell">Triggered</th>
-                  <th className="w-32 sm:w-36 px-3.5 py-2.5 text-right">Actions</th>
+                  <th className="w-28 border-b border-white/10 px-3.5 py-2.5">Status</th>
+                  <th className="w-40 sm:w-48 border-b border-white/10 px-3.5 py-2.5">Target</th>
+                  <th className="border-b border-white/10 px-3.5 py-2.5">Input / Query</th>
+                  <th className="hidden w-20 border-b border-white/10 px-3.5 py-2.5 sm:table-cell">Duration</th>
+                  <th className="hidden w-20 border-b border-white/10 px-3.5 py-2.5 lg:table-cell">Cost</th>
+                  <th className="hidden w-24 border-b border-white/10 px-3.5 py-2.5 md:table-cell">Triggered</th>
+                  <th className="w-32 sm:w-36 border-b border-white/10 px-3.5 py-2.5 text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-white/5">
+              <tbody>
                 {filtered.map((r) => {
                   const meta = RUN_STATUS[r.status] ?? RUN_STATUS.queued;
                   const targetId = r.kind === "workflow" ? r.workflow_id : r.agent_id;
@@ -775,33 +808,33 @@ function RunLogsView({
                   const isPending = r.status === "running" || r.status === "waiting";
                   return (
                     <tr key={r.id} className="group transition-colors hover:bg-white/[0.04]">
-                      <td className="w-28 whitespace-nowrap px-3.5 py-3 align-middle">
+                      <td className="w-28 whitespace-nowrap border-b border-white/5 px-3.5 py-3 align-middle group-last:border-b-0">
                         <span className={cn("inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium", meta.pill)}>
                           <meta.Icon className="h-3 w-3 shrink-0" />
                           <span>{meta.label}</span>
                         </span>
                       </td>
-                      <td className="w-40 sm:w-48 px-3.5 py-3 align-middle font-medium text-zinc-200 group-hover:text-white">
+                      <td className="w-40 sm:w-48 border-b border-white/5 px-3.5 py-3 align-middle font-medium text-zinc-200 group-hover:text-white group-last:border-b-0">
                         <div className="flex items-center gap-2 min-w-0">
                           <TypeIcon kind={r.kind} />
                           <span className="truncate">{targetName}</span>
                         </div>
                       </td>
-                      <td className="px-3.5 py-3 align-middle text-zinc-400 group-hover:text-zinc-200">
+                      <td className="border-b border-white/5 px-3.5 py-3 align-middle text-zinc-400 group-hover:text-zinc-200 group-last:border-b-0">
                         <div className="truncate" title={r.input?.text || ""}>
                           {runInputText(r)}
                         </div>
                       </td>
-                      <td className="hidden w-20 whitespace-nowrap px-3.5 py-3 align-middle tabular-nums text-zinc-400 group-hover:text-zinc-200 sm:table-cell">
+                      <td className="hidden w-20 whitespace-nowrap border-b border-white/5 px-3.5 py-3 align-middle tabular-nums text-zinc-400 group-hover:text-zinc-200 group-last:border-b-0 sm:table-cell">
                         {runDuration(r)}
                       </td>
-                      <td className="hidden w-20 whitespace-nowrap px-3.5 py-3 align-middle tabular-nums text-zinc-400 group-hover:text-zinc-200 lg:table-cell">
+                      <td className="hidden w-20 whitespace-nowrap border-b border-white/5 px-3.5 py-3 align-middle tabular-nums text-zinc-400 group-hover:text-zinc-200 group-last:border-b-0 lg:table-cell">
                         {r.cost_usd != null ? `$${r.cost_usd.toFixed(4)}` : "—"}
                       </td>
-                      <td className="hidden w-24 whitespace-nowrap px-3.5 py-3 align-middle text-zinc-400 group-hover:text-zinc-200 md:table-cell">
+                      <td className="hidden w-24 whitespace-nowrap border-b border-white/5 px-3.5 py-3 align-middle text-zinc-400 group-hover:text-zinc-200 group-last:border-b-0 md:table-cell">
                         {ago(r.created_at)}
                       </td>
-                      <td className="w-32 sm:w-36 whitespace-nowrap px-3.5 py-3 align-middle text-right">
+                      <td className="w-32 sm:w-36 whitespace-nowrap border-b border-white/5 px-3.5 py-3 align-middle text-right group-last:border-b-0">
                         <div className="flex items-center justify-end gap-1.5">
                           <button
                             type="button"

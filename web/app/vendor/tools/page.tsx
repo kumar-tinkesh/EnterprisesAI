@@ -222,7 +222,7 @@ export default function VendorMCPPage() {
           </div>
         </div>
 
-        <div className="overflow-hidden rounded-xl border border-zinc-200">
+        <div className="overflow-hidden rounded-xl border border-white/10 bg-[var(--surface)]">
           {isLoading ? (
             <div className="flex justify-center py-10">
               <Spinner className="h-6 w-6 text-zinc-500" />
@@ -253,7 +253,7 @@ export default function VendorMCPPage() {
                     <button
                       type="button"
                       onClick={() => setOpenId(s.id)}
-                      className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-zinc-50 cursor-pointer"
+                      className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-white/[0.04] cursor-pointer"
                     >
                       <ConnectorIcon name={s.name} size="sm" />
                       <span className="min-w-0 flex-1">
@@ -393,8 +393,8 @@ function ToolsModal({
   onClose: () => void;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-      <div className="flex max-h-[85vh] w-full max-w-md flex-col rounded-xl bg-[var(--surface-raised)] shadow-xl">
+    <div className="animate-fade-in fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <div className="animate-scale-in flex max-h-[85vh] w-full max-w-md flex-col rounded-xl border border-white/10 bg-[var(--surface-raised)] shadow-2xl">
         <div className="flex items-center justify-between border-b border-zinc-100 px-6 py-4">
           <h3 className="text-lg font-semibold text-zinc-900">
             Tools for &ldquo;{serverName}&rdquo;
@@ -469,8 +469,8 @@ function GrantServerModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-      <div className="w-full max-w-md rounded-xl bg-[var(--surface-raised)] p-6 shadow-xl">
+    <div className="animate-fade-in fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <div className="animate-scale-in w-full max-w-md rounded-xl border border-white/10 bg-[var(--surface-raised)] p-6 shadow-2xl">
         <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
           <h3 className="text-lg font-semibold text-zinc-900">
             Grant &ldquo;{server.name}&rdquo; to tenant
@@ -667,8 +667,8 @@ function ConnectCredentialModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-      <div className="w-full max-w-md rounded-xl bg-[var(--surface-raised)] p-6 shadow-xl">
+    <div className="animate-fade-in fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <div className="animate-scale-in w-full max-w-md rounded-xl border border-white/10 bg-[var(--surface-raised)] p-6 shadow-2xl">
         <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
           <h3 className="text-lg font-semibold text-zinc-900">Test Connection: "{server.name}"</h3>
           <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600 cursor-pointer">
@@ -706,7 +706,7 @@ function ConnectCredentialModal({
           )}
 
           {(server.auth_config as any)?.auth_type === "linkedin_cookie" && (
-            <p className="rounded-lg bg-sky-50 border border-sky-100 p-3 text-xs text-sky-800">
+            <p className="rounded-lg border border-indigo-200 bg-indigo-50 p-3 text-xs text-indigo-800">
               Paste a LinkedIn <span className="font-mono">li_at</span> cookie to test it: sign in to linkedin.com,
               open DevTools → Application → Cookies → https://www.linkedin.com and copy the value of li_at. Each
               user still connects their own cookie; runs always use the runner&apos;s.
@@ -848,7 +848,7 @@ function ConnectCredentialModal({
                 <span className="text-xs font-mono text-indigo-600 uppercase">Connecting</span>
               </div>
               <div className="h-2 w-full overflow-hidden rounded-full bg-indigo-200">
-                <div className="h-full bg-gradient-to-r from-indigo-500 via-sky-500 to-emerald-500 animate-pulse rounded-full w-full" />
+                <div className="h-full bg-indigo-500 animate-pulse rounded-full w-full" />
               </div>
               <p className="text-xs text-indigo-700">Running MCP protocol handshake and discovering tools list...</p>
             </div>
@@ -928,8 +928,8 @@ function AnalyzeRepoModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-      <div className="w-full max-w-lg rounded-xl bg-[var(--surface-raised)] p-6 shadow-xl">
+    <div className="animate-fade-in fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <div className="animate-scale-in w-full max-w-lg rounded-xl border border-white/10 bg-[var(--surface-raised)] p-6 shadow-2xl">
         <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
           <h3 className="text-lg font-semibold text-zinc-900">Add app</h3>
           <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600 cursor-pointer">

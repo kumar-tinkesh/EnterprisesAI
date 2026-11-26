@@ -274,8 +274,8 @@ function CreateTenantModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-      <div className="w-full max-w-md rounded-xl bg-[var(--surface-raised)] p-6 shadow-xl">
+    <div className="animate-fade-in fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <div className="animate-scale-in w-full max-w-md rounded-xl border border-white/10 bg-[var(--surface-raised)] p-6 shadow-2xl">
         <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
           <h3 className="text-lg font-semibold text-zinc-900">New organization</h3>
           <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600 cursor-pointer">
