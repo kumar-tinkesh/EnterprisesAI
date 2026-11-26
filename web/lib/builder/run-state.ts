@@ -34,10 +34,27 @@ function viaOf(event: { via?: string }): { via?: string } {
   return event.via ? { via: event.via } : {};
 }
 
+export interface StepTiming {
+  startedAt: number;
+  finishedAt?: number;
+}
+
+export function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return "0ms";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const secs = ms / 1000;
+  if (secs < 60) return `${secs < 10 ? secs.toFixed(1) : Math.round(secs)}s`;
+  const mins = Math.floor(secs / 60);
+  const rem = Math.round(secs % 60);
+  return rem ? `${mins}m ${rem}s` : `${mins}m`;
+}
+
 export interface RunView {
   runId: string | null;
   status: RunStatus | null;
   steps: Record<string, StepState>;
+  /** Start/finish epoch timestamps (ms) per step for live and completed duration badges. */
+  stepTiming: Record<string, StepTiming>;
   /** Tool currently running per step (agent mode lights the tool's node). */
   activeTool: Record<string, string | null>;
   usedTools: string[];
@@ -87,6 +104,7 @@ export const emptyRunView: RunView = {
   runId: null,
   status: null,
   steps: {},
+  stepTiming: {},
   activeTool: {},
   usedTools: [],
   timeline: [],
@@ -159,16 +177,26 @@ function stepState(status: string): StepState | null {
 
 function fromSnapshot(view: RunView, run: Run): RunView {
   const steps: Record<string, StepState> = {};
+  const stepTiming: Record<string, StepTiming> = { ...view.stepTiming };
   // Latest attempt wins: the API lists node runs oldest first.
   for (const n of run.nodes ?? []) {
     const s = stepState(n.status);
     if (s) steps[n.node_id] = s;
+    const started = n.started_at ? Date.parse(n.started_at) : NaN;
+    const finished = n.finished_at ? Date.parse(n.finished_at) : NaN;
+    if (Number.isFinite(started)) {
+      stepTiming[n.node_id] = {
+        startedAt: started,
+        ...(Number.isFinite(finished) ? { finishedAt: finished } : {}),
+      };
+    }
   }
   return {
     ...view,
     runId: run.id,
     status: run.status,
     steps,
+    stepTiming,
     approvals: (run.approvals ?? []).filter((a) => a.status === "pending"),
     usedTools: Array.from(new Set((run.tool_calls ?? []).map((c) => c.tool_name))),
     output: run.output_text ?? view.output,
@@ -206,12 +234,21 @@ export function reduceRunEvent(view: RunView, event: RunEvent | ApprovalsRefresh
     case "node_status": {
       const s = stepState(event.status);
       if (!s) return view;
+      const now = Date.now();
+      const prevTiming = view.stepTiming[event.node_id];
+      const nextTiming: StepTiming =
+        s === "running"
+          ? { startedAt: now }
+          : s === "succeeded" || s === "failed" || s === "skipped"
+            ? { startedAt: prevTiming?.startedAt ?? now, finishedAt: now }
+            : prevTiming ?? { startedAt: now };
       const tone = s === "failed" ? "error" : s === "succeeded" ? "ok" : s === "waiting" ? "warn" : "info";
       const verb = { running: "started", succeeded: "finished", failed: "failed", waiting: "is waiting", skipped: "was skipped" }[s];
       const detail = s === "failed" && event.error ? `: ${event.error}` : "";
       return {
         ...view,
         steps: { ...view.steps, [event.node_id]: s },
+        stepTiming: { ...view.stepTiming, [event.node_id]: nextTiming },
         // A waiting step already said why ("is waiting for your decision").
         timeline: s === "waiting" ? view.timeline : add(view, { tone, text: `${verb}${detail}`, nodeId: event.node_id }),
       };

@@ -34,7 +34,7 @@ import { EdgeInspector, StepInspector } from "@/components/builder/inspector";
 import { Playground } from "@/components/builder/playground";
 import { PublishPanel } from "@/components/builder/publish-panel";
 import { SplitPane } from "@/components/builder/split-pane";
-import { StepTest, canTestStep } from "@/components/builder/step-test";
+import { StepResult, StepTest, canTestStep } from "@/components/builder/step-test";
 import { AnswerActions, AnswerView, StepRunPanel } from "@/components/builder/run-output";
 import { useNodeSizes } from "@/components/builder/step-node";
 import { TestsPanel } from "@/components/builder/tests-panel";
@@ -149,8 +149,10 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
   const [testId, setTestId] = useState<string | null>(null);
   // The step whose last answer is showing (its Result).
   const [resultId, setResultId] = useState<string | null>(null);
+  const [pinnedOutputs, setPinnedOutputs] = useState<Record<string, string>>({});
   const loaded = useRef(false);
   const inputKey = `builder.input.${id}`;
+  const pinnedKey = `builder.pinned.${id}`;
 
   // Made by "blank" / "with AI" and never saved: delete it on the way out, so
   // only workflows someone actually saved are listed.
@@ -185,7 +187,31 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
     } catch {
       /* none */
     }
-  }, [inputKey]);
+    try {
+      const rawPinned = window.localStorage.getItem(pinnedKey);
+      setPinnedOutputs(rawPinned ? (JSON.parse(rawPinned) as Record<string, string>) : {});
+    } catch {
+      setPinnedOutputs({});
+    }
+  }, [inputKey, pinnedKey]);
+
+  const pinOutput = useCallback(
+    (nodeId: string, text: string | null) => {
+      setPinnedOutputs((prev) => {
+        const next = { ...prev };
+        if (text === null) delete next[nodeId];
+        else next[nodeId] = text;
+        try {
+          if (Object.keys(next).length) window.localStorage.setItem(pinnedKey, JSON.stringify(next));
+          else window.localStorage.removeItem(pinnedKey);
+        } catch {
+          /* ignore storage quota */
+        }
+        return next;
+      });
+    },
+    [pinnedKey],
+  );
   const setDepth = (d: AnswerDepth) => {
     setDepthState(d);
     try {
@@ -522,6 +548,20 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
     () =>
       (shown?.nodes ?? []).map((n) => {
         const isFocusNode = focusInfo.nodes.has(n.id);
+        const timing = liveView.stepTiming[n.id];
+        const rn = runNodes[n.id];
+        const rnDuration = rn?.started_at && rn?.finished_at ? Date.parse(rn.finished_at) - Date.parse(rn.started_at) : null;
+        const durationMs = timing?.finishedAt != null ? timing.finishedAt - timing.startedAt : rnDuration !== null && Number.isFinite(rnDuration) ? rnDuration : null;
+        const stepState = previewing ? undefined : liveView.steps[n.id];
+        const runningSince = stepState === "running" ? (timing?.startedAt ?? null) : null;
+        const hasPinned = !previewing && Object.prototype.hasOwnProperty.call(pinnedOutputs, n.id);
+        const nodeOutput = previewing
+          ? null
+          : hasPinned
+            ? pinnedOutputs[n.id]
+            : n.type === "input" || n.type === "manual_trigger" || n.type === "schedule_trigger"
+              ? null
+              : outputs[n.id] ?? null;
         return {
           id: n.id,
           type: "flow",
@@ -536,14 +576,16 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
             node: n,
             title: titleById.get(n.id) ?? stepTitle(n, shownAgents),
             problems: previewing ? [] : byStep[n.id] ?? [],
-            state: previewing ? undefined : liveView.steps[n.id],
+            state: stepState,
             detail: !previewing && liveView.activeTool[n.id] ? `Calling ${liveView.activeTool[n.id]}…` : null,
-            // A trigger's "output" is just the request it was given.
-            output: previewing || n.type === "input" || n.type === "manual_trigger" || n.type === "schedule_trigger" ? null : outputs[n.id] ?? null,
+            output: nodeOutput,
+            durationMs: previewing ? null : durationMs,
+            runningSince,
+            pinned: hasPinned,
           },
         };
       }),
-    [shown?.nodes, selection, shownAgents, byStep, liveView, sizes, previewing, outputs, focusInfo, titleById],
+    [shown?.nodes, selection, shownAgents, byStep, liveView, runNodes, sizes, previewing, outputs, pinnedOutputs, focusInfo, titleById],
   );
 
   const canEditLines = !previewing && !!wfQuery.data?.can_manage;
@@ -572,6 +614,7 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
             detourY: edgeDetours[e.id],
             highlighted,
             dimmed,
+            packet: flowing,
             onHoverChange: setHoveredEdgeId,
             onDelete: canEditLines ? removeLine : undefined,
           },
@@ -738,7 +781,10 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
   const selectedNode = selection?.kind === "node" && selection.open ? doc.nodes.find((n) => n.id === selection.id) : undefined;
   const selectedEdge = selection?.kind === "edge" ? doc.edges.find((e) => e.id === selection.id) : undefined;
   const testNode = testId && !previewing ? doc.nodes.find((n) => n.id === testId) : undefined;
-  const resultNode = resultId && runNodes[resultId] && !testNode ? doc.nodes.find((n) => n.id === resultId) : undefined;
+  const resultNode =
+    resultId && (runNodes[resultId] || Object.prototype.hasOwnProperty.call(pinnedOutputs, resultId)) && !testNode
+      ? doc.nodes.find((n) => n.id === resultId)
+      : undefined;
   const outputNodeId = doc.nodes.find((n) => n.type === "output")?.id;
   // The popup docked right; the canvas run's card steps aside while it shows.
   const panelOpen = !previewing && !!(selectedNode || selectedEdge || testNode || resultNode || selection?.kind === "settings");
@@ -881,23 +927,32 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
 
         {/* ── notices ── */}
         {notice && (
-          <div className={cn("flex items-start gap-2 border-b px-4 py-2 text-xs", notice.tone === "ok" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : notice.tone === "warn" ? "border-amber-200 bg-amber-50 text-amber-900" : "border-red-200 bg-red-50 text-red-800")}>
-            {notice.tone === "ok" ? <Check className="mt-0.5 h-3.5 w-3.5" /> : <AlertTriangle className="mt-0.5 h-3.5 w-3.5" />}
+          <div
+            className={cn(
+              "flex items-start gap-2 border-b px-4 py-2 text-xs",
+              notice.tone === "ok"
+                ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+                : notice.tone === "warn"
+                  ? "border-amber-500/30 bg-amber-500/10 text-amber-200"
+                  : "border-red-500/30 bg-red-500/10 text-red-200",
+            )}
+          >
+            {notice.tone === "ok" ? <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" /> : <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
             <div className="flex-1">
               <p className="font-medium">{notice.text}</p>
-              {notice.detail?.map((d, i) => <p key={i}>• {d}</p>)}
+              {notice.detail?.map((d, i) => <p key={i} className="opacity-90">• {d}</p>)}
               {notice.agents && <AgentToolsNotice token={token} reports={notice.agents} onOpen={(nodeId) => setSelection({ kind: "node", id: nodeId, open: true })} />}
             </div>
             {notice.reload && <button type="button" className="font-medium underline cursor-pointer" onClick={() => window.location.reload()}>Reload</button>}
-            <button type="button" aria-label="Dismiss" className="cursor-pointer" onClick={() => setNotice(null)}>×</button>
+            <button type="button" aria-label="Dismiss" className="rounded p-0.5 opacity-75 hover:bg-white/10 hover:opacity-100 cursor-pointer" onClick={() => setNotice(null)}>×</button>
           </div>
         )}
         {general.length > 0 && !notice && (
-          <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-xs text-red-800">{general.map((p) => p.message).join(" · ")}</div>
+          <div className="border-b border-red-500/30 bg-red-500/10 px-4 py-2 text-xs text-red-200">{general.map((p) => p.message).join(" · ")}</div>
         )}
         {previewing && (
-          <div className="flex items-center gap-3 border-b border-indigo-200 bg-indigo-50 px-4 py-2 text-xs text-indigo-800">
-            <Eye className="h-3.5 w-3.5 shrink-0" />
+          <div className="flex items-center gap-3 border-b border-indigo-500/30 bg-indigo-500/10 px-4 py-2 text-xs text-indigo-200">
+            <Eye className="h-3.5 w-3.5 shrink-0 text-indigo-300" />
             <p className="flex-1">
               {preview ? (
                 <><span className="font-semibold">Viewing version {preview.version}</span> — {preview.note.toLowerCase()} {timeAgo(preview.created_at)}{preview.author_name ? ` by ${preview.author_name}` : ""}. Look only.</>
@@ -1022,13 +1077,23 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
                         : "right-3 top-3 flex max-h-[calc(100%-1.5rem)] w-[min(360px,calc(100%-1.5rem))] flex-col overflow-hidden rounded-xl border border-zinc-200",
                     )}
                   >
-                    {resultNode && (
+                    {resultNode && runNodes[resultNode.id] && (
                       <StepRunPanel
                         key={resultNode.id}
                         title={stepTitle(resultNode, agentsById)}
                         kind={NODE_LOOK[resultNode.type].label}
                         node={runNodes[resultNode.id]}
                         calls={(runSnapshot.data?.tool_calls ?? []).filter((c) => c.node_id === resultNode.id)}
+                        onClose={() => setResultId(null)}
+                      />
+                    )}
+                    {resultNode && !runNodes[resultNode.id] && Object.prototype.hasOwnProperty.call(pinnedOutputs, resultNode.id) && (
+                      <StepResult
+                        key={resultNode.id}
+                        title={stepTitle(resultNode, agentsById)}
+                        text={pinnedOutputs[resultNode.id]}
+                        isPinned
+                        onPin={(pin) => pinOutput(resultNode.id, pin ? pinnedOutputs[resultNode.id] : null)}
                         onClose={() => setResultId(null)}
                       />
                     )}
@@ -1040,6 +1105,24 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
                         title={stepTitle(testNode, agentsById)}
                         token={token}
                         initialInput={inputText}
+                        upstreamSources={doc.edges
+                          .filter((e) => e.target === testNode.id)
+                          .map((e) => {
+                            const src = doc.nodes.find((n) => n.id === e.source);
+                            const pinned = Object.prototype.hasOwnProperty.call(pinnedOutputs, e.source);
+                            const val = pinned
+                              ? pinnedOutputs[e.source]
+                              : outputs[e.source] ?? (src?.type === "input" ? inputText : "");
+                            return {
+                              nodeId: e.source,
+                              title: titleById.get(e.source) ?? e.source,
+                              output: val,
+                              pinned,
+                            };
+                          })
+                          .filter((s) => !!s.output.trim())}
+                        pinnedOutput={pinnedOutputs[testNode.id] ?? null}
+                        onPinOutput={(text) => pinOutput(testNode.id, text)}
                         onClose={() => setTestId(null)}
                       />
                     )}
@@ -1066,18 +1149,38 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
                         onClose={() => setSelection(null)}
                       />
                     )}
-                    {selectedEdge && (
-                      <EdgeInspector
-                        edge={selectedEdge}
-                        fromCondition={doc.nodes.find((n) => n.id === selectedEdge.source)?.type === "condition"}
-                        onChange={(patch) => change((d) => ({ ...d, edges: d.edges.map((e) => (e.id === selectedEdge.id ? { ...e, ...patch } : e)) }))}
-                        onDelete={() => {
-                          change((d) => ({ ...d, edges: d.edges.filter((e) => e.id !== selectedEdge.id) }));
-                          setSelection(null);
-                        }}
-                        onClose={() => setSelection(null)}
-                      />
-                    )}
+                    {selectedEdge && (() => {
+                      const srcNode = doc.nodes.find((n) => n.id === selectedEdge.source);
+                      const tgtNode = doc.nodes.find((n) => n.id === selectedEdge.target);
+                      const isPinned = Object.prototype.hasOwnProperty.call(pinnedOutputs, selectedEdge.source);
+                      const payload = isPinned
+                        ? pinnedOutputs[selectedEdge.source]
+                        : outputs[selectedEdge.source] ?? (srcNode?.type === "input" ? inputText : null);
+                      return (
+                        <EdgeInspector
+                          key={selectedEdge.id}
+                          edge={selectedEdge}
+                          sourceTitle={titleById.get(selectedEdge.source) ?? selectedEdge.source}
+                          targetTitle={titleById.get(selectedEdge.target) ?? selectedEdge.target}
+                          fromCondition={srcNode?.type === "condition"}
+                          payload={payload}
+                          isPinned={isPinned}
+                          fromRun={!!outputs[selectedEdge.source] && !isPinned}
+                          canTestTarget={!previewing && !!tgtNode && canTestStep(tgtNode)}
+                          onPinSource={(text) => pinOutput(selectedEdge.source, text)}
+                          onTestTarget={() => {
+                            setSelection({ kind: "node", id: selectedEdge.target });
+                            setTestId(selectedEdge.target);
+                          }}
+                          onChange={(patch) => change((d) => ({ ...d, edges: d.edges.map((e) => (e.id === selectedEdge.id ? { ...e, ...patch } : e)) }))}
+                          onDelete={() => {
+                            change((d) => ({ ...d, edges: d.edges.filter((e) => e.id !== selectedEdge.id) }));
+                            setSelection(null);
+                          }}
+                          onClose={() => setSelection(null)}
+                        />
+                      );
+                    })()}
                     {selection?.kind === "settings" && (
                       <WorkflowSettings workflowId={id} config={doc.config} token={token} canManage={canManage} onChange={(config) => change((d) => ({ ...d, config }))} onClose={() => setSelection(null)} />
                     )}
@@ -1118,10 +1221,20 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
 
                 {/* ── the canvas run ── */}
                 {canvasRunId && runCardOpen && !playOpen && !panelOpen && (
-                  <div className="absolute bottom-3 right-3 z-20 w-96 max-w-[calc(100%-1.5rem)] rounded-xl border border-zinc-200 bg-[var(--surface-raised)] p-3 shadow-lg">
+                  <div className="absolute bottom-3 right-3 z-20 w-96 max-w-[calc(100%-1.5rem)] rounded-xl border border-white/10 bg-[var(--surface-raised)] p-3 shadow-2xl">
                     <div className="mb-2 flex items-center gap-2">
-                      <span className={cn("rounded-full px-2 py-0.5 text-xs font-medium capitalize",
-                        canvasRun.view.status === "succeeded" ? "bg-emerald-100 text-emerald-700" : canvasRun.view.status === "failed" ? "bg-red-100 text-red-700" : canvasRun.view.status === "waiting" ? "bg-amber-100 text-amber-800" : "bg-zinc-100 text-zinc-700")}>
+                      <span
+                        className={cn(
+                          "rounded-full border px-2 py-0.5 text-xs font-medium capitalize",
+                          canvasRun.view.status === "succeeded"
+                            ? "border-emerald-500/30 bg-emerald-500/15 text-emerald-300"
+                            : canvasRun.view.status === "failed"
+                              ? "border-red-500/30 bg-red-500/15 text-red-300"
+                              : canvasRun.view.status === "waiting"
+                                ? "border-amber-500/30 bg-amber-500/15 text-amber-300"
+                                : "border-white/10 bg-white/5 text-zinc-300",
+                        )}
+                      >
                         {canvasRun.view.status ?? "starting"}
                       </span>
                       <span className="flex-1 text-xs text-zinc-500">{running ? "Running on the canvas…" : "Last run"}</span>

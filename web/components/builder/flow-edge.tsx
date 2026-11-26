@@ -17,6 +17,8 @@ export type FlowEdgeData = {
   dimmed?: boolean;
   /** True when connected to the hovered or selected node. */
   highlighted?: boolean;
+  /** True while data is actively flowing across this line during execution. */
+  packet?: boolean;
   /** Notifies parent when the user hovers/leaves this edge. */
   onHoverChange?: (id: string | null) => void;
   /** Remove the line (absent when it can't be edited). */
@@ -92,6 +94,16 @@ function FlowEdgeView({ id, sourceX, sourceY, targetX, targetY, sourcePosition, 
   return (
     <>
       <BaseEdge id={id} path={path} markerEnd={markerEnd} style={edgeStyle} />
+      {data?.packet && (
+        <g aria-hidden className="pointer-events-none">
+          <circle r="7" fill="#38bdf8" opacity="0.28">
+            <animateMotion dur="1.1s" repeatCount="indefinite" path={path} />
+          </circle>
+          <circle r="3.5" fill="#e0f2fe">
+            <animateMotion dur="1.1s" repeatCount="indefinite" path={path} />
+          </circle>
+        </g>
+      )}
       {/* A wide invisible line: easy to hover. */}
       <path d={path} fill="none" stroke="transparent" strokeWidth={18} onMouseEnter={enter} onMouseLeave={leave} />
       {showLabel && (

@@ -4,15 +4,15 @@ import { createContext, memo, useContext, useEffect, useRef, useState } from "re
 import { useQuery } from "@tanstack/react-query";
 import { Handle, NodeToolbar, Position, type Node, type NodeProps } from "@xyflow/react";
 import {
-  AlertTriangle, Bot, CalendarClock, CheckCircle2, CircleDot, Code2, Copy, FileText, GitBranch, Hand, Loader2, LogIn, Merge,
-  Play, PlayCircle, Plus, Send, Settings2, Trash2, Wrench, XCircle,
+  AlertTriangle, Bot, CalendarClock, CheckCircle2, CircleDot, Clock, Code2, Copy, FileText, GitBranch, Hand, Loader2, LogIn, Merge,
+  Pin, Play, PlayCircle, Plus, Send, Settings2, Trash2, Wrench, XCircle,
 } from "lucide-react";
 
 import { ConnectButton, useMissingServers } from "@/components/connections/connect-button";
 import { ConnectorIcon } from "@/components/connections/connector-icon";
 import { builderApi } from "@/lib/builder/api";
 import { PALETTE, canAddAfter, isTrigger, serverIdOf, toolName } from "@/lib/builder/graph";
-import type { StepState } from "@/lib/builder/run-state";
+import { formatDuration, type StepState } from "@/lib/builder/run-state";
 import { describeSchedule } from "@/lib/builder/schedule";
 import type { Agent, NodeType, Problem, ToolNeed, WorkflowEdge, WorkflowNode } from "@/lib/builder/types";
 import { cn } from "@/lib/utils";
@@ -46,8 +46,14 @@ export type FlowNodeData = {
   problems: Problem[];
   state?: StepState;
   detail?: string | null;
-  /** The step's output from the last run on the canvas. */
+  /** The step's output from the last run on the canvas (or pinned mock output). */
   output?: string | null;
+  /** Execution duration in milliseconds once the step finishes. */
+  durationMs?: number | null;
+  /** Epoch ms when an active running step started (ticks live). */
+  runningSince?: number | null;
+  /** True when the user pinned a sample/mock output to this step. */
+  pinned?: boolean;
 };
 export type FlowNodeType = Node<FlowNodeData, "flow">;
 
@@ -401,6 +407,21 @@ function BubbleIcon({ node, ctx }: { node: WorkflowNode; ctx: CanvasCtx }) {
   );
 }
 
+function LiveTimer({ since }: { since: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(id);
+  }, [since]);
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full border border-sky-400/35 bg-sky-500/15 px-2 py-0.5 text-[10px] font-medium tabular-nums text-sky-300">
+      <Clock className="h-2.5 w-2.5 animate-pulse" />
+      {formatDuration(Math.max(0, now - since))}
+    </span>
+  );
+}
+
 function FlowNodeView({ data, selected }: NodeProps<FlowNodeType>) {
   const ctx = useContext(CanvasContext);
   const [hovered, setHovered] = useState(false);
@@ -507,18 +528,48 @@ function FlowNodeView({ data, selected }: NodeProps<FlowNodeType>) {
           </span>
         )}
 
-        {data.output && !data.detail && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              ctx.showResult(node.id);
-            }}
-            className="nodrag mt-1.5 inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-0.5 text-[10px] font-medium text-zinc-300 transition-colors hover:border-indigo-400/40 hover:bg-indigo-500/15 hover:text-white cursor-pointer"
-            title={data.output}
-          >
-            <FileText className="h-2.5 w-2.5 text-indigo-400" /> View result
-          </button>
+        {!data.detail && (data.pinned || data.runningSince || data.durationMs != null || data.output) && (
+          <div className="mt-1.5 flex flex-wrap items-center justify-center gap-1">
+            {data.runningSince && data.state === "running" ? (
+              <LiveTimer since={data.runningSince} />
+            ) : data.durationMs != null ? (
+              <span
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium tabular-nums",
+                  data.state === "failed"
+                    ? "border-red-400/30 bg-red-500/15 text-red-300"
+                    : "border-emerald-400/30 bg-emerald-500/12 text-emerald-300",
+                )}
+              >
+                <Clock className="h-2.5 w-2.5" />
+                {formatDuration(data.durationMs)}
+              </span>
+            ) : null}
+
+            {data.pinned && (
+              <span
+                className="inline-flex items-center gap-0.5 rounded-full border border-amber-400/35 bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-300"
+                title="Pinned sample output active for downstream step tests"
+              >
+                <Pin className="h-2.5 w-2.5" />
+                Pinned
+              </span>
+            )}
+
+            {data.output && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  ctx.showResult(node.id);
+                }}
+                className="nodrag inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] font-medium text-zinc-300 transition-colors hover:border-indigo-400/40 hover:bg-indigo-500/15 hover:text-white cursor-pointer"
+                title={data.output}
+              >
+                <FileText className="h-2.5 w-2.5 text-indigo-400" /> Data
+              </button>
+            )}
+          </div>
         )}
       </div>
     </div>

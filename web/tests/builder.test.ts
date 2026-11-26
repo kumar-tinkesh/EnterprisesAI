@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { connect, duplicateStep, forSave, insertAfter, newNode, overriddenParams, problemsByStep, removeSteps, stepTitle, toolName } from "@/lib/builder/graph";
-import { displayTool, emptyRunView, isFinished, reduceRunEvent } from "@/lib/builder/run-state";
+import { displayTool, emptyRunView, formatDuration, isFinished, reduceRunEvent } from "@/lib/builder/run-state";
 import type { Run, WorkflowEdge, WorkflowNode } from "@/lib/builder/types";
 
 const nodes: WorkflowNode[] = [
@@ -164,5 +164,16 @@ describe("run view", () => {
     expect(view.steps.a).toBe("succeeded");
     expect([view.output, view.sources, isFinished(view.status)]).toEqual(["done", ["doc.pdf"], true]);
     expect(view.timeline.at(-1)?.tone).toBe("ok");
+  });
+
+  it("tracks step start/finish timings and formats duration cleanly", () => {
+    let view = reduceRunEvent(emptyRunView, { type: "node_status", node_id: "a", status: "running" });
+    expect(view.stepTiming.a?.startedAt).toBeTypeOf("number");
+    expect(view.stepTiming.a?.finishedAt).toBeUndefined();
+    view = reduceRunEvent(view, { type: "node_status", node_id: "a", status: "succeeded" });
+    expect(view.stepTiming.a?.finishedAt).toBeTypeOf("number");
+    expect(formatDuration(420)).toBe("420ms");
+    expect(formatDuration(1800)).toBe("1.8s");
+    expect(formatDuration(72000)).toBe("1m 12s");
   });
 });

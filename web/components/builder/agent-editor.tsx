@@ -492,14 +492,23 @@ function Editor({ id, onBack, onOpen, onChat }: EditorProps) {
         </div>
       </header>
       {notice && (
-        <div className={cn("flex items-start gap-2 border-b px-4 py-2 text-sm", notice.tone === "ok" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : notice.tone === "warn" ? "border-amber-200 bg-amber-50 text-amber-900" : "border-red-200 bg-red-50 text-red-800")}>
-          {notice.tone === "ok" ? <Check className="mt-0.5 h-4 w-4 shrink-0" /> : <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />}
+        <div
+          className={cn(
+            "flex items-start gap-2 border-b px-4 py-2 text-sm",
+            notice.tone === "ok"
+              ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+              : notice.tone === "warn"
+                ? "border-amber-500/30 bg-amber-500/10 text-amber-200"
+                : "border-red-500/30 bg-red-500/10 text-red-200",
+          )}
+        >
+          {notice.tone === "ok" ? <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" /> : <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />}
           <div className="min-w-0 flex-1">
             <p className="font-medium">{notice.text}</p>
-            {notice.detail?.map((d, i) => <p key={i}>• {d}</p>)}
+            {notice.detail?.map((d, i) => <p key={i} className="opacity-90">• {d}</p>)}
           </div>
           {notice.reload && <button type="button" className="font-medium underline cursor-pointer" onClick={() => window.location.reload()}>Reload</button>}
-          <button type="button" aria-label="Dismiss" className="rounded p-0.5 hover:bg-black/10 cursor-pointer" onClick={() => setNotice(null)}><X className="h-4 w-4" /></button>
+          <button type="button" aria-label="Dismiss" className="rounded p-0.5 opacity-75 hover:bg-white/10 hover:opacity-100 cursor-pointer" onClick={() => setNotice(null)}><X className="h-4 w-4" /></button>
         </div>
       )}
       <div className="flex min-h-0 flex-1">
