@@ -544,6 +544,25 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
     [shown?.nodes, shown?.edges],
   );
 
+  const pendingApprovals = useMemo(
+    () => (liveView.runId ? liveView.approvals : (runSnapshot.data?.approvals ?? []).filter((a) => a.status === "pending")),
+    [liveView.runId, liveView.approvals, runSnapshot.data?.approvals],
+  );
+  const locateNode = useCallback(
+    (nodeId: string) => {
+      setSelection({ kind: "node", id: nodeId });
+      setTestId(null);
+      const n = flow.getNode(nodeId);
+      if (n) {
+        flow.setCenter(n.position.x + (n.measured?.width ?? 176) / 2, n.position.y + 40, {
+          zoom: Math.max(flow.getZoom(), 0.9),
+          duration: 320,
+        });
+      }
+    },
+    [flow],
+  );
+
   const flowNodes: FlowNodeType[] = useMemo(
     () =>
       (shown?.nodes ?? []).map((n) => {
@@ -562,6 +581,7 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
             : n.type === "input" || n.type === "manual_trigger" || n.type === "schedule_trigger"
               ? null
               : outputs[n.id] ?? null;
+        const pendingApproval = previewing ? null : pendingApprovals.find((a) => a.node_id === n.id) ?? null;
         return {
           id: n.id,
           type: "flow",
@@ -584,10 +604,11 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
             durationMs: previewing ? null : durationMs,
             runningSince,
             pinned: hasPinned,
+            pendingApproval,
           },
         };
       }),
-    [shown?.nodes, selection, shownAgents, byStep, liveView, runNodes, runSnapshot.data?.tool_calls, sizes, previewing, outputs, pinnedOutputs, focusInfo, titleById],
+    [shown?.nodes, selection, shownAgents, byStep, liveView, runNodes, runSnapshot.data?.tool_calls, sizes, previewing, outputs, pinnedOutputs, pendingApprovals, focusInfo, titleById],
   );
 
   const canEditLines = !previewing && !!wfQuery.data?.can_manage;
@@ -1209,7 +1230,12 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
 
                 {/* ── the canvas run ── */}
                 {canvasRunId && runCardOpen && !playOpen && !panelOpen && (
-                  <div className="absolute bottom-3 right-3 z-20 w-96 max-w-[calc(100%-1.5rem)] rounded-xl border border-white/10 bg-[var(--surface-raised)] p-3 shadow-2xl">
+                  <div
+                    className={cn(
+                      "absolute bottom-3 right-3 z-20 max-w-[calc(100%-1.5rem)] rounded-xl border bg-[var(--surface-raised)] p-3 shadow-2xl",
+                      canvasRun.view.approvals.length > 0 ? "w-[min(430px,calc(100%-1.5rem))] border-amber-500/35" : "w-96 border-white/10",
+                    )}
+                  >
                     <div className="mb-2 flex items-center gap-2">
                       <span
                         className={cn(
@@ -1225,12 +1251,31 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
                       >
                         {canvasRun.view.status ?? "starting"}
                       </span>
-                      <span className="flex-1 text-xs text-zinc-500">{running ? "Running on the canvas…" : "Last run"}</span>
+                      <span className="flex-1 text-xs text-zinc-400">
+                        {canvasRun.view.status === "waiting"
+                          ? "Waiting for your approval"
+                          : running
+                            ? "Running on the canvas…"
+                            : "Last run"}
+                      </span>
                       <StreamToggle />
-                      <button type="button" aria-label="Close run" onClick={() => setRunCardOpen(false)} className="text-zinc-400 hover:text-zinc-700 cursor-pointer"><X className="h-3.5 w-3.5" /></button>
+                      <button type="button" aria-label="Close run" onClick={() => setRunCardOpen(false)} className="text-zinc-400 hover:text-zinc-200 cursor-pointer"><X className="h-3.5 w-3.5" /></button>
                     </div>
-                    <div className="max-h-72 space-y-2 overflow-y-auto">
-                      {canvasRun.view.approvals.map((a) => <ApprovalCard key={a.id} approval={a} token={token} onDone={() => undefined} />)}
+                    <div className={cn("space-y-2 overflow-y-auto", canvasRun.view.approvals.length > 0 ? "max-h-[65vh]" : "max-h-72")}>
+                      {canvasRun.view.approvals.map((a) => {
+                        const approvalNode = a.node_id ? doc.nodes.find((n) => n.id === a.node_id) : undefined;
+                        return (
+                          <ApprovalCard
+                            key={a.id}
+                            approval={a}
+                            token={token}
+                            stepLabel={a.node_id ? titleById.get(a.node_id) ?? a.node_id : undefined}
+                            stepKind={approvalNode ? NODE_LOOK[approvalNode.type].label : undefined}
+                            onLocate={a.node_id ? () => locateNode(a.node_id!) : undefined}
+                            onDone={() => void runSnapshot.refetch()}
+                          />
+                        );
+                      })}
                       {canvasRun.view.output === null && canvasRun.view.live?.text && (
                         <div className="whitespace-pre-wrap text-sm text-zinc-900" aria-live="polite">{canvasRun.view.live.text}<span className="animate-pulse">▍</span></div>
                       )}

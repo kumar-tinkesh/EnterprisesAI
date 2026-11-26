@@ -4,7 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUp, Check, ChevronRight, Circle, History, Info, LogIn, Paperclip, RotateCw, ShieldAlert, Square, UserPlus, X, XCircle } from "lucide-react";
+import { ArrowUp, Check, CheckCircle2, ChevronRight, Circle, History, Info, LogIn, Paperclip, Plug, RotateCw, ShieldAlert, Square, UserPlus, X, XCircle } from "lucide-react";
 
 import { buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,7 +17,8 @@ import { ACCEPT, MAX_FILES } from "@/components/builder/chat/chat-panel";
 import { MarkdownView } from "@/components/builder/chat/markdown-view";
 import { AnswerView } from "@/components/builder/run-output";
 import { SharedFlowPreview } from "@/components/builder/shared-flow-preview";
-import { NeedsList } from "@/components/builder/tool-needs";
+import { ConnectButton } from "@/components/connections/connect-button";
+import { ConnectorIcon } from "@/components/connections/connector-icon";
 import { TypeIcon } from "@/components/builder/type-icon";
 import { ApiError } from "@/lib/api";
 import { builderApi, sharedApi } from "@/lib/builder/api";
@@ -568,7 +569,7 @@ function Runner({
         <div className="shrink-0 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 sm:px-4">
           <div className="mx-auto max-w-[720px] space-y-2">
             {current && own && blocked && needs.data && (
-              <p className="rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-sm text-zinc-700">{needs.data.problems.join(" ")}</p>
+              <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-2.5 text-sm text-amber-200">{needs.data.problems.join(" ")}</p>
             )}
             {inputs.length > 0 && (
               <div className="rounded-xl border border-zinc-200 bg-[var(--surface)]">
@@ -728,7 +729,7 @@ function Runner({
   );
 }
 
-/** The accounts it needs, as one line of chips; only what's missing asks for anything. */
+/** Connected & needed accounts shown cleanly right on the landing page with 1-click Connect. */
 function Accounts({
   own, mode, needs, loading, error, token,
 }: {
@@ -741,35 +742,114 @@ function Accounts({
 }) {
   if (!own) return <p className="text-center text-xs text-zinc-500">{accountsNote(mode)}</p>;
   if (loading) return <div className="flex justify-center"><Spinner className="h-4 w-4 text-zinc-400" /></div>;
-  if (error || !needs) return <p className="text-center text-sm text-red-600">{error}</p>;
+  if (error || !needs) return <p className="text-center text-sm text-red-400">{error}</p>;
   const mine = needs.systems.filter((s) => s.owner === "you");
   const theirs = needs.systems.filter((s) => s.owner === "publisher");
+  const readyCount = mine.filter((s) => s.status === "ready").length;
   const toConnect = mine.filter((s) => s.status !== "ready");
+
+  if (needs.systems.length === 0) {
+    return <p className="text-center text-xs text-zinc-500">{accountsNote(mode)}</p>;
+  }
+
   return (
-    <div className="space-y-3">
-      {needs.systems.length > 0 && (
-        <div className="flex flex-wrap items-center justify-center gap-1.5 text-xs">
-          <span className="text-zinc-500">Uses your accounts:</span>
-          {mine.map((s) => (
-            <span key={s.system} className="inline-flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-0.5 text-zinc-700">
-              {s.status === "ready" ? <Check className="h-3 w-3 text-emerald-700" /> : <Circle className="h-2.5 w-2.5 text-zinc-400" />}
-              {s.server_name || s.system}
-            </span>
-          ))}
-          {theirs.map((s) => (
-            <span key={s.system} className="inline-flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-0.5 text-zinc-500" title="Uses the sharer's account">
-              {s.server_name || s.system} · sharer&apos;s
-            </span>
-          ))}
+    <div className="rounded-2xl border border-white/10 bg-[#0d0d11]/90 p-3.5 shadow-lg space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="flex h-6 w-6 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-zinc-300">
+            <Plug className="h-3.5 w-3.5" />
+          </span>
+          <div>
+            <p className="text-xs font-semibold text-zinc-100">Connected apps</p>
+            <p className="text-[11px] text-zinc-400">
+              {toConnect.length > 0
+                ? `Connect ${toConnect.length} app${toConnect.length === 1 ? "" : "s"} below before running`
+                : "All required accounts are ready"}
+            </p>
+          </div>
         </div>
+        {mine.length > 0 && (
+          <span
+            className={cn(
+              "inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-medium",
+              toConnect.length > 0
+                ? "border-amber-500/35 bg-amber-500/15 text-amber-200"
+                : "border-emerald-500/30 bg-emerald-500/15 text-emerald-300",
+            )}
+          >
+            {toConnect.length === 0 ? <CheckCircle2 className="h-3 w-3" /> : <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />}
+            {readyCount}/{mine.length} ready
+          </span>
+        )}
+      </div>
+
+      <div className="grid gap-2 sm:grid-cols-2">
+        {mine.map((s) => {
+          const name = s.server_name || s.system;
+          const ready = s.status === "ready";
+          return (
+            <div
+              key={s.system}
+              className={cn(
+                "flex items-center gap-2.5 rounded-xl border px-3 py-2 transition-colors",
+                ready
+                  ? "border-white/10 bg-white/[0.02]"
+                  : "border-amber-500/30 bg-amber-500/[0.06]",
+              )}
+            >
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/95 p-1 shadow-inner">
+                <ConnectorIcon name={name} size="sm" className="h-5 w-5 bg-transparent p-0" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs font-semibold text-zinc-100">{name}</p>
+                <p className={cn("truncate text-[11px]", ready ? "text-emerald-400" : "text-amber-300/90")}>
+                  {ready
+                    ? "Connected · your account"
+                    : s.status === "not_connected"
+                      ? "Not connected"
+                      : s.status === "not_verified"
+                        ? "Waiting for admin setup"
+                        : "Ask admin to add app"}
+                </p>
+              </div>
+              {ready ? (
+                <Check className="h-4 w-4 shrink-0 text-emerald-400" />
+              ) : s.status === "not_connected" && s.server_id ? (
+                <ConnectButton
+                  serverId={s.server_id}
+                  serverName={name}
+                  token={token}
+                  className="shrink-0 rounded-full px-3 py-1 text-xs font-medium"
+                />
+              ) : null}
+            </div>
+          );
+        })}
+
+        {theirs.map((s) => {
+          const name = s.server_name || s.system;
+          return (
+            <div
+              key={s.system}
+              className="flex items-center gap-2.5 rounded-xl border border-white/10 bg-white/[0.02] px-3 py-2"
+              title="Uses the sharer's connected account"
+            >
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/95 p-1 shadow-inner">
+                <ConnectorIcon name={name} size="sm" className="h-5 w-5 bg-transparent p-0" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs font-semibold text-zinc-100">{name}</p>
+                <p className="truncate text-[11px] text-zinc-400">Sharer&apos;s account</p>
+              </div>
+              <Check className="h-4 w-4 shrink-0 text-zinc-500" />
+            </div>
+          );
+        })}
+      </div>
+
+      {needs.problems.length > 0 && toConnect.length === 0 && (
+        <p className="text-xs text-amber-300">{needs.problems.join(" ")}</p>
       )}
-      {toConnect.length > 0 && (
-        <div className="mx-auto max-w-md rounded-lg border border-amber-200 bg-amber-50 p-3">
-          <p className="mb-2 text-sm font-medium text-zinc-900">Connect first</p>
-          <NeedsList token={token} statuses={toConnect} light />
-        </div>
-      )}
-      {needs.problems.length > 0 && toConnect.length === 0 && <p className="text-center text-sm text-amber-700">{needs.problems.join(" ")}</p>}
     </div>
   );
 }

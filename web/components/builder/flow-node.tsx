@@ -10,12 +10,13 @@ import {
 
 import { ConnectButton, useMissingServers } from "@/components/connections/connect-button";
 import { ConnectorIcon } from "@/components/connections/connector-icon";
+import { ApprovalCard } from "@/components/builder/approval-card";
 import { AnswerActions, AnswerView } from "@/components/builder/run-output";
 import { builderApi } from "@/lib/builder/api";
 import { PALETTE, canAddAfter, isTrigger, serverIdOf, toolName } from "@/lib/builder/graph";
 import { formatDuration, type StepState } from "@/lib/builder/run-state";
 import { describeSchedule } from "@/lib/builder/schedule";
-import type { Agent, NodeType, Problem, RunNode, RunToolCall, ToolNeed, WorkflowEdge, WorkflowNode } from "@/lib/builder/types";
+import type { Agent, Approval, NodeType, Problem, RunNode, RunToolCall, ToolNeed, WorkflowEdge, WorkflowNode } from "@/lib/builder/types";
 import { cn } from "@/lib/utils";
 
 /** What the canvas shares with its nodes (so node bubbles stay clean and actions stay interactive). */
@@ -63,6 +64,8 @@ export type FlowNodeData = {
   runningSince?: number | null;
   /** True when the user pinned a sample/mock output to this step. */
   pinned?: boolean;
+  /** Pending approval waiting specifically on this node. */
+  pendingApproval?: Approval | null;
 };
 export type FlowNodeType = Node<FlowNodeData, "flow">;
 
@@ -464,7 +467,7 @@ function NodeResultPopover({
         onClick={(e) => e.stopPropagation()}
         className={cn(
           "nodrag nowheel animate-scale-in relative flex flex-col rounded-2xl border border-white/15 bg-[#141419]/95 text-left shadow-2xl shadow-black/75 backdrop-blur-md",
-          mode === "expanded" ? "w-[min(400px,88vw)]" : "w-[min(320px,82vw)]",
+          mode === "expanded" ? (data.pendingApproval ? "w-[min(430px,92vw)]" : "w-[min(400px,88vw)]") : "w-[min(320px,82vw)]",
         )}
       >
         {/* Header */}
@@ -585,9 +588,35 @@ function NodeResultPopover({
         <div
           className={cn(
             "overflow-y-auto px-3 py-2.5 text-xs text-zinc-200 select-text",
-            mode === "expanded" ? "max-h-64" : "max-h-44",
+            mode === "expanded" ? "max-h-72" : "max-h-44",
           )}
         >
+          {data.pendingApproval && mode === "expanded" && (
+            <div className="mb-2.5">
+              <ApprovalCard
+                approval={data.pendingApproval}
+                token={ctx.token}
+                stepLabel={data.title}
+                stepKind={LOOK[node.type].label}
+                onDone={() => ctx.closeResult()}
+              />
+            </div>
+          )}
+          {data.pendingApproval && mode === "hover" && (
+            <div className="mb-2 flex items-center justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-500/15 px-2.5 py-1.5 text-[11px] text-amber-200">
+              <span className="flex items-center gap-1.5 font-medium">
+                <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
+                Waiting for your approval
+              </span>
+              <button
+                type="button"
+                onClick={() => ctx.showResult(node.id)}
+                className="font-semibold underline hover:text-white cursor-pointer"
+              >
+                Review
+              </button>
+            </div>
+          )}
           {errorText && (
             <p className="mb-2 flex items-start gap-1.5 rounded-lg border border-red-500/30 bg-red-500/10 px-2.5 py-2 text-xs text-red-300">
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
@@ -663,7 +692,7 @@ function FlowNodeView({ data, selected }: NodeProps<FlowNodeType>) {
   };
 
   const expandedResult = ctx.openResultId === node.id;
-  const hasInspectable = !!(data.output || data.runNode?.error);
+  const hasInspectable = !!(data.output || data.runNode?.error || data.pendingApproval);
   const showHoverResult = hovered && !selected && !expandedResult && hasInspectable;
 
   return (
@@ -768,8 +797,22 @@ function FlowNodeView({ data, selected }: NodeProps<FlowNodeType>) {
           </span>
         )}
 
-        {!data.detail && (data.pinned || data.runningSince || data.durationMs != null || data.output) && (
+        {!data.detail && (data.pendingApproval || data.pinned || data.runningSince || data.durationMs != null || data.output) && (
           <div className="mt-1.5 flex flex-wrap items-center justify-center gap-1">
+            {data.pendingApproval && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  ctx.showResult(node.id);
+                }}
+                className="nodrag inline-flex items-center gap-1 rounded-full border border-amber-400/45 bg-amber-500/15 px-2.5 py-0.5 text-[10px] font-semibold text-amber-200 shadow-sm transition-colors hover:bg-amber-500/25 hover:text-white cursor-pointer"
+                title="Review and approve this step"
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
+                Approve
+              </button>
+            )}
             {data.runningSince && data.state === "running" ? (
               <LiveTimer since={data.runningSince} />
             ) : data.durationMs != null ? (

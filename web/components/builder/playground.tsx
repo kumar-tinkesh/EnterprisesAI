@@ -217,7 +217,13 @@ export function Playground({
         )}
 
         {view.approvals.map((a) => (
-          <ApprovalCard key={a.id} approval={a} token={token} onDone={() => undefined} />
+          <ApprovalCard
+            key={a.id}
+            approval={a}
+            token={token}
+            stepLabel={a.node_id ? stepName(a.node_id) : undefined}
+            onDone={() => undefined}
+          />
         ))}
 
         {view.output === null && view.live?.text && (

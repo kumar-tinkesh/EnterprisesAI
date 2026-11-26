@@ -41,7 +41,7 @@ export default function PublishedPage() {
 function PublishedView() {
   const token = useAuthStore((s) => s.accessToken) || "";
   const queryClient = useQueryClient();
-  const [previewItem, setPreviewItem] = useState<Published["keys"][number] | null>(null);
+  const [previewId, setPreviewId] = useState<string | null>(null);
   const data = useQuery({ queryKey: ["published"], queryFn: () => builderApi.published(token, 14), enabled: !!token, refetchInterval: 30000 });
 
   const refresh = () => void queryClient.invalidateQueries({ queryKey: ["published"] });
@@ -105,7 +105,7 @@ function PublishedView() {
                 busy={(update.isPending && update.variables?.id === k.id) || (revoke.isPending && revoke.variables === k.id)}
                 onUpdate={(body) => update.mutate({ id: k.id, ...body })}
                 onRevoke={() => window.confirm(`Delete "${k.name}"? It stops working at once, everywhere it's used.`) && revoke.mutate(k.id)}
-                onPreview={() => setPreviewItem(k)}
+                onPreview={() => setPreviewId(k.id)}
                 onChange={refresh}
               />
             ))}
@@ -114,9 +114,15 @@ function PublishedView() {
         {(update.isError || revoke.isError) && <p className="text-sm text-red-600">That didn&apos;t go through. Try again.</p>}
       </section>
 
-      {previewItem && (
-        <VisitorPreviewDialog item={previewItem} onClose={() => setPreviewItem(null)} />
-      )}
+      {(() => {
+        const previewItem = previewId ? keys.find((k) => k.id === previewId) ?? null : null;
+        return previewItem ? (
+          <VisitorPreviewDialog
+            item={previewItem}
+            onClose={() => setPreviewId(null)}
+          />
+        ) : null;
+      })()}
     </div>
   );
 }
@@ -220,7 +226,6 @@ function KeyRow({
               ...(url ? [{ label: "Preview as visitor", onClick: onPreview }] : []),
               { label: active ? "Pause" : "Resume", onClick: () => onUpdate({ status: active ? "paused" : "active" }) },
               { label: k.share_enabled ? "Turn off share link" : "Turn on share link", onClick: () => onUpdate({ share: !k.share_enabled }) },
-              ...(k.share_enabled ? [{ label: "Show how it works", checked: k.show_outline, onClick: () => onUpdate({ show_outline: !k.show_outline }) }] : []),
               { label: "Delete", onClick: onRevoke, danger: true },
             ]}
           />
@@ -463,11 +468,6 @@ function VisitorPreviewDialog({
             <span className="rounded-md border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[11px] text-zinc-300">
               {item.tool_mode === "visitor" ? "👤 Visitors connect own accounts" : item.tool_mode === "mixed" ? "🔀 Mixed accounts" : "🔑 Runs on your connected accounts"}
             </span>
-            {item.share_enabled && (
-              <span className="rounded-md border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[11px] text-zinc-300">
-                {item.show_outline ? "📋 Workflow outline shown" : "🔒 Workflow outline hidden"}
-              </span>
-            )}
           </div>
           <span className="text-[11px] text-zinc-400">
             Interactive guest preview
