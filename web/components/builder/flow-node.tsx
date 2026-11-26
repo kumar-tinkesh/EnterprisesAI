@@ -4,17 +4,18 @@ import { createContext, memo, useContext, useEffect, useRef, useState } from "re
 import { useQuery } from "@tanstack/react-query";
 import { Handle, NodeToolbar, Position, type Node, type NodeProps } from "@xyflow/react";
 import {
-  AlertTriangle, Bot, CalendarClock, CheckCircle2, CircleDot, Clock, Code2, Copy, FileText, GitBranch, Hand, Loader2, LogIn, Merge,
-  Pin, Play, PlayCircle, Plus, Send, Settings2, Trash2, Wrench, XCircle,
+  AlertTriangle, Bot, CalendarClock, Check, CheckCircle2, CircleDot, Clock, Code2, Copy, FileText, GitBranch, Hand, Loader2, LogIn, Maximize2, Merge,
+  Pin, PinOff, Play, PlayCircle, Plus, Send, Settings2, Trash2, Wrench, X, XCircle,
 } from "lucide-react";
 
 import { ConnectButton, useMissingServers } from "@/components/connections/connect-button";
 import { ConnectorIcon } from "@/components/connections/connector-icon";
+import { AnswerActions, AnswerView } from "@/components/builder/run-output";
 import { builderApi } from "@/lib/builder/api";
 import { PALETTE, canAddAfter, isTrigger, serverIdOf, toolName } from "@/lib/builder/graph";
 import { formatDuration, type StepState } from "@/lib/builder/run-state";
 import { describeSchedule } from "@/lib/builder/schedule";
-import type { Agent, NodeType, Problem, ToolNeed, WorkflowEdge, WorkflowNode } from "@/lib/builder/types";
+import type { Agent, NodeType, Problem, RunNode, RunToolCall, ToolNeed, WorkflowEdge, WorkflowNode } from "@/lib/builder/types";
 import { cn } from "@/lib/utils";
 
 /** What the canvas shares with its nodes (so node bubbles stay clean and actions stay interactive). */
@@ -35,8 +36,12 @@ export interface CanvasCtx {
   /** Run this step by itself (agent and tool steps that are set up). */
   test: (nodeId: string) => void;
   canTest: (node: WorkflowNode) => boolean;
-  /** Show the step's whole answer from the last run. */
+  /** Node whose anchored result card is expanded right above the node. */
+  openResultId: string | null;
+  /** Show or toggle the step's whole answer right above the node. */
   showResult: (nodeId: string) => void;
+  closeResult: () => void;
+  pinOutput: (nodeId: string, text: string | null) => void;
 }
 export const CanvasContext = createContext<CanvasCtx | null>(null);
 
@@ -48,6 +53,10 @@ export type FlowNodeData = {
   detail?: string | null;
   /** The step's output from the last run on the canvas (or pinned mock output). */
   output?: string | null;
+  /** Latest run node details (status, error, input_text, tokens) for the anchored result card. */
+  runNode?: RunNode | null;
+  /** Tool calls made by this step in the last run. */
+  toolCalls?: RunToolCall[];
   /** Execution duration in milliseconds once the step finishes. */
   durationMs?: number | null;
   /** Epoch ms when an active running step started (ticks live). */
@@ -407,6 +416,213 @@ function BubbleIcon({ node, ctx }: { node: WorkflowNode; ctx: CanvasCtx }) {
   );
 }
 
+/** Compact hover result preview floating directly above the bubble when hovering a step with output. */
+function NodeResultPopover({
+  node,
+  data,
+  ctx,
+  mode,
+  onEnter,
+  onLeave,
+}: {
+  node: WorkflowNode;
+  data: FlowNodeData;
+  ctx: CanvasCtx;
+  mode: "hover" | "expanded";
+  onEnter: () => void;
+  onLeave: () => void;
+}) {
+  const [tab, setTab] = useState<"output" | "input" | "tools">("output");
+  const [copied, setCopied] = useState(false);
+  const text = data.output ?? "";
+  const errorText = data.runNode?.error ?? null;
+  const inputText = data.runNode?.input_text ?? null;
+  const calls = data.toolCalls ?? [];
+  const tokens = (data.runNode?.prompt_tokens ?? 0) + (data.runNode?.completion_tokens ?? 0);
+  const effectiveStatus = data.pinned && !data.state ? "pinned" : data.state ?? data.runNode?.status;
+
+  useEffect(() => {
+    setTab("output");
+  }, [node.id, mode]);
+
+  const statusTone =
+    effectiveStatus === "failed"
+      ? "border-red-500/30 bg-red-500/15 text-red-300"
+      : effectiveStatus === "waiting"
+        ? "border-amber-500/30 bg-amber-500/15 text-amber-300"
+        : effectiveStatus === "running"
+          ? "border-sky-500/30 bg-sky-500/15 text-sky-300"
+          : effectiveStatus === "pinned"
+            ? "border-amber-400/35 bg-amber-500/15 text-amber-300"
+            : "border-emerald-500/30 bg-emerald-500/15 text-emerald-300";
+
+  return (
+    <NodeToolbar isVisible position={Position.Top} offset={12} className="z-40">
+      <div
+        onMouseEnter={onEnter}
+        onMouseLeave={onLeave}
+        onClick={(e) => e.stopPropagation()}
+        className={cn(
+          "nodrag nowheel animate-scale-in relative flex flex-col rounded-2xl border border-white/15 bg-[#141419]/95 text-left shadow-2xl shadow-black/75 backdrop-blur-md",
+          mode === "expanded" ? "w-[min(400px,88vw)]" : "w-[min(320px,82vw)]",
+        )}
+      >
+        {/* Header */}
+        <div className="flex items-center gap-2 border-b border-white/10 px-3 py-2">
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border border-indigo-400/30 bg-indigo-500/15 text-indigo-300">
+            <FileText className="h-3.5 w-3.5" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-xs font-semibold text-zinc-100">{data.title}</p>
+            <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px]">
+              {effectiveStatus && (
+                <span className={cn("rounded-full border px-1.5 py-0 font-medium capitalize", statusTone)}>
+                  {effectiveStatus}
+                </span>
+              )}
+              {data.durationMs != null && (
+                <span className="inline-flex items-center gap-0.5 tabular-nums text-zinc-400">
+                  <Clock className="h-2.5 w-2.5" />
+                  {formatDuration(data.durationMs)}
+                </span>
+              )}
+              {mode === "expanded" && tokens > 0 && (
+                <span className="tabular-nums text-zinc-400">{tokens.toLocaleString()} tok</span>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-0.5">
+            {mode === "hover" ? (
+              <>
+                {text && (
+                  <button
+                    type="button"
+                    title="Copy result"
+                    aria-label="Copy result"
+                    onClick={() => {
+                      void navigator.clipboard?.writeText(text).then(() => {
+                        setCopied(true);
+                        setTimeout(() => setCopied(false), 1400);
+                      });
+                    }}
+                    className="rounded-md p-1.5 text-zinc-400 hover:bg-white/10 hover:text-white cursor-pointer"
+                  >
+                    {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  title="Keep open & inspect full details"
+                  aria-label="Expand result"
+                  onClick={() => ctx.showResult(node.id)}
+                  className="rounded-md p-1.5 text-zinc-400 hover:bg-white/10 hover:text-white cursor-pointer"
+                >
+                  <Maximize2 className="h-3.5 w-3.5" />
+                </button>
+              </>
+            ) : (
+              <>
+                {(text || data.pinned) && (
+                  <button
+                    type="button"
+                    title={data.pinned ? "Unpin sample output" : "Pin this output for downstream step tests"}
+                    onClick={() => ctx.pinOutput(node.id, data.pinned ? null : text)}
+                    className={cn(
+                      "rounded-md p-1.5 cursor-pointer transition-colors",
+                      data.pinned
+                        ? "text-amber-300 hover:bg-red-500/15 hover:text-red-300"
+                        : "text-zinc-400 hover:bg-white/10 hover:text-amber-300",
+                    )}
+                  >
+                    {data.pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
+                  </button>
+                )}
+                {text && <AnswerActions text={text} name={data.title} />}
+                <button
+                  type="button"
+                  title="Close result"
+                  aria-label="Close result"
+                  onClick={() => ctx.closeResult()}
+                  className="rounded-md p-1.5 text-zinc-400 hover:bg-white/10 hover:text-white cursor-pointer"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Tabs in expanded click-result mode */}
+        {mode === "expanded" && (inputText || calls.length > 0) && (
+          <div className="flex gap-1 border-b border-white/10 px-3 pt-1.5" role="tablist">
+            {(
+              [
+                { id: "output", label: "Output", show: true },
+                { id: "input", label: "Input", show: !!inputText },
+                { id: "tools", label: `Tools (${calls.length})`, show: calls.length > 0 },
+              ] as const
+            )
+              .filter((t) => t.show)
+              .map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === t.id}
+                  onClick={() => setTab(t.id)}
+                  className={cn(
+                    "-mb-px border-b-2 px-2 pb-1.5 text-[11px] font-medium cursor-pointer transition-colors",
+                    tab === t.id ? "border-indigo-400 text-indigo-300" : "border-transparent text-zinc-400 hover:text-zinc-200",
+                  )}
+                >
+                  {t.label}
+                </button>
+              ))}
+          </div>
+        )}
+
+        {/* Body */}
+        <div
+          className={cn(
+            "overflow-y-auto px-3 py-2.5 text-xs text-zinc-200 select-text",
+            mode === "expanded" ? "max-h-64" : "max-h-44",
+          )}
+        >
+          {errorText && (
+            <p className="mb-2 flex items-start gap-1.5 rounded-lg border border-red-500/30 bg-red-500/10 px-2.5 py-2 text-xs text-red-300">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>{errorText}</span>
+            </p>
+          )}
+          {tab === "output" && (text ? <AnswerView text={text} /> : !errorText && <p className="text-zinc-400">No output captured yet.</p>)}
+          {tab === "input" && inputText && <AnswerView text={inputText} />}
+          {tab === "tools" && (
+            <ul className="space-y-2">
+              {calls.map((c) => (
+                <li key={c.id} className="rounded-lg border border-white/10 bg-white/[0.03] p-2">
+                  <div className="flex items-center gap-1.5">
+                    <Wrench className="h-3 w-3 shrink-0 text-zinc-400" />
+                    <span className="truncate font-mono text-[11px] font-semibold text-zinc-100">{c.tool_name}</span>
+                    {c.is_error && <span className="text-[10px] font-semibold text-red-400">error</span>}
+                    {c.duration_ms != null && <span className="ml-auto text-[10px] text-zinc-400">{c.duration_ms}ms</span>}
+                  </div>
+                  {c.result_preview && <p className="mt-1 line-clamp-3 whitespace-pre-wrap break-words text-[11px] text-zinc-400">{c.result_preview}</p>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        {/* Downward caret anchoring card cleanly to the node below */}
+        <span
+          aria-hidden
+          className="pointer-events-none absolute -bottom-1.5 left-1/2 h-3 w-3 -translate-x-1/2 rotate-45 border-b border-r border-white/15 bg-[#141419]"
+        />
+      </div>
+    </NodeToolbar>
+  );
+}
+
 function LiveTimer({ since }: { since: number }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -443,8 +659,12 @@ function FlowNodeView({ data, selected }: NodeProps<FlowNodeType>) {
   };
   const leave = () => {
     if (leaveTimer.current) clearTimeout(leaveTimer.current);
-    leaveTimer.current = setTimeout(() => setHovered(false), 160);
+    leaveTimer.current = setTimeout(() => setHovered(false), 180);
   };
+
+  const expandedResult = ctx.openResultId === node.id;
+  const hasInspectable = !!(data.output || data.runNode?.error);
+  const showHoverResult = hovered && !selected && !expandedResult && hasInspectable;
 
   return (
     <div
@@ -453,14 +673,34 @@ function FlowNodeView({ data, selected }: NodeProps<FlowNodeType>) {
       className="animate-scale-in group relative flex w-44 flex-col items-center text-center select-none"
       title={hasProblems ? data.problems.map((p) => p.message).join("\n") : undefined}
     >
-      <StepToolbar
-        node={node}
-        ctx={ctx}
-        hasResult={!!data.output}
-        visible={!!selected || hovered}
-        onEnter={enter}
-        onLeave={leave}
-      />
+      {expandedResult ? (
+        <NodeResultPopover
+          node={node}
+          data={data}
+          ctx={ctx}
+          mode="expanded"
+          onEnter={enter}
+          onLeave={leave}
+        />
+      ) : showHoverResult ? (
+        <NodeResultPopover
+          node={node}
+          data={data}
+          ctx={ctx}
+          mode="hover"
+          onEnter={enter}
+          onLeave={leave}
+        />
+      ) : (
+        <StepToolbar
+          node={node}
+          ctx={ctx}
+          hasResult={hasInspectable}
+          visible={!!selected}
+          onEnter={enter}
+          onLeave={leave}
+        />
+      )}
 
       {/* Circular Make.com-style orb with left/right ports anchored to the circle perimeter */}
       <div className="relative flex items-center justify-center">

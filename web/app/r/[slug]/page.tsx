@@ -16,13 +16,14 @@ import { CopyButton, FileChip, ThinkingBlock, ThinkingWords } from "@/components
 import { ACCEPT, MAX_FILES } from "@/components/builder/chat/chat-panel";
 import { MarkdownView } from "@/components/builder/chat/markdown-view";
 import { AnswerView } from "@/components/builder/run-output";
+import { SharedFlowPreview } from "@/components/builder/shared-flow-preview";
 import { NeedsList } from "@/components/builder/tool-needs";
 import { TypeIcon } from "@/components/builder/type-icon";
 import { ApiError } from "@/lib/api";
 import { builderApi, sharedApi } from "@/lib/builder/api";
 import { formatCost, formatDuration, formatTokens } from "@/lib/builder/chat";
 import { addThought, thinkingText, type ThoughtPart } from "@/lib/builder/run-state";
-import type { Attachment, InputVariable, SharedInfo, SharedNeeds, SharedRun, SharedStep, ToolMode } from "@/lib/builder/types";
+import type { Attachment, InputVariable, SharedInfo, SharedNeeds, SharedOutline, SharedRun, SharedStep, ToolMode } from "@/lib/builder/types";
 import { useStreamPref } from "@/lib/builder/stream-pref";
 import { useAuthStore } from "@/stores/auth-store";
 import { cn } from "@/lib/utils";
@@ -155,9 +156,10 @@ export default function SharedPage() {
             <Runner slug={slug} token={token!} shared={shared} panel={panel} setPanel={setPanel} />
           ) : (
             <div className="h-full overflow-y-auto px-4 py-10">
-              <div className="mx-auto max-w-[720px]">
+              <div className="mx-auto max-w-[720px] space-y-6">
                 <Intro shared={shared} />
-                <div className="mx-auto mt-8 max-w-sm rounded-xl border border-zinc-200 p-5 text-center">
+                {shared.show_outline && <SharedFlowIntro slug={slug} kind={shared.kind} name={shared.name} />}
+                <div className="mx-auto max-w-sm rounded-xl border border-zinc-200 p-5 text-center">
                   <p className="text-base font-semibold text-zinc-900">Sign in to use it</p>
                   <p className="mt-1 text-sm text-zinc-500">It&apos;s free. You&apos;ll come straight back here.</p>
                   <div className="mt-4 flex justify-center gap-2">
@@ -171,7 +173,7 @@ export default function SharedPage() {
         </main>
         {panel === "outline" && shared.show_outline && (
           <Drawer title="How it works" onClose={() => setPanel(null)}>
-            <Outline slug={slug} mode={shared.tool_mode} />
+            <Outline slug={slug} name={shared.name} mode={shared.tool_mode} />
           </Drawer>
         )}
       </div>
@@ -224,8 +226,15 @@ function Intro({ shared }: { shared: SharedInfo }) {
   );
 }
 
+/** Interactive animated canvas preview fetched via shared outline when permitted. */
+function SharedFlowIntro({ slug, kind, name }: { slug: string; kind: "agent" | "workflow"; name: string }) {
+  const outline = useQuery({ queryKey: ["shared-outline", slug], queryFn: () => sharedApi.outline(slug), retry: false });
+  if (outline.isLoading || outline.isError || !outline.data) return null;
+  return <SharedFlowPreview kind={kind} name={name} outline={outline.data} compact />;
+}
+
 /** The steps and their apps, read-only — the sharer's instructions are never part of it. */
-function Outline({ slug, mode }: { slug: string; mode: ToolMode }) {
+function Outline({ slug, name, mode }: { slug: string; name: string; mode: ToolMode }) {
   const outline = useQuery({ queryKey: ["shared-outline", slug], queryFn: () => sharedApi.outline(slug), retry: false });
   if (outline.isLoading) return <Spinner className="h-5 w-5 text-zinc-400" />;
   if (outline.isError || !outline.data) return <p className="text-sm text-zinc-500">{outline.error instanceof ApiError ? outline.error.message : "Couldn't load it."}</p>;
@@ -233,6 +242,7 @@ function Outline({ slug, mode }: { slug: string; mode: ToolMode }) {
   let n = 0;
   return (
     <div className="space-y-5">
+      <SharedFlowPreview kind={outline.data.kind} name={name} outline={outline.data} compact />
       <ol className="space-y-3">
         {levels.map((level) => {
           const steps = outline.data!.steps.filter((s) => s.level === level);
@@ -481,6 +491,14 @@ function Runner({
   const running = !!current && !DONE.has(current.status);
   const canSend = !busy && !running && uploading === 0 && missing.length === 0 && !blocked && (kind === "workflow" || !!text.trim() || files.length > 0);
 
+  const outlineQuery = useQuery({
+    queryKey: ["shared-outline", slug],
+    queryFn: () => sharedApi.outline(slug),
+    enabled: shared.show_outline,
+    retry: false,
+  });
+  const outline = outlineQuery.data ?? null;
+
   return (
     <div className="flex h-full">
       <div className="flex min-w-0 flex-1 flex-col">
@@ -495,6 +513,9 @@ function Runner({
             {!current && sending === null && earlier.length === 0 && (
               <>
                 <Intro shared={shared} />
+                {shared.show_outline && outline && (
+                  <SharedFlowPreview kind={shared.kind} name={shared.name} outline={outline} compact />
+                )}
                 <Accounts own={own} mode={toolMode} needs={needs.data} loading={needs.isLoading} error={needs.isError ? errorText(needs.error) : null} token={token} />
               </>
             )}
@@ -502,7 +523,7 @@ function Runner({
               <p className="text-center text-xs text-zinc-500">Earlier in this visit · each question is answered on its own</p>
             )}
             {earlier.map((r) => (
-              <Turn key={r.run_id} run={r} live={null} doing={null} kind={kind} own={own} token={token} onDecided={() => undefined} />
+              <Turn key={r.run_id} run={r} live={null} doing={null} kind={kind} name={shared.name} outline={outline} own={own} token={token} onDecided={() => undefined} />
             ))}
             {sending !== null && (
               <Turn
@@ -511,6 +532,8 @@ function Runner({
                 live={null}
                 doing={null}
                 kind={kind}
+                name={shared.name}
+                outline={outline}
                 own={own}
                 token={token}
                 onDecided={() => undefined}
@@ -524,6 +547,8 @@ function Runner({
                 thought={thought?.runId === current.run_id ? thought.parts : []}
                 doing={doing?.runId === current.run_id ? doing.what : null}
                 kind={kind}
+                name={shared.name}
+                outline={outline}
                 own={own}
                 token={token}
                 onRetry={!busy && !running && !blocked && missing.length === 0 ? () => void submit(current.input) : undefined}
@@ -774,9 +799,24 @@ function StatusDot({ run }: { run: SharedRun }) {
 /** How many of the newest progress lines stay in view while it runs; the rest fold away. */
 const LIVE_NOTES = 3;
 
-/** Where the run is: while it runs, the newest progress lines; once done, one line that opens to all of it. */
-function Steps({ steps, running, ms }: { steps: SharedStep[]; running: boolean; ms?: number | null }) {
+/** Where the run is: while it runs, live animated flow + newest progress lines; once done, toggleable flow & details. */
+function Steps({
+  steps,
+  running,
+  ms,
+  kind,
+  name,
+  outline,
+}: {
+  steps: SharedStep[];
+  running: boolean;
+  ms?: number | null;
+  kind: "agent" | "workflow";
+  name: string;
+  outline?: SharedOutline | null;
+}) {
   const [open, setOpen] = useState(false);
+  const [showFlow, setShowFlow] = useState(running);
   // Every step skipped: it answered directly (a greeting, a general question) — nothing to show.
   if (!steps.length || (!running && steps.every((s) => s.status === "skipped"))) return null;
   const now = steps.find((s) => s.status === "running" || s.status === "waiting");
@@ -790,17 +830,34 @@ function Steps({ steps, running, ms }: { steps: SharedStep[]; running: boolean; 
   const shown = open ? notes : running ? notes.slice(-LIVE_NOTES) : [];
   const hidden = notes.length - shown.length;
   return (
-    <div className="mb-3">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        aria-expanded={open}
-        className="inline-flex max-w-full items-center gap-1.5 rounded-md py-0.5 text-xs text-zinc-500 hover:text-zinc-900 cursor-pointer"
-      >
-        {running ? <Spinner className="h-3.5 w-3.5 shrink-0" /> : <ChevronRight className={cn("h-3.5 w-3.5 shrink-0 transition-transform", open && "rotate-90")} />}
-        <span className="truncate">{summary}</span>
-        {running && <ChevronRight className={cn("h-3.5 w-3.5 shrink-0 transition-transform", open && "rotate-90")} />}
-      </button>
+    <div className="mb-3 space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-expanded={open}
+          className="inline-flex max-w-full items-center gap-1.5 rounded-md py-0.5 text-xs text-zinc-500 hover:text-zinc-900 cursor-pointer"
+        >
+          {running ? <Spinner className="h-3.5 w-3.5 shrink-0" /> : <ChevronRight className={cn("h-3.5 w-3.5 shrink-0 transition-transform", open && "rotate-90")} />}
+          <span className="truncate">{summary}</span>
+          {running && <ChevronRight className={cn("h-3.5 w-3.5 shrink-0 transition-transform", open && "rotate-90")} />}
+        </button>
+        <button
+          type="button"
+          onClick={() => setShowFlow((v) => !v)}
+          className={cn(
+            "rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors cursor-pointer",
+            showFlow
+              ? "border-indigo-400/40 bg-indigo-500/15 text-indigo-300"
+              : "border-white/10 bg-white/[0.03] text-zinc-400 hover:text-zinc-200",
+          )}
+        >
+          {showFlow ? "Hide flow" : "Visual flow"}
+        </button>
+      </div>
+      {showFlow && (
+        <SharedFlowPreview kind={kind} name={name} outline={outline} liveSteps={steps} running={running} compact />
+      )}
       {shown.length > 0 && (
         <ul className="mt-1.5 space-y-1 rounded-lg border border-zinc-200 bg-[var(--surface)] px-3 py-2" aria-label="Progress">
           {hidden > 0 && (
@@ -838,7 +895,7 @@ function Steps({ steps, running, ms }: { steps: SharedStep[]; running: boolean; 
 
 /** One question and its answer, the way a chat shows it. */
 function Turn({
-  run, question, live, thought = [], doing, kind, own, token, onRetry, onDecided,
+  run, question, live, thought = [], doing, kind, name, outline, own, token, onRetry, onDecided,
 }: {
   /** null: just sent, the run is still being started (``question`` is what was asked). */
   run: SharedRun | null;
@@ -848,6 +905,8 @@ function Turn({
   thought?: ThoughtPart[];
   doing: Doing["what"] | null;
   kind: "agent" | "workflow";
+  name: string;
+  outline?: SharedOutline | null;
   own: boolean;
   token: string;
   onRetry?: () => void;
@@ -880,7 +939,7 @@ function Turn({
             <p className="flex items-center gap-2 text-sm text-zinc-500"><Spinner className="h-4 w-4" /> Starting…</p>
           ) : (
           <>
-          <Steps steps={run.steps ?? []} running={running} ms={run.duration_ms} />
+          <Steps steps={run.steps ?? []} running={running} ms={run.duration_ms} kind={kind} name={name} outline={outline} />
           {/* Live until the answer starts being written; then it folds away above it. */}
           {thinking && <div className="mb-2"><ThinkingBlock text={thinking} live={running && !run.output && !writing} /></div>}
           {run.status === "succeeded" ? (

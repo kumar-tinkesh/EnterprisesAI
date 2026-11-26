@@ -34,8 +34,8 @@ import { EdgeInspector, StepInspector } from "@/components/builder/inspector";
 import { Playground } from "@/components/builder/playground";
 import { PublishPanel } from "@/components/builder/publish-panel";
 import { SplitPane } from "@/components/builder/split-pane";
-import { StepResult, StepTest, canTestStep } from "@/components/builder/step-test";
-import { AnswerActions, AnswerView, StepRunPanel } from "@/components/builder/run-output";
+import { StepTest, canTestStep } from "@/components/builder/step-test";
+import { AnswerActions, AnswerView } from "@/components/builder/run-output";
 import { useNodeSizes } from "@/components/builder/step-node";
 import { TestsPanel } from "@/components/builder/tests-panel";
 import { VersionHistory, timeAgo } from "@/components/builder/version-history";
@@ -579,13 +579,15 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
             state: stepState,
             detail: !previewing && liveView.activeTool[n.id] ? `Calling ${liveView.activeTool[n.id]}…` : null,
             output: nodeOutput,
+            runNode: previewing ? null : rn ?? null,
+            toolCalls: previewing ? [] : (runSnapshot.data?.tool_calls ?? []).filter((c) => c.node_id === n.id),
             durationMs: previewing ? null : durationMs,
             runningSince,
             pinned: hasPinned,
           },
         };
       }),
-    [shown?.nodes, selection, shownAgents, byStep, liveView, runNodes, sizes, previewing, outputs, pinnedOutputs, focusInfo, titleById],
+    [shown?.nodes, selection, shownAgents, byStep, liveView, runNodes, runSnapshot.data?.tool_calls, sizes, previewing, outputs, pinnedOutputs, focusInfo, titleById],
   );
 
   const canEditLines = !previewing && !!wfQuery.data?.can_manage;
@@ -680,9 +682,10 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
     return () => clearTimeout(t);
   }, [previewVersion, preview, flow]);
 
-  // A step whose settings open off screen (or under the popup) is brought into view beside it.
+  // A step whose settings/test open off screen (or whose inline result needs top headroom) is brought cleanly into view.
   const canvasRef = useRef<HTMLDivElement>(null);
   const openId = selection?.kind === "node" && selection.open ? selection.id : testId ?? resultId;
+  const sideDrawerOpen = (selection?.kind === "node" && !!selection.open) || !!testId;
   useEffect(() => {
     if (!openId) return;
     const t = setTimeout(() => {
@@ -690,18 +693,24 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
       const box = canvasRef.current?.getBoundingClientRect();
       if (!n || !box) return;
       const zoom = flow.getZoom();
-      const w = (n.measured?.width ?? 270) * zoom;
+      const w = (n.measured?.width ?? 176) * zoom;
       const h = (n.measured?.height ?? 120) * zoom;
       const p = flow.flowToScreenPosition(n.position);
-      const popup = Math.min(372, box.width * 0.5);
-      const visible = p.x >= box.left && p.x + w <= box.right - popup && p.y >= box.top && p.y + h <= box.bottom;
-      if (visible) return;
-      // Centre it in the part of the canvas the popup leaves free.
-      const shift = popup / 2 / zoom;
-      flow.setCenter(n.position.x + w / zoom / 2 + shift, n.position.y + h / zoom / 2, { zoom, duration: 300 });
+      if (sideDrawerOpen) {
+        const popup = Math.min(372, box.width * 0.5);
+        const visible = p.x >= box.left && p.x + w <= box.right - popup && p.y >= box.top && p.y + h <= box.bottom;
+        if (visible) return;
+        const shift = popup / 2 / zoom;
+        flow.setCenter(n.position.x + w / zoom / 2 + shift, n.position.y + h / zoom / 2, { zoom, duration: 300 });
+      } else {
+        const topHeadroom = 280;
+        const visible = p.x >= box.left + 80 && p.x + w <= box.right - 80 && p.y >= box.top + topHeadroom && p.y + h <= box.bottom - 20;
+        if (visible) return;
+        flow.setCenter(n.position.x + w / zoom / 2, n.position.y + h / zoom / 2 - 120 / zoom, { zoom, duration: 300 });
+      }
     }, 60);
     return () => clearTimeout(t);
-  }, [openId, flow]);
+  }, [openId, sideDrawerOpen, flow]);
 
   const addStep = (type: NodeType, at?: { x: number; y: number }) => {
     if (!doc) return;
@@ -754,13 +763,16 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
         setTestId(nodeId);
       },
       canTest: (n) => canTestStep(n) && !previewing,
+      openResultId: previewing ? null : resultId,
       showResult: (nodeId) => {
         setSelection({ kind: "node", id: nodeId });
         setTestId(null);
-        setResultId(nodeId);
+        setResultId((cur) => (cur === nodeId ? null : nodeId));
       },
+      closeResult: () => setResultId(null),
+      pinOutput,
     }),
-    [token, previewing, wfQuery.data?.can_manage, shownAgents, shown?.edges, inputText, setInputText, change],
+    [token, previewing, wfQuery.data?.can_manage, shownAgents, shown?.edges, inputText, setInputText, change, resultId, pinOutput],
   );
   // Test stays open only while its step is the one selected (Configure, another step or the pane closes it).
   useEffect(() => {
@@ -781,13 +793,9 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
   const selectedNode = selection?.kind === "node" && selection.open ? doc.nodes.find((n) => n.id === selection.id) : undefined;
   const selectedEdge = selection?.kind === "edge" ? doc.edges.find((e) => e.id === selection.id) : undefined;
   const testNode = testId && !previewing ? doc.nodes.find((n) => n.id === testId) : undefined;
-  const resultNode =
-    resultId && (runNodes[resultId] || Object.prototype.hasOwnProperty.call(pinnedOutputs, resultId)) && !testNode
-      ? doc.nodes.find((n) => n.id === resultId)
-      : undefined;
   const outputNodeId = doc.nodes.find((n) => n.type === "output")?.id;
-  // The popup docked right; the canvas run's card steps aside while it shows.
-  const panelOpen = !previewing && !!(selectedNode || selectedEdge || testNode || resultNode || selection?.kind === "settings");
+  // The popup docked right; step results render inline directly above their node.
+  const panelOpen = !previewing && !!(selectedNode || selectedEdge || testNode || selection?.kind === "settings");
   const standalone = (agentsQuery.data ?? []).filter((a) => !a.workflow_id);
   // A green dot on Schedule while any of its schedules is on.
   const scheduledOn = (schedulesQuery.data ?? []).filter((s) => s.enabled).map((s) => s.description).join(", ");
@@ -1077,26 +1085,6 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
                         : "right-3 top-3 flex max-h-[calc(100%-1.5rem)] w-[min(360px,calc(100%-1.5rem))] flex-col overflow-hidden rounded-xl border border-zinc-200",
                     )}
                   >
-                    {resultNode && runNodes[resultNode.id] && (
-                      <StepRunPanel
-                        key={resultNode.id}
-                        title={stepTitle(resultNode, agentsById)}
-                        kind={NODE_LOOK[resultNode.type].label}
-                        node={runNodes[resultNode.id]}
-                        calls={(runSnapshot.data?.tool_calls ?? []).filter((c) => c.node_id === resultNode.id)}
-                        onClose={() => setResultId(null)}
-                      />
-                    )}
-                    {resultNode && !runNodes[resultNode.id] && Object.prototype.hasOwnProperty.call(pinnedOutputs, resultNode.id) && (
-                      <StepResult
-                        key={resultNode.id}
-                        title={stepTitle(resultNode, agentsById)}
-                        text={pinnedOutputs[resultNode.id]}
-                        isPinned
-                        onPin={(pin) => pinOutput(resultNode.id, pin ? pinnedOutputs[resultNode.id] : null)}
-                        onClose={() => setResultId(null)}
-                      />
-                    )}
                     {testNode && (
                       <StepTest
                         key={testNode.id}
