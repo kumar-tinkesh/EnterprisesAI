@@ -18,7 +18,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import {
-  AlertTriangle, ArrowLeft, CalendarClock, Check, ChevronDown, Eye, MessageSquare, MessagesSquare,
+  AlertTriangle, ArrowLeft, CalendarClock, Check, ChevronDown, Eye, LayoutGrid, MessageSquare, MessagesSquare,
   Play, Plus, Redo2, RotateCcw, Save, Sparkles, Square, Undo2, Wand2, X,
 } from "lucide-react";
 
@@ -45,7 +45,7 @@ import { WorkflowSchedulePanel } from "@/components/builder/schedule-panel";
 import { UsagePanel } from "@/components/builder/usage-panel";
 import { ApiError } from "@/lib/api";
 import { builderApi } from "@/lib/builder/api";
-import { arrange } from "@/lib/builder/arrange";
+import { arrange, computeEdgeDetours } from "@/lib/builder/arrange";
 import { connect, draftKey, duplicateStep, forSave, inputFields, insertAfter, newNode, problemsByStep, removeSteps, stepTitle, unsavedKey, updateStep } from "@/lib/builder/graph";
 import { emptyRunView, isFinished, type RunView } from "@/lib/builder/run-state";
 import type { Agent, AgentToolReport, AnswerDepth, NodeType, Problem, RunNode, WorkflowConfig, WorkflowEdge, WorkflowNode } from "@/lib/builder/types";
@@ -482,25 +482,68 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
   const running = !!canvasRunId && !isFinished(canvasRun.view.status);
   // ── canvas ──
   const { sizes, track } = useNodeSizes();
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+  const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
+
+  const focusInfo = useMemo(() => {
+    const edges = shown?.edges ?? [];
+    const activeEdgeId = hoveredEdgeId ?? (selection?.kind === "edge" ? selection.id : null);
+    if (activeEdgeId) {
+      const edge = edges.find((e) => e.id === activeEdgeId);
+      if (edge) {
+        return { focused: true, nodes: new Set([edge.source, edge.target]), edges: new Set([edge.id]) };
+      }
+    }
+    const activeNodeId = hoveredNodeId ?? (selection?.kind === "node" ? selection.id : null);
+    if (activeNodeId) {
+      const connected = edges.filter((e) => e.source === activeNodeId || e.target === activeNodeId);
+      const nodes = new Set<string>([activeNodeId]);
+      const edgeSet = new Set<string>();
+      for (const e of connected) {
+        nodes.add(e.source);
+        nodes.add(e.target);
+        edgeSet.add(e.id);
+      }
+      return { focused: true, nodes, edges: edgeSet };
+    }
+    return { focused: false, nodes: new Set<string>(), edges: new Set<string>() };
+  }, [shown?.edges, hoveredNodeId, hoveredEdgeId, selection]);
+
+  const titleById = useMemo(
+    () => new Map((shown?.nodes ?? []).map((n) => [n.id, stepTitle(n, shownAgents)])),
+    [shown?.nodes, shownAgents],
+  );
+  const edgeDetours = useMemo(
+    () => computeEdgeDetours(shown?.nodes ?? [], shown?.edges ?? []),
+    [shown?.nodes, shown?.edges],
+  );
+
   const flowNodes: FlowNodeType[] = useMemo(
     () =>
-      (shown?.nodes ?? []).map((n) => ({
-        id: n.id,
-        type: "flow",
-        position: n.position ?? { x: 0, y: 0 },
-        measured: sizes[n.id],
-        selected: !previewing && selection?.kind === "node" && selection.id === n.id,
-        data: {
-          node: n,
-          title: stepTitle(n, shownAgents),
-          problems: previewing ? [] : byStep[n.id] ?? [],
-          state: previewing ? undefined : liveView.steps[n.id],
-          detail: !previewing && liveView.activeTool[n.id] ? `Calling ${liveView.activeTool[n.id]}…` : null,
-          // A trigger's "output" is just the request it was given.
-          output: previewing || n.type === "input" || n.type === "manual_trigger" || n.type === "schedule_trigger" ? null : outputs[n.id] ?? null,
-        },
-      })),
-    [shown?.nodes, selection, shownAgents, byStep, liveView, sizes, previewing, outputs],
+      (shown?.nodes ?? []).map((n) => {
+        const isFocusNode = focusInfo.nodes.has(n.id);
+        return {
+          id: n.id,
+          type: "flow",
+          position: n.position ?? { x: 0, y: 0 },
+          measured: sizes[n.id],
+          selected: !previewing && selection?.kind === "node" && selection.id === n.id,
+          zIndex: focusInfo.focused && isFocusNode ? 10 : undefined,
+          style: focusInfo.focused
+            ? { opacity: isFocusNode ? 1 : 0.22, transition: "opacity 160ms ease" }
+            : { transition: "opacity 160ms ease" },
+          data: {
+            node: n,
+            title: titleById.get(n.id) ?? stepTitle(n, shownAgents),
+            problems: previewing ? [] : byStep[n.id] ?? [],
+            state: previewing ? undefined : liveView.steps[n.id],
+            detail: !previewing && liveView.activeTool[n.id] ? `Calling ${liveView.activeTool[n.id]}…` : null,
+            // A trigger's "output" is just the request it was given.
+            output: previewing || n.type === "input" || n.type === "manual_trigger" || n.type === "schedule_trigger" ? null : outputs[n.id] ?? null,
+          },
+        };
+      }),
+    [shown?.nodes, selection, shownAgents, byStep, liveView, sizes, previewing, outputs, focusInfo, titleById],
   );
 
   const canEditLines = !previewing && !!wfQuery.data?.can_manage;
@@ -513,19 +556,30 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
       (shown?.edges ?? []).map((e) => {
         const flowing = !previewing && liveView.steps[e.source] === "succeeded" && liveView.steps[e.target] === "running";
         const done = !previewing && liveView.steps[e.source] === "succeeded" && !!liveView.steps[e.target];
+        const highlighted = focusInfo.edges.has(e.id);
+        const dimmed = focusInfo.focused && !highlighted;
         return {
           id: e.id,
           source: e.source,
           target: e.target,
           selected: selection?.kind === "edge" && selection.id === e.id,
-          animated: flowing,
+          animated: flowing || highlighted,
+          zIndex: highlighted ? 15 : edgeDetours[e.id] !== undefined ? 2 : 0,
           type: "flow" as const,
-          data: { branch: e.condition ?? null, onDelete: canEditLines ? removeLine : undefined },
-          markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: flowing ? "#38bdf8" : done ? "#34d399" : "#818cf8" },
-          style: { strokeWidth: flowing ? 2.5 : 2, stroke: flowing ? "#38bdf8" : done ? "#34d399" : "#6366f1" },
+          data: {
+            branch: e.condition ?? null,
+            routeLabel: `${titleById.get(e.source) ?? e.source} → ${titleById.get(e.target) ?? e.target}`,
+            detourY: edgeDetours[e.id],
+            highlighted,
+            dimmed,
+            onHoverChange: setHoveredEdgeId,
+            onDelete: canEditLines ? removeLine : undefined,
+          },
+          markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: flowing ? "#38bdf8" : done ? "#34d399" : highlighted ? "#a5b4fc" : "#818cf8" },
+          style: { strokeWidth: flowing || highlighted ? 2.6 : 2, stroke: flowing ? "#38bdf8" : done ? "#34d399" : highlighted ? "#818cf8" : "#6366f1" },
         };
       }),
-    [shown?.edges, selection, liveView, previewing, canEditLines, removeLine],
+    [shown?.edges, selection, liveView, previewing, canEditLines, removeLine, focusInfo, edgeDetours, titleById],
   );
 
   const onNodesChange = useCallback(
@@ -756,6 +810,11 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
                 <IconTool label="Redo (Ctrl+Shift+Z)" disabled={previewing || !historySize.future} onClick={redo}><Redo2 /></IconTool>
               </div>
             )}
+            {canManage && (
+              <Button size="sm" variant="outline" className="px-2 lg:px-3" disabled={previewing} onClick={tidy} aria-label="Arrange" title="Arrange steps cleanly left-to-right">
+                <LayoutGrid /> <span className="hidden lg:inline">Arrange</span>
+              </Button>
+            )}
             <Button size="sm" variant="outline" className={cn("hidden px-2 sm:inline-flex lg:px-3", playOpen && "bg-zinc-100")} onClick={() => setPlayOpen((o) => !o)} aria-label="Test in a chat" aria-pressed={playOpen}>
               <MessageSquare /> <span className="hidden lg:inline">Test</span>
             </Button>
@@ -886,6 +945,10 @@ function Editor({ id, onBack, onSwitch, onChat }: EditorProps) {
                   onNodesChange={onNodesChange}
                   onEdgesChange={onEdgesChange}
                   onConnect={onConnect}
+                  onNodeMouseEnter={(_, n) => setHoveredNodeId(n.id)}
+                  onNodeMouseLeave={(_, n) => setHoveredNodeId((cur) => (cur === n.id ? null : cur))}
+                  onEdgeMouseEnter={(_, e) => setHoveredEdgeId(e.id)}
+                  onEdgeMouseLeave={(_, e) => setHoveredEdgeId((cur) => (cur === e.id ? null : cur))}
                   onNodeDoubleClick={(_, n) => !previewing && setSelection({ kind: "node", id: n.id, open: true })}
                   onPaneClick={() => {
                     if (previewing) return;

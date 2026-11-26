@@ -47,9 +47,10 @@ export function toolGraph({
   const nodes: StepNodeType[] = [];
   const edges: Edge[] = [];
   const line = (on: boolean, done = false) => ({
+    type: "smoothstep" as const,
     animated: on,
     markerEnd: { type: MarkerType.ArrowClosed, width: 15, height: 15, color: on ? "#38bdf8" : done ? "#34d399" : "#6366f1" },
-    style: { stroke: on ? "#38bdf8" : done ? "#34d399" : "#6366f1", strokeWidth: on ? 2.5 : 1.75, opacity: on || done ? 1 : 0.7 },
+    style: { stroke: on ? "#38bdf8" : done ? "#34d399" : "#6366f1", strokeWidth: on ? 2.5 : 1.75, opacity: on || done ? 1 : 0.78 },
   });
   const groups = groupByServer(toolIds);
   let slot = 0; // tool rows used so far (wide layout)
